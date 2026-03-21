@@ -125,6 +125,14 @@ typedef struct {
  * ============================================================================ */
 
 /**
+ * DSMIL search index - pre-extracted keys for high-performance search
+ */
+typedef struct {
+    int64_t *keys;                    // Pre-extracted int64_t keys
+    size_t num_elements;              // Number of elements in index
+} dsmil_search_index_t;
+
+/**
  * DSMIL search context - wraps NOT_STISLA anchor table with DSMIL-specific features
  */
 typedef struct dsmil_search_context {
@@ -135,6 +143,12 @@ typedef struct dsmil_search_context {
     uint32_t cache_hits;              // Statistics: anchor table hits
     uint32_t memory_usage;            // Statistics: memory usage in bytes
     char last_error[256];             // Last error message for debugging
+
+    // Internal cache for per-call key extraction optimization
+    const void *last_data_ptr;        // Pointer to last used data array
+    int64_t *cached_keys;             // Cached extracted keys
+    size_t cached_count;              // Number of keys in cache
+    size_t cached_capacity;           // Capacity of cached_keys array
 } dsmil_search_context_t;
 
 /* ============================================================================
@@ -169,6 +183,44 @@ void dsmil_search_destroy(dsmil_search_context_t *ctx);
 const char* dsmil_search_get_last_error(const dsmil_search_context_t *ctx);
 
 /* ============================================================================
+ * Index Management Functions
+ * ============================================================================ */
+
+/**
+ * @brief Create a pre-extracted index for telemetry events
+ *
+ * @param events Array of telemetry events
+ * @param num_events Number of events
+ * @return Pointer to new index, or NULL on failure
+ */
+dsmil_search_index_t* dsmil_search_index_create_telemetry(const dsmil_telemetry_event_t *events, size_t num_events);
+
+/**
+ * @brief Create a pre-extracted index for security events
+ *
+ * @param events Array of security events
+ * @param num_events Number of events
+ * @return Pointer to new index, or NULL on failure
+ */
+dsmil_search_index_t* dsmil_search_index_create_security(const dsmil_security_event_t *events, size_t num_events);
+
+/**
+ * @brief Create a pre-extracted index for log entries
+ *
+ * @param logs Array of log entries
+ * @param num_logs Number of log entries
+ * @return Pointer to new index, or NULL on failure
+ */
+dsmil_search_index_t* dsmil_search_index_create_logs(const dsmil_log_entry_t *logs, size_t num_logs);
+
+/**
+ * @brief Destroy a pre-extracted index
+ *
+ * @param index Index to destroy
+ */
+void dsmil_search_index_destroy(dsmil_search_index_t *index);
+
+/* ============================================================================
  * Telemetry Search Functions
  * ============================================================================ */
 
@@ -189,6 +241,26 @@ int dsmil_search_telemetry_events(
     dsmil_search_context_t *ctx,
     const dsmil_telemetry_event_t *events,
     size_t num_events,
+    dsmil_timestamp_t target_time,
+    dsmil_telemetry_result_t *result
+);
+
+/**
+ * @brief Search telemetry events by timestamp using a pre-extracted index
+ *
+ * Optimized version that avoids key extraction overhead.
+ *
+ * @param ctx Search context
+ * @param index Pre-extracted index
+ * @param events Original array of telemetry events
+ * @param target_time Target timestamp to search for
+ * @param result Pointer to store search result
+ * @return DSMIL_SEARCH_SUCCESS on success, error code otherwise
+ */
+int dsmil_search_telemetry_events_indexed(
+    dsmil_search_context_t *ctx,
+    const dsmil_search_index_t *index,
+    const dsmil_telemetry_event_t *events,
     dsmil_timestamp_t target_time,
     dsmil_telemetry_result_t *result
 );
@@ -246,6 +318,26 @@ int dsmil_search_security_events(
 );
 
 /**
+ * @brief Search security events by event ID using a pre-extracted index
+ *
+ * Optimized version that avoids key extraction overhead.
+ *
+ * @param ctx Search context
+ * @param index Pre-extracted index
+ * @param events Original array of security events
+ * @param target_id Target security event ID
+ * @param result Pointer to store search result
+ * @return DSMIL_SEARCH_SUCCESS on success, error code otherwise
+ */
+int dsmil_search_security_events_indexed(
+    dsmil_search_context_t *ctx,
+    const dsmil_search_index_t *index,
+    const dsmil_security_event_t *events,
+    dsmil_security_id_t target_id,
+    dsmil_security_result_t *result
+);
+
+/**
  * @brief Search security events by severity and time range
  *
  * Finds security events within a severity range and timestamp window.
@@ -295,6 +387,26 @@ int dsmil_search_log_entries(
     dsmil_search_context_t *ctx,
     const dsmil_log_entry_t *logs,
     size_t num_logs,
+    dsmil_log_id_t target_id,
+    dsmil_log_result_t *result
+);
+
+/**
+ * @brief Search log entries by log ID using a pre-extracted index
+ *
+ * Optimized version that avoids key extraction overhead.
+ *
+ * @param ctx Search context
+ * @param index Pre-extracted index
+ * @param logs Original array of log entries
+ * @param target_id Target log entry ID
+ * @param result Pointer to store search result
+ * @return DSMIL_SEARCH_SUCCESS on success, error code otherwise
+ */
+int dsmil_search_log_entries_indexed(
+    dsmil_search_context_t *ctx,
+    const dsmil_search_index_t *index,
+    const dsmil_log_entry_t *logs,
     dsmil_log_id_t target_id,
     dsmil_log_result_t *result
 );

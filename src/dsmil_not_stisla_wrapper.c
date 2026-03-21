@@ -87,12 +87,87 @@ void dsmil_search_destroy(dsmil_search_context_t *ctx) {
         ctx->not_stisla_table = NULL;
     }
 
+    if (ctx->cached_keys) {
+        free(ctx->cached_keys);
+        ctx->cached_keys = NULL;
+    }
+
     free(ctx);
 }
 
 const char* dsmil_search_get_last_error(const dsmil_search_context_t *ctx) {
     if (!ctx) return "Invalid context";
     return ctx->last_error[0] ? ctx->last_error : "";
+}
+
+/* ============================================================================
+ * Index Management Implementation
+ * ============================================================================ */
+
+dsmil_search_index_t* dsmil_search_index_create_telemetry(const dsmil_telemetry_event_t *events, size_t num_events) {
+    if (!events || num_events == 0) return NULL;
+
+    dsmil_search_index_t *index = malloc(sizeof(dsmil_search_index_t));
+    if (!index) return NULL;
+
+    index->keys = malloc(num_events * sizeof(int64_t));
+    if (!index->keys) {
+        free(index);
+        return NULL;
+    }
+
+    index->num_elements = num_events;
+    for (size_t i = 0; i < num_events; i++) {
+        index->keys[i] = (int64_t)events[i].timestamp;
+    }
+
+    return index;
+}
+
+dsmil_search_index_t* dsmil_search_index_create_security(const dsmil_security_event_t *events, size_t num_events) {
+    if (!events || num_events == 0) return NULL;
+
+    dsmil_search_index_t *index = malloc(sizeof(dsmil_search_index_t));
+    if (!index) return NULL;
+
+    index->keys = malloc(num_events * sizeof(int64_t));
+    if (!index->keys) {
+        free(index);
+        return NULL;
+    }
+
+    index->num_elements = num_events;
+    for (size_t i = 0; i < num_events; i++) {
+        index->keys[i] = (int64_t)events[i].event_id;
+    }
+
+    return index;
+}
+
+dsmil_search_index_t* dsmil_search_index_create_logs(const dsmil_log_entry_t *logs, size_t num_logs) {
+    if (!logs || num_logs == 0) return NULL;
+
+    dsmil_search_index_t *index = malloc(sizeof(dsmil_search_index_t));
+    if (!index) return NULL;
+
+    index->keys = malloc(num_logs * sizeof(int64_t));
+    if (!index->keys) {
+        free(index);
+        return NULL;
+    }
+
+    index->num_elements = num_logs;
+    for (size_t i = 0; i < num_logs; i++) {
+        index->keys[i] = (int64_t)logs[i].log_id;
+    }
+
+    return index;
+}
+
+void dsmil_search_index_destroy(dsmil_search_index_t *index) {
+    if (!index) return;
+    if (index->keys) free(index->keys);
+    free(index);
 }
 
 /* ============================================================================
@@ -118,29 +193,84 @@ int dsmil_search_telemetry_events(
 
     clear_error(ctx);
 
-    // Convert telemetry events to int64_t array for NOT_STISLA
-    // This is a simplified conversion - in practice you'd need proper key extraction
-    int64_t *timestamps = malloc(num_events * sizeof(int64_t));
-    if (!timestamps) {
-        set_error(ctx, "Memory allocation failed");
-        return DSMIL_SEARCH_ERROR_MEMORY;
-    }
+    // Optimize key extraction: check if we can reuse cached keys
+    int64_t *timestamps;
+    if (ctx->last_data_ptr == (const void *)events && ctx->cached_count == num_events && ctx->cached_keys) {
+        timestamps = ctx->cached_keys;
+        ctx->cache_hits++;
+    } else {
+        // Need to re-extract or re-allocate
+        if (num_events > ctx->cached_capacity) {
+            int64_t *new_keys = realloc(ctx->cached_keys, num_events * sizeof(int64_t));
+            if (!new_keys) {
+                set_error(ctx, "Memory allocation failed");
+                return DSMIL_SEARCH_ERROR_MEMORY;
+            }
+            ctx->cached_keys = new_keys;
+            ctx->cached_capacity = num_events;
+        }
 
-    for (size_t i = 0; i < num_events; i++) {
-        timestamps[i] = (int64_t)events[i].timestamp;
+        for (size_t i = 0; i < num_events; i++) {
+            ctx->cached_keys[i] = (int64_t)events[i].timestamp;
+        }
+        ctx->cached_count = num_events;
+        ctx->last_data_ptr = (const void *)events;
+        timestamps = ctx->cached_keys;
     }
 
     // Perform search
-    uint64_t start_time = get_time_ns();
     not_stisla_result_t search_result = not_stisla_search(
         timestamps, num_events, (int64_t)target_time, ctx->not_stisla_table, 8
     );
-    uint64_t end_time = get_time_ns();
 
     // Update statistics
     ctx->search_operations++;
 
-    free(timestamps);
+    if (search_result == NOT_STISLA_NOT_FOUND) {
+        result->event = NULL;
+        result->index = (size_t)-1;
+        result->exact_match_time = 0;
+        result->is_exact_match = false;
+        return DSMIL_SEARCH_ERROR_NOT_FOUND;
+    }
+
+    // Fill result structure
+    size_t found_index = (size_t)search_result;
+    result->event = &events[found_index];
+    result->index = found_index;
+    result->exact_match_time = events[found_index].timestamp;
+    result->is_exact_match = (events[found_index].timestamp == target_time);
+
+    return DSMIL_SEARCH_SUCCESS;
+}
+
+int dsmil_search_telemetry_events_indexed(
+    dsmil_search_context_t *ctx,
+    const dsmil_search_index_t *index,
+    const dsmil_telemetry_event_t *events,
+    dsmil_timestamp_t target_time,
+    dsmil_telemetry_result_t *result
+) {
+    if (!ctx || !index || !events || !result) {
+        if (ctx) set_error(ctx, "Invalid parameters");
+        return DSMIL_SEARCH_ERROR_INVALID_PARAM;
+    }
+
+    if (!ctx->initialized) {
+        set_error(ctx, "Search context not initialized");
+        return DSMIL_SEARCH_ERROR_INIT_FAILED;
+    }
+
+    clear_error(ctx);
+
+    // Perform search using pre-extracted keys
+    not_stisla_result_t search_result = not_stisla_search(
+        index->keys, index->num_elements, (int64_t)target_time, ctx->not_stisla_table, 8
+    );
+
+    // Update statistics
+    ctx->search_operations++;
+    ctx->cache_hits++; // Consider indexed search as a cache hit in terms of avoided extraction
 
     if (search_result == NOT_STISLA_NOT_FOUND) {
         result->event = NULL;
@@ -222,28 +352,83 @@ int dsmil_search_security_events(
 
     clear_error(ctx);
 
-    // Convert security events to int64_t array using event_id
-    int64_t *event_ids = malloc(num_events * sizeof(int64_t));
-    if (!event_ids) {
-        set_error(ctx, "Memory allocation failed");
-        return DSMIL_SEARCH_ERROR_MEMORY;
-    }
+    // Optimize key extraction
+    int64_t *event_ids;
+    if (ctx->last_data_ptr == (const void *)events && ctx->cached_count == num_events && ctx->cached_keys) {
+        event_ids = ctx->cached_keys;
+        ctx->cache_hits++;
+    } else {
+        if (num_events > ctx->cached_capacity) {
+            int64_t *new_keys = realloc(ctx->cached_keys, num_events * sizeof(int64_t));
+            if (!new_keys) {
+                set_error(ctx, "Memory allocation failed");
+                return DSMIL_SEARCH_ERROR_MEMORY;
+            }
+            ctx->cached_keys = new_keys;
+            ctx->cached_capacity = num_events;
+        }
 
-    for (size_t i = 0; i < num_events; i++) {
-        event_ids[i] = (int64_t)events[i].event_id;
+        for (size_t i = 0; i < num_events; i++) {
+            ctx->cached_keys[i] = (int64_t)events[i].event_id;
+        }
+        ctx->cached_count = num_events;
+        ctx->last_data_ptr = (const void *)events;
+        event_ids = ctx->cached_keys;
     }
 
     // Perform search
-    uint64_t start_time = get_time_ns();
     not_stisla_result_t search_result = not_stisla_search(
         event_ids, num_events, (int64_t)target_id, ctx->not_stisla_table, 8
     );
-    uint64_t end_time = get_time_ns();
 
     // Update statistics
     ctx->search_operations++;
 
-    free(event_ids);
+    if (search_result == NOT_STISLA_NOT_FOUND) {
+        result->event = NULL;
+        result->index = (size_t)-1;
+        result->matched_id = 0;
+        result->is_exact_match = false;
+        return DSMIL_SEARCH_ERROR_NOT_FOUND;
+    }
+
+    // Fill result structure
+    size_t found_index = (size_t)search_result;
+    result->event = &events[found_index];
+    result->index = found_index;
+    result->matched_id = events[found_index].event_id;
+    result->is_exact_match = (events[found_index].event_id == target_id);
+
+    return DSMIL_SEARCH_SUCCESS;
+}
+
+int dsmil_search_security_events_indexed(
+    dsmil_search_context_t *ctx,
+    const dsmil_search_index_t *index,
+    const dsmil_security_event_t *events,
+    dsmil_security_id_t target_id,
+    dsmil_security_result_t *result
+) {
+    if (!ctx || !index || !events || !result) {
+        if (ctx) set_error(ctx, "Invalid parameters");
+        return DSMIL_SEARCH_ERROR_INVALID_PARAM;
+    }
+
+    if (!ctx->initialized) {
+        set_error(ctx, "Search context not initialized");
+        return DSMIL_SEARCH_ERROR_INIT_FAILED;
+    }
+
+    clear_error(ctx);
+
+    // Perform search using pre-extracted keys
+    not_stisla_result_t search_result = not_stisla_search(
+        index->keys, index->num_elements, (int64_t)target_id, ctx->not_stisla_table, 8
+    );
+
+    // Update statistics
+    ctx->search_operations++;
+    ctx->cache_hits++;
 
     if (search_result == NOT_STISLA_NOT_FOUND) {
         result->event = NULL;
@@ -326,28 +511,83 @@ int dsmil_search_log_entries(
 
     clear_error(ctx);
 
-    // Convert log entries to int64_t array using log_id
-    int64_t *log_ids = malloc(num_logs * sizeof(int64_t));
-    if (!log_ids) {
-        set_error(ctx, "Memory allocation failed");
-        return DSMIL_SEARCH_ERROR_MEMORY;
-    }
+    // Optimize key extraction
+    int64_t *log_ids;
+    if (ctx->last_data_ptr == (const void *)logs && ctx->cached_count == num_logs && ctx->cached_keys) {
+        log_ids = ctx->cached_keys;
+        ctx->cache_hits++;
+    } else {
+        if (num_logs > ctx->cached_capacity) {
+            int64_t *new_keys = realloc(ctx->cached_keys, num_logs * sizeof(int64_t));
+            if (!new_keys) {
+                set_error(ctx, "Memory allocation failed");
+                return DSMIL_SEARCH_ERROR_MEMORY;
+            }
+            ctx->cached_keys = new_keys;
+            ctx->cached_capacity = num_logs;
+        }
 
-    for (size_t i = 0; i < num_logs; i++) {
-        log_ids[i] = (int64_t)logs[i].log_id;
+        for (size_t i = 0; i < num_logs; i++) {
+            ctx->cached_keys[i] = (int64_t)logs[i].log_id;
+        }
+        ctx->cached_count = num_logs;
+        ctx->last_data_ptr = (const void *)logs;
+        log_ids = ctx->cached_keys;
     }
 
     // Perform search
-    uint64_t start_time = get_time_ns();
     not_stisla_result_t search_result = not_stisla_search(
         log_ids, num_logs, (int64_t)target_id, ctx->not_stisla_table, 8
     );
-    uint64_t end_time = get_time_ns();
 
     // Update statistics
     ctx->search_operations++;
 
-    free(log_ids);
+    if (search_result == NOT_STISLA_NOT_FOUND) {
+        result->entry = NULL;
+        result->index = (size_t)-1;
+        result->matched_id = 0;
+        result->is_exact_match = false;
+        return DSMIL_SEARCH_ERROR_NOT_FOUND;
+    }
+
+    // Fill result structure
+    size_t found_index = (size_t)search_result;
+    result->entry = &logs[found_index];
+    result->index = found_index;
+    result->matched_id = logs[found_index].log_id;
+    result->is_exact_match = (logs[found_index].log_id == target_id);
+
+    return DSMIL_SEARCH_SUCCESS;
+}
+
+int dsmil_search_log_entries_indexed(
+    dsmil_search_context_t *ctx,
+    const dsmil_search_index_t *index,
+    const dsmil_log_entry_t *logs,
+    dsmil_log_id_t target_id,
+    dsmil_log_result_t *result
+) {
+    if (!ctx || !index || !logs || !result) {
+        if (ctx) set_error(ctx, "Invalid parameters");
+        return DSMIL_SEARCH_ERROR_INVALID_PARAM;
+    }
+
+    if (!ctx->initialized) {
+        set_error(ctx, "Search context not initialized");
+        return DSMIL_SEARCH_ERROR_INIT_FAILED;
+    }
+
+    clear_error(ctx);
+
+    // Perform search using pre-extracted keys
+    not_stisla_result_t search_result = not_stisla_search(
+        index->keys, index->num_elements, (int64_t)target_id, ctx->not_stisla_table, 8
+    );
+
+    // Update statistics
+    ctx->search_operations++;
+    ctx->cache_hits++;
 
     if (search_result == NOT_STISLA_NOT_FOUND) {
         result->entry = NULL;
