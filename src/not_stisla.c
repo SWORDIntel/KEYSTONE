@@ -31,12 +31,42 @@
 #include <immintrin.h>  /* AVX-512 intrinsics */
 #endif
 #include <sys/mman.h>  /* For madvise (huge pages support) */
+#include <stdio.h>     /* For CPU detection parsing */
 
 #if defined(__aarch64__)
 #include <arm_neon.h>
 #include <arm_sve.h>
 #include <sys/auxv.h>
 #include <asm/hwcap.h>
+
+/* Detect if running on AWS Graviton4 (Neoverse V2) */
+static int is_graviton4(void) {
+    FILE* f = fopen("/proc/cpuinfo", "r");
+    if (!f) return 0;
+
+    char line[256];
+    int implementer = 0;
+    int part = 0;
+
+    while (fgets(line, sizeof(line), f)) {
+        if (strncmp(line, "CPU implementer", 15) == 0) {
+            char* val = strchr(line, ':');
+            if (val) implementer = (int)strtol(val + 1, NULL, 16);
+        } else if (strncmp(line, "CPU part", 8) == 0) {
+            char* val = strchr(line, ':');
+            if (val) part = (int)strtol(val + 1, NULL, 16);
+        }
+        
+        /* Neoverse V2 (Graviton4): Implementer 0x41, Part 0xd4f */
+        if (implementer == 0x41 && part == 0xd4f) {
+            fclose(f);
+            return 1;
+        }
+    }
+
+    fclose(f);
+    return 0;
+}
 #endif
 
 #define NOT_STISLA_VERSION_STRING "1.1.0"
@@ -140,6 +170,9 @@ uint32_t not_stisla_detect_cpu_features(void) {
         }
         if (hwcap2 & HWCAP2_I8MM) {
             detected_cpu_features |= NOT_STISLA_CPU_I8MM;
+        }
+        if (is_graviton4()) {
+            detected_cpu_features |= NOT_STISLA_CPU_GRAVITON4;
         }
 #else
         /* Test AVX2 */
@@ -1309,6 +1342,13 @@ void not_stisla_enhanced_quantum_config_init(not_stisla_enhanced_quantum_config_
     config->quantum_confidence_min = 0.97; /* 97% minimum confidence */
     config->quantum_fallback_enabled = 1; /* Enable fallback */
 
+    /* AWS Graviton4 Auto-Optimization: Tune for Neoverse V2 pipeline depth */
+    uint32_t cpu_features = not_stisla_detect_cpu_features();
+    if (cpu_features & NOT_STISLA_CPU_GRAVITON4) {
+        /* Default to precision-optimized quantum exploration for ARM */
+        config->verification.window_size = 64; 
+    }
+
     /* Optimize for workload type */
     not_stisla_config_optimize_for_workload((not_stisla_config_t*)config, workload_type);
 }
@@ -2297,6 +2337,11 @@ not_stisla_anchor_table_t* not_stisla_anchor_table_create(void) {
     /* Initialize statistics */
     memset(&table->stats, 0, sizeof(not_stisla_stats_t));
     table->stats.cpu_features_detected = not_stisla_detect_cpu_features();
+
+    /* AWS Graviton4 Auto-Optimization: Lock anchor table to 2MB L2 boundary */
+    if (table->stats.cpu_features_detected & NOT_STISLA_CPU_GRAVITON4) {
+        table->max_capacity = 65536; /* Approx 2MB of anchor data */
+    }
 
     return table;
 }

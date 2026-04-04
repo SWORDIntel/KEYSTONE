@@ -65,7 +65,8 @@ typedef enum not_stisla_cpu_feature {
     NOT_STISLA_CPU_NEON = (1 << 4),
     NOT_STISLA_CPU_SVE = (1 << 5),
     NOT_STISLA_CPU_SVE2 = (1 << 6),
-    NOT_STISLA_CPU_I8MM = (1 << 7)
+    NOT_STISLA_CPU_I8MM = (1 << 7),
+    NOT_STISLA_CPU_GRAVITON4 = (1 << 8)
 } not_stisla_cpu_feature_t;
 
 /* Enhanced anchor structure with usage tracking */

@@ -16,6 +16,7 @@
 
 /* Global optimization flags */
 static int g_optimize_graviton4 = 0;
+static char* g_dataset_path = NULL;
 
 /* Timing utilities */
 static inline uint64_t ns_now(void) {
@@ -24,9 +25,37 @@ static inline uint64_t ns_now(void) {
     return (uint64_t)tv.tv_sec * 1000000000ULL + (uint64_t)tv.tv_usec * 1000ULL;
 }
 
+/* Load dataset from file */
+static int64_t* load_dataset(const char* path, size_t* n) {
+    FILE* f = fopen(path, "rb");
+    if (!f) {
+        perror("Failed to open dataset");
+        return NULL;
+    }
+
+    fseek(f, 0, SEEK_END);
+    long size = ftell(f);
+    fseek(f, 0, SEEK_SET);
+
+    *n = size / sizeof(int64_t);
+    int64_t* data = malloc(size);
+    if (data) {
+        if (fread(data, sizeof(int64_t), *n, f) != *n) {
+            fprintf(stderr, "Error: Read incomplete dataset\n");
+            free(data);
+            data = NULL;
+        }
+    }
+
+    fclose(f);
+    return data;
+}
+
 /* Apply AWS Graviton4 specific optimizations */
 static void apply_graviton4_optimizations(not_stisla_anchor_table_t* table, not_stisla_quantum_config_t* qconfig) {
-    if (g_optimize_graviton4) {
+    /* Manual override or library-level auto-detection */
+    uint32_t cpu_features = not_stisla_detect_cpu_features();
+    if (g_optimize_graviton4 || (cpu_features & NOT_STISLA_CPU_GRAVITON4)) {
         if (table) {
             /* Restrict anchor table to 2MB L2 cache per core (approx 65,536 anchors) */
             not_stisla_anchor_table_set_memory_limit(table, 65536);
@@ -64,6 +93,9 @@ static void benchmark_quantum_search(const int64_t* data, size_t data_size,
     /* Initialize quantum configuration */
     not_stisla_quantum_config_t qconfig;
     not_stisla_quantum_config_init(&qconfig, SEARCH_MODE_QUANTUM_ENHANCED);
+
+    /* Apply Graviton4 optimizations (if not already handled by library defaults) */
+    apply_graviton4_optimizations(NULL, &qconfig);
 
     /* Initialize anchor table for quantum learning */
     not_stisla_anchor_table_t* table = not_stisla_anchor_table_create();
@@ -124,6 +156,9 @@ static void benchmark_comprehensive(const int64_t* data, size_t data_size,
     not_stisla_anchor_table_t* table = not_stisla_anchor_table_create();
     assert(table && "Failed to create anchor table");
 
+    /* Apply Graviton4 optimizations (if not already handled by library defaults) */
+    apply_graviton4_optimizations(table, NULL);
+
     uint64_t classical_start = ns_now();
     size_t classical_found = 0;
     for (size_t i = 0; i < num_queries; ++i) {
@@ -137,6 +172,9 @@ static void benchmark_comprehensive(const int64_t* data, size_t data_size,
     /* Benchmark quantum-enhanced */
     not_stisla_quantum_config_t qconfig;
     not_stisla_quantum_config_init(&qconfig, SEARCH_MODE_QUANTUM_ENHANCED);
+
+    /* Apply Graviton4 optimizations (if not already handled by library defaults) */
+    apply_graviton4_optimizations(table, &qconfig);
 
     uint64_t quantum_start = ns_now();
     size_t quantum_found = 0;
@@ -189,6 +227,8 @@ int main(int argc, char** argv) {
     for (int i = 1; i < argc; ++i) {
         if (strcmp(argv[i], "--graviton4") == 0) {
             g_optimize_graviton4 = 1;
+        } else if (strcmp(argv[i], "--dataset") == 0 && i + 1 < argc) {
+            g_dataset_path = argv[++i];
         }
     }
 
@@ -198,8 +238,10 @@ int main(int argc, char** argv) {
     printf("Build: %s\n", not_stisla_build_info());
     printf("Quantum Build: %s\n", not_stisla_quantum_build_info());
 
-    if (g_optimize_graviton4) {
-        printf("\n⚙️  AWS Graviton4 Optimizations ACTIVE:\n");
+    uint32_t cpu_features = not_stisla_detect_cpu_features();
+    if (g_optimize_graviton4 || (cpu_features & NOT_STISLA_CPU_GRAVITON4)) {
+        printf("\n⚙️  AWS Graviton4 Optimizations ACTIVE (%s):\n", 
+               (cpu_features & NOT_STISLA_CPU_GRAVITON4) ? "Auto-detected" : "Manual override");
         printf("   - Architecture: 64-bit ARM (Neoverse V2)\n");
         printf("   - Threads: 48 vCPUs (~2.7 GHz)\n");
         printf("   - Cache: L1 64KB I/D, L2 2MB dedicated per core\n");
@@ -207,15 +249,24 @@ int main(int argc, char** argv) {
     }
     printf("\n");
 
-    const size_t DATA_SIZE = 100000;
-    const size_t NUM_QUERIES = 50000;
+    size_t DATA_SIZE = 100000;
+    size_t NUM_QUERIES = 50000;
+    int64_t* data = NULL;
 
-    /* Generate test data */
-    int64_t* data = malloc(DATA_SIZE * sizeof(int64_t));
+    if (g_dataset_path) {
+        printf("📂 Loading custom dataset: %s\n", g_dataset_path);
+        data = load_dataset(g_dataset_path, &DATA_SIZE);
+        if (!data) return 1;
+        printf("   - Elements: %zu\n", DATA_SIZE);
+    } else {
+        /* Generate test data */
+        data = malloc(DATA_SIZE * sizeof(int64_t));
+        assert(data && "Failed to allocate memory");
+        generate_test_data(data, DATA_SIZE);
+    }
+
     int64_t* queries = malloc(NUM_QUERIES * sizeof(int64_t));
-    assert(data && queries && "Failed to allocate memory");
-
-    generate_test_data(data, DATA_SIZE);
+    assert(queries && "Failed to allocate memory");
 
     /* Generate queries (all exist in data) */
     srand(42);
