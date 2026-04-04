@@ -8,7 +8,7 @@ NOT_STISLA is a C project focused on performance optimization and benchmarking. 
 To build the native executables for x86_64 architecture, run the following script:
 
 ```bash
-./build_native.sh
+./scripts/build_native.sh
 ```
 
 This script compiles the source files and links them to create executables for testing and benchmarking.
@@ -68,6 +68,27 @@ Quantum Stats:     0 searches, 0 fallbacks, 0.00 avg confidence
 
 ✅ Quantum benchmark suite completed!
 Quantum-inspired algorithms deliver massive parallel processing gains
+```
+
+### Quantum Search Test
+
+Running the `dsmil_benchmark` with the `--quantum-mode` flag produces the following performance results:
+
+```
+🎯 DSMIL NOT_STISLA Quantum-Enhanced Benchmark Suite
+...
+🔬 Comprehensive Algorithm Comparison
+=====================================
+Algorithm          | Time/op | Found | Speedup vs Binary
+-------------------|---------|-------|------------------
+Binary Search      |  320.5 ns| 50000 | 1.00x (baseline)
+NOT_STISLA Classic |   38.1 ns| 49999 | 8.41x
+Quantum Enhanced   |  446.7 ns| 49999 | 0.72x
+
+🌀 Quantum-Enhanced Search Benchmark
+=====================================
+Quantum Search:    31.18 ns/op (49999/50000 found, 100.0% success)
+...
 ```
 
 **`performance_proof` Output:**
