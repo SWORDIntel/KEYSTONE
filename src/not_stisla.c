@@ -32,6 +32,13 @@
 #endif
 #include <sys/mman.h>  /* For madvise (huge pages support) */
 
+#if defined(__aarch64__)
+#include <arm_neon.h>
+#include <arm_sve.h>
+#include <sys/auxv.h>
+#include <asm/hwcap.h>
+#endif
+
 #define NOT_STISLA_VERSION_STRING "1.1.0"
 #define NOT_STISLA_BUILD_INFO "Enhanced with QIHSE-inspired optimizations, runtime CPU detection, memory efficiency"
 
@@ -40,6 +47,7 @@ static uint32_t detected_cpu_features = 0;
 static int cpu_features_detected = 0;
 
 /* Signal handler for illegal instruction detection */
+#ifndef __aarch64__
 static jmp_buf cpu_test_jmp_buf;
 
 /* QIHSE-inspired CPU feature detection using signal handling */
@@ -110,12 +118,30 @@ static int test_amx(void) {
         return 0;
     }
 }
+#endif
 
 /* Runtime CPU feature detection (QIHSE-inspired) */
 uint32_t not_stisla_detect_cpu_features(void) {
     if (!cpu_features_detected) {
         detected_cpu_features = 0;
 
+#if defined(__aarch64__)
+        unsigned long hwcap = getauxval(AT_HWCAP);
+        unsigned long hwcap2 = getauxval(AT_HWCAP2);
+
+        if (hwcap & HWCAP_ASIMD) {
+            detected_cpu_features |= NOT_STISLA_CPU_NEON;
+        }
+        if (hwcap & HWCAP_SVE) {
+            detected_cpu_features |= NOT_STISLA_CPU_SVE;
+        }
+        if (hwcap2 & HWCAP2_SVE2) {
+            detected_cpu_features |= NOT_STISLA_CPU_SVE2;
+        }
+        if (hwcap2 & HWCAP2_I8MM) {
+            detected_cpu_features |= NOT_STISLA_CPU_I8MM;
+        }
+#else
         /* Test AVX2 */
         if (test_avx2()) {
             detected_cpu_features |= NOT_STISLA_CPU_AVX2;
@@ -135,6 +161,7 @@ uint32_t not_stisla_detect_cpu_features(void) {
         if (detected_cpu_features & NOT_STISLA_CPU_AVX512) {
             detected_cpu_features |= NOT_STISLA_CPU_VNNI;
         }
+#endif
 
         cpu_features_detected = 1;
     }
@@ -656,6 +683,81 @@ double not_stisla_cosine_similarity_avx2(
 }
 #endif
 
+#if defined(__ARM_NEON)
+double not_stisla_cosine_similarity_neon(
+    const float* result,
+    const float* ground_truth,
+    size_t data_size
+) {
+    float32x4_t dot_sum = vdupq_n_f32(0.0f);
+    float32x4_t res_norm_sum = vdupq_n_f32(0.0f);
+    float32x4_t gt_norm_sum = vdupq_n_f32(0.0f);
+
+    size_t simd_iters = data_size / 4;
+    for (size_t i = 0; i < simd_iters; i++) {
+        float32x4_t res_vec = vld1q_f32(&result[i * 4]);
+        float32x4_t gt_vec = vld1q_f32(&ground_truth[i * 4]);
+
+        dot_sum = vfmaq_f32(dot_sum, res_vec, gt_vec);
+        res_norm_sum = vfmaq_f32(res_norm_sum, res_vec, res_vec);
+        gt_norm_sum = vfmaq_f32(gt_norm_sum, gt_vec, gt_vec);
+    }
+
+    double dot = (double)(vgetq_lane_f32(dot_sum, 0) + vgetq_lane_f32(dot_sum, 1) + 
+                          vgetq_lane_f32(dot_sum, 2) + vgetq_lane_f32(dot_sum, 3));
+    double res_norm = (double)(vgetq_lane_f32(res_norm_sum, 0) + vgetq_lane_f32(res_norm_sum, 1) + 
+                               vgetq_lane_f32(res_norm_sum, 2) + vgetq_lane_f32(res_norm_sum, 3));
+    double gt_norm = (double)(vgetq_lane_f32(gt_norm_sum, 0) + vgetq_lane_f32(gt_norm_sum, 1) + 
+                              vgetq_lane_f32(gt_norm_sum, 2) + vgetq_lane_f32(gt_norm_sum, 3));
+
+    for (size_t i = simd_iters * 4; i < data_size; i++) {
+        dot += (double)result[i] * (double)ground_truth[i];
+        res_norm += (double)result[i] * (double)result[i];
+        gt_norm += (double)ground_truth[i] * (double)ground_truth[i];
+    }
+    
+    res_norm = sqrt(res_norm);
+    gt_norm = sqrt(gt_norm);
+    
+    return (res_norm > 0.0 && gt_norm > 0.0) ? (dot / (res_norm * gt_norm)) : 0.0;
+}
+#endif
+
+#if defined(__ARM_FEATURE_SVE)
+double not_stisla_cosine_similarity_sve(
+    const float* result,
+    const float* ground_truth,
+    size_t data_size
+) {
+    svfloat32_t dot_sum = svdup_n_f32(0.0f);
+    svfloat32_t res_norm_sum = svdup_n_f32(0.0f);
+    svfloat32_t gt_norm_sum = svdup_n_f32(0.0f);
+
+    uint64_t i = 0;
+    svbool_t pg = svwhilelt_b32(i, data_size);
+    do {
+        svfloat32_t res_vec = svld1_f32(pg, &result[i]);
+        svfloat32_t gt_vec = svld1_f32(pg, &ground_truth[i]);
+
+        dot_sum = svmla_f32_m(pg, dot_sum, res_vec, gt_vec);
+        res_norm_sum = svmla_f32_m(pg, res_norm_sum, res_vec, res_vec);
+        gt_norm_sum = svmla_f32_m(pg, gt_norm_sum, gt_vec, gt_vec);
+
+        i += svcntw();
+        pg = svwhilelt_b32(i, data_size);
+    } while (svptest_any(svptrue_b32(), pg));
+
+    double dot = (double)svaddv_f32(svptrue_b32(), dot_sum);
+    double res_norm = (double)svaddv_f32(svptrue_b32(), res_norm_sum);
+    double gt_norm = (double)svaddv_f32(svptrue_b32(), gt_norm_sum);
+
+    res_norm = sqrt(res_norm);
+    gt_norm = sqrt(gt_norm);
+
+    return (res_norm > 0.0 && gt_norm > 0.0) ? (dot / (res_norm * gt_norm)) : 0.0;
+}
+#endif
+
 /**
  * Scalar cosine similarity fallback
  */
@@ -756,18 +858,29 @@ int not_stisla_verify_result(
             if (ground_truth) {
                 /* Use SIMD similarity as primary, statistical as fallback */
                 double primary_similarity, fallback_similarity;
-#ifdef __AVX2__
                 uint32_t cpu_features = not_stisla_detect_cpu_features();
+#if defined(__ARM_FEATURE_SVE)
+                if (cpu_features & NOT_STISLA_CPU_SVE) {
+                    primary_similarity = not_stisla_cosine_similarity_sve(
+                        (const float*)result, (const float*)ground_truth, 1024);
+                } else
+#endif
+#if defined(__ARM_NEON)
+                if (cpu_features & NOT_STISLA_CPU_NEON) {
+                    primary_similarity = not_stisla_cosine_similarity_neon(
+                        (const float*)result, (const float*)ground_truth, 1024);
+                } else
+#endif
+#if defined(__AVX2__)
                 if (cpu_features & NOT_STISLA_CPU_AVX2) {
                     primary_similarity = not_stisla_cosine_similarity_avx2(
                         (const float*)result, (const float*)ground_truth, 1024);
-                } else {
+                } else
 #endif
+                {
                     primary_similarity = not_stisla_cosine_similarity_scalar(
                         (const float*)result, (const float*)ground_truth, 1024);
-#ifdef __AVX2__
                 }
-#endif
 
                 fallback_similarity = not_stisla_calculate_similarity(result, ground_truth);
                 double consistency = not_stisla_check_structural_integrity(result);
@@ -803,19 +916,32 @@ int not_stisla_verify_result(
                 double weights[3] = {0.4, 0.4, 0.2}; /* SIMD, statistical, structural */
 
                 /* 1. SIMD-accelerated cosine similarity */
-#ifdef __AVX2__
                 uint32_t cpu_features = not_stisla_detect_cpu_features();
+#if defined(__ARM_FEATURE_SVE)
+                if (cpu_features & NOT_STISLA_CPU_SVE) {
+                    const float* res = (const float*)result;
+                    const float* gt = (const float*)ground_truth;
+                    similarities[0] = not_stisla_cosine_similarity_sve(res, gt, 1024);
+                } else
+#endif
+#if defined(__ARM_NEON)
+                if (cpu_features & NOT_STISLA_CPU_NEON) {
+                    const float* res = (const float*)result;
+                    const float* gt = (const float*)ground_truth;
+                    similarities[0] = not_stisla_cosine_similarity_neon(res, gt, 1024);
+                } else
+#endif
+#if defined(__AVX2__)
                 if (cpu_features & NOT_STISLA_CPU_AVX2) {
                     const float* res = (const float*)result;
                     const float* gt = (const float*)ground_truth;
                     similarities[0] = not_stisla_cosine_similarity_avx2(res, gt, 1024);
-                } else {
+                } else
 #endif
+                {
                     similarities[0] = not_stisla_cosine_similarity_scalar(
                         (const float*)result, (const float*)ground_truth, 1024);
-#ifdef __AVX2__
                 }
-#endif
 
                 /* 2. Statistical similarity */
                 similarities[1] = not_stisla_calculate_similarity(result, ground_truth);
@@ -1038,8 +1164,12 @@ static void not_stisla_update_performance_stats(
     if (cpu_features_used & NOT_STISLA_CPU_AVX512) vector_features++;
     if (cpu_features_used & NOT_STISLA_CPU_AMX) vector_features++;
     if (cpu_features_used & NOT_STISLA_CPU_VNNI) vector_features++;
+    if (cpu_features_used & NOT_STISLA_CPU_NEON) vector_features++;
+    if (cpu_features_used & NOT_STISLA_CPU_SVE) vector_features++;
+    if (cpu_features_used & NOT_STISLA_CPU_SVE2) vector_features++;
+    if (cpu_features_used & NOT_STISLA_CPU_I8MM) vector_features++;
 
-    g_performance_stats.vectorization_efficiency = (double)vector_features / 4.0;
+    g_performance_stats.vectorization_efficiency = (double)vector_features / 8.0;
 
     /* Calculate speedup estimates (rough heuristics) */
     /* Binary search baseline: O(log n) */
@@ -1497,7 +1627,7 @@ not_stisla_result_t not_stisla_enhanced_quantum_search(
     free(arr_double);
 
     /* Project query */
-    double query_double = (double)key;
+    double query_double[1] = { (double)key };
     double* query_projection = malloc(optimal_dims * sizeof(double));
     if (!query_projection) {
         free(rff_projections);
@@ -1505,7 +1635,10 @@ not_stisla_result_t not_stisla_enhanced_quantum_search(
         not_stisla_set_performance_tracking(original_performance_enabled);
         return not_stisla_search(arr, n, key, table, config->tol);
     }
-    not_stisla_rff_project(rff_kernel, &query_double, query_projection);
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wmaybe-uninitialized"
+    not_stisla_rff_project(rff_kernel, query_double, query_projection);
+#pragma GCC diagnostic pop
 
     if (g_performance_enabled) {
         clock_gettime(CLOCK_MONOTONIC, &proj_end);
@@ -1614,7 +1747,7 @@ not_stisla_result_t not_stisla_enhanced_quantum_search(
 
     not_stisla_verification_result_t verification_result;
     not_stisla_verify_result(
-        &query_double, query_projection, best_match != NOT_STISLA_NOT_FOUND ? &rff_projections[best_match * optimal_dims] : NULL,
+        query_double, query_projection, best_match != NOT_STISLA_NOT_FOUND ? &rff_projections[best_match * optimal_dims] : NULL,
         &config->quantum.verification, &verification_result);
 
     if (g_performance_enabled) {
@@ -1694,9 +1827,16 @@ static void not_stisla_learn_anchor(not_stisla_anchor_table_t* table, int64_t va
 
 /* Enhanced chunked search with runtime SIMD detection (QIHSE-inspired) */
 static inline size_t not_stisla_chunked_search(const int64_t* arr, size_t n, int64_t key) {
-    /* For very small arrays, simple loop */
+    /* For very small arrays, simple loop with minimal unrolling for speed */
     if (n <= NOT_STISLA_CHUNK_SIZE) {
-        for (size_t i = 0; i < n; ++i) {
+        size_t i = 0;
+        for (; i + 3 < n; i += 4) {
+            if (arr[i] == key) return i;
+            if (arr[i+1] == key) return i+1;
+            if (arr[i+2] == key) return i+2;
+            if (arr[i+3] == key) return i+3;
+        }
+        for (; i < n; ++i) {
             if (arr[i] == key) return i;
         }
         return NOT_STISLA_NOT_FOUND;
@@ -1778,6 +1918,56 @@ static inline size_t not_stisla_chunked_search(const int64_t* arr, size_t n, int
     }
 #endif
 
+#if defined(__aarch64__)
+    /* ARM SIMD path: SVE and NEON */
+    {
+        uint32_t cpu_features_arm = not_stisla_detect_cpu_features();
+
+        if (cpu_features_arm & NOT_STISLA_CPU_SVE) {
+            /* SVE path */
+            uint64_t vl = svcntd();
+            const size_t full_chunks = n / vl;
+            for (size_t chunk = 0; chunk < full_chunks; ++chunk) {
+                const size_t base = chunk * vl;
+                svbool_t pg = svptrue_b64();
+                svint64_t vec_data = svld1_s64(pg, &arr[base]);
+                svint64_t vec_target = svdup_n_s64(key);
+                svbool_t match_mask = svcmpeq_s64(pg, vec_data, vec_target);
+                
+                if (svptest_any(pg, match_mask)) {
+                    for (size_t i = 0; i < vl; ++i) {
+                        if (arr[base + i] == key) return base + i;
+                    }
+                }
+            }
+            
+            const size_t remainder_start = full_chunks * vl;
+            for (size_t i = remainder_start; i < n; ++i) {
+                if (arr[i] == key) return i;
+            }
+            return NOT_STISLA_NOT_FOUND;
+        } else if (cpu_features_arm & NOT_STISLA_CPU_NEON) {
+            /* NEON path (128-bit, 2 x 64-bit integers) */
+            const size_t full_chunks = n / 2;
+            for (size_t chunk = 0; chunk < full_chunks; ++chunk) {
+                const size_t base = chunk * 2;
+                int64x2_t vec_data = vld1q_s64(&arr[base]);
+                int64x2_t vec_target = vdupq_n_s64(key);
+                uint64x2_t cmp_result = vceqq_s64(vec_data, vec_target);
+                
+                if (vgetq_lane_u64(cmp_result, 0)) return base;
+                if (vgetq_lane_u64(cmp_result, 1)) return base + 1;
+            }
+            
+            const size_t remainder_start = full_chunks * 2;
+            for (size_t i = remainder_start; i < n; ++i) {
+                if (arr[i] == key) return i;
+            }
+            return NOT_STISLA_NOT_FOUND;
+        }
+    }
+#endif
+
     /* Scalar fallback: Use when no SIMD compiled in or detected */
     #if !defined(__AVX512F__) && !defined(__AVX2__)
     /* Process in chunks of 4 for better ILP even without SIMD */
@@ -1851,8 +2041,13 @@ static inline size_t not_stisla_anchor_lower(const not_stisla_anchor_table_t* ta
 static inline int64_t not_stisla_interpolate(int64_t l_val, int64_t r_val, size_t l_idx, size_t r_idx, int64_t key) {
     const size_t span = r_idx - l_idx;
 
-    if (r_val == l_val) {
+    if (r_val == l_val || span == 0) {
         return (int64_t)l_idx;
+    }
+
+    /* Fast path for small spans to avoid 128-bit division overhead */
+    if (span <= 128) {
+        return (int64_t)(l_idx + (span >> 1));
     }
 
     /* Use 128-bit arithmetic to prevent overflow */
@@ -2146,7 +2341,7 @@ int not_stisla_anchor_table_set_memory_limit(not_stisla_anchor_table_t* table, s
     return 0;
 }
 
-static not_stisla_anchor_table_t* not_stisla_anchor_table_clone(const not_stisla_anchor_table_t* table) {
+__attribute__((unused)) static not_stisla_anchor_table_t* not_stisla_anchor_table_clone(const not_stisla_anchor_table_t* table) {
     if (!table) {
         return NULL;
     }

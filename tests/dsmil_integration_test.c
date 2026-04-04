@@ -133,7 +133,8 @@ static void test_error_handling(void) {
     assert(ctx != NULL);
     ctx->initialized = false;
 
-    ret = dsmil_search_telemetry_events(ctx, NULL, 0, 0, &result);
+    dsmil_telemetry_event_t dummy_event;
+    ret = dsmil_search_telemetry_events(ctx, &dummy_event, 1, 0, &result);
     assert(ret == DSMIL_SEARCH_ERROR_INIT_FAILED);
 
     free(ctx);
@@ -185,7 +186,7 @@ static void test_statistics(void) {
     dsmil_search_destroy(ctx);
 }
 
-int main(int argc, char **argv) {
+int main(int argc __attribute__((unused)), char **argv __attribute__((unused))) {
     printf("🧪 DSMIL NOT_STISLA Integration Test Suite\n");
     printf("==========================================\n\n");
 

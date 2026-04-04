@@ -16,7 +16,7 @@
  * Get current time in nanoseconds for performance measurement
  * Simplified version for DSMIL integration
  */
-static uint64_t get_time_ns(void) {
+__attribute__((unused)) static uint64_t get_time_ns(void) {
     struct timeval tv;
     gettimeofday(&tv, NULL);
     return (uint64_t)tv.tv_sec * 1000000ULL + (uint64_t)tv.tv_usec;
