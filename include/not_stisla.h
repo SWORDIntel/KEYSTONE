@@ -42,7 +42,7 @@ extern "C" {
 #endif
 
 /* Configuration - Enhanced with QIHSE-style memory efficiency */
-#define NOT_STISLA_MAX_ANCHORS 16
+#define NOT_STISLA_MAX_ANCHORS 1048576  /* Increased to 1M to support large L2/L3 caches */
 #define NOT_STISLA_CHUNK_SIZE 4  /* AVX2 register size */
 #define NOT_STISLA_MIN_ANCHORS 2
 #define NOT_STISLA_ANCHOR_PRUNE_THRESHOLD 0.8f  /* Prune when 80% full */

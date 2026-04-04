@@ -14,11 +14,29 @@
 #include <string.h>
 #include <assert.h>
 
+/* Global optimization flags */
+static int g_optimize_graviton4 = 0;
+
 /* Timing utilities */
 static inline uint64_t ns_now(void) {
     struct timeval tv;
     gettimeofday(&tv, NULL);
     return (uint64_t)tv.tv_sec * 1000000000ULL + (uint64_t)tv.tv_usec * 1000ULL;
+}
+
+/* Apply AWS Graviton4 specific optimizations */
+static void apply_graviton4_optimizations(not_stisla_anchor_table_t* table, not_stisla_quantum_config_t* qconfig) {
+    if (g_optimize_graviton4) {
+        if (table) {
+            /* Restrict anchor table to 2MB L2 cache per core (approx 65,536 anchors) */
+            not_stisla_anchor_table_set_memory_limit(table, 65536);
+        }
+        if (qconfig) {
+            /* Optimize for Neoverse V2 pipeline depth and SVE vector registers */
+            qconfig->max_superposition_states = 512; 
+            qconfig->amplification_rounds = 4;
+        }
+    }
 }
 
 /* Binary search for comparison */
@@ -166,12 +184,27 @@ static void generate_test_data(int64_t* arr, size_t n) {
     }
 }
 
-int main() {
+int main(int argc, char** argv) {
+    /* Parse CLI arguments */
+    for (int i = 1; i < argc; ++i) {
+        if (strcmp(argv[i], "--graviton4") == 0) {
+            g_optimize_graviton4 = 1;
+        }
+    }
+
     printf("🎯 DSMIL NOT_STISLA Quantum-Enhanced Benchmark Suite\n");
     printf("Quantum Version: %s\n", not_stisla_quantum_version());
     printf("Classical Version: %s\n", not_stisla_version());
     printf("Build: %s\n", not_stisla_build_info());
     printf("Quantum Build: %s\n", not_stisla_quantum_build_info());
+
+    if (g_optimize_graviton4) {
+        printf("\n⚙️  AWS Graviton4 Optimizations ACTIVE:\n");
+        printf("   - Architecture: 64-bit ARM (Neoverse V2)\n");
+        printf("   - Threads: 48 vCPUs (~2.7 GHz)\n");
+        printf("   - Cache: L1 64KB I/D, L2 2MB dedicated per core\n");
+        printf("   - Tuning: Anchor table locked to 2MB L2 boundary\n");
+    }
     printf("\n");
 
     const size_t DATA_SIZE = 100000;
@@ -194,6 +227,7 @@ int main() {
     /* Warm-up phase */
     printf("🔥 Warming up algorithms...\n");
     not_stisla_anchor_table_t* warm_table = not_stisla_anchor_table_create();
+    apply_graviton4_optimizations(warm_table, NULL);
     for (size_t i = 0; i < 1000; ++i) {
         not_stisla_search(data, DATA_SIZE, queries[i % 1000], warm_table, 8);
     }
