@@ -1,6 +1,6 @@
 # NOT_STISLA Search Algorithm
 
-**Ultra-high-performance interpolation search with quantum-inspired optimizations.**
+**Ultra-high-performance interpolation search with quantum-inspired optimizations and ARM Graviton4 support.**
 
 NOT_STISLA achieves **22.28x speedup** over binary search through advanced anchor learning and SIMD acceleration. The algorithm uses interpolation search with learned anchor points to predict element locations, then performs targeted local searches.
 
@@ -27,17 +27,22 @@ NOT_STISLA achieves **22.28x speedup** over binary search through advanced ancho
 - **Memory Bounded**: Intelligent anchor pruning prevents memory growth
 
 ### Performance Optimizations
-- **AVX-512 Branchless Search**: Eliminates branch misprediction penalties
+- **AVX-512 branchless search**: Eliminates branch misprediction penalties
+- **ARM SVE/NEON acceleration**: Native Scalable Vector Extension and NEON paths for ARM Graviton4
 - **Software Prefetching**: Hides memory latency for large arrays
 - **Huge Pages Support**: Reduces TLB misses by 512x for large arrays
-- **SIMD Acceleration**: AVX2/AVX-512 optimized operations
-- **Runtime CPU Detection**: Automatically uses best available SIMD
+- **Runtime CPU Detection**: Automatically detects AVX-512, AMX, VNNI (x86) and SVE, NEON, Graviton4 (ARM)
 
 ### Quantum-Enhanced Features
 - **Hilbert Space Projection**: Higher-dimensional search spaces
 - **Amplitude Amplification**: Grover-inspired quantum search patterns
 - **Dimensional Collapse**: Efficient mapping back to vector space
 - **RFF Kernel Integration**: Random Fourier Features for quantum projection
+
+### AWS Graviton4 (Neoverse V2) Support
+- **Autonomous Detection**: Runtime identification of Graviton4 hardware
+- **L2 Cache Optimization**: Automatically locks anchor tables to 2MB boundaries to fit dedicated L2 cache
+- **Pipeline Tuning**: Quantum exploration window auto-tuned for ARM pipeline depth
 
 ## Installation
 
@@ -95,6 +100,12 @@ cd benchmarks
 ./benchmark.sh              # Performance comparison
 ./benchmark-cpu-features.sh # SIMD feature testing
 ./benchmark-parallel.sh     # Parallel processing tests
+
+# ARM Graviton4 Optimized Benchmark
+./benchmarks/dsmil_benchmark --graviton4
+
+# Test with custom dataset
+./benchmarks/dsmil_benchmark --dataset /path/to/your/data.bin
 ```
 
 ## Architecture
@@ -106,14 +117,17 @@ cd benchmarks
 4. **Learning**: Update anchor table with successful searches
 
 ### CPU Feature Detection
-- Runtime instruction testing (bypasses CPUID masking)
-- Automatic SIMD selection (AVX-512 > AVX2 > Scalar)
-- Graceful fallback for unsupported features
+- **x86**: Runtime instruction testing (bypasses CPUID masking)
+- **ARM**: Auxiliary vector (`getauxval`) and `/proc/cpuinfo` parsing for precise architecture detection
+- **Automatic SIMD selection**:
+  - x86: AVX-512 > AVX2 > Scalar
+  - ARM: SVE > NEON > Scalar
 
 ### Memory Management
 - Intelligent anchor pruning (LRU-based)
 - Memory-bounded operation (configurable limits)
 - Huge pages support for TLB optimization
+- **Cache-aware layout**: Auto-tuned anchor table sizing for L2 cache alignment
 
 ## Performance Characteristics
 
@@ -121,10 +135,11 @@ cd benchmarks
 - **22.28x speedup** over binary search
 - **1.5-1.6x** additional speedup with AVX-512
 - **1.6-1.75x** additional speedup with AVX-512 + AMX
+- **High Performance on ARM**: Optimized for Neoverse V2 (Graviton4) SVE pipelines
 
 ### Real-World Scaling
-- **Small arrays** (< 100 elements): AVX-512 branchless search dominant
-- **Medium arrays** (1K-100K): Prefetching provides benefits
+- **Small arrays** (< 100 elements): SIMD branchless search dominant
+- **Medium arrays** (1K-100K): Prefetching and L2 cache alignment provide benefits
 - **Large arrays** (> 10M): TLB optimization critical
 
 ## Contributing
