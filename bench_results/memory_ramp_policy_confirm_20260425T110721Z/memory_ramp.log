@@ -1,0 +1,6 @@
+[2026-04-25T11:07:21Z] case=1 profile=mem_n128000000_q1000000_h0_dense_g1_j0_s17_t16_mcold estimated_gib=1.106 mode=cold warmup_runs=0
+  benchmark_csv=bench_results/memory_ramp_policy_confirm_20260425T110721Z/1_mem_n128000000_q1000000_h0_dense_g1_j0_s17_t16_mcold.csv
+  time_metrics=bench_results/memory_ramp_policy_confirm_20260425T110721Z/1_mem_n128000000_q1000000_h0_dense_g1_j0_s17_t16_mcold.time.txt
+[2026-04-25T11:07:22Z] case=2 profile=mem_n128000000_q1000000_h0_dense_g1_j0_s17_t16_mwarm estimated_gib=1.106 mode=warm warmup_runs=1
+  benchmark_csv=bench_results/memory_ramp_policy_confirm_20260425T110721Z/2_mem_n128000000_q1000000_h0_dense_g1_j0_s17_t16_mwarm.csv
+  time_metrics=bench_results/memory_ramp_policy_confirm_20260425T110721Z/2_mem_n128000000_q1000000_h0_dense_g1_j0_s17_t16_mwarm.time.txt

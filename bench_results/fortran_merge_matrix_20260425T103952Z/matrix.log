@@ -1,0 +1,16 @@
+[2026-04-25T10:39:52Z] case=1 profile=n1000000_q8192_h100_dense_g1_j0_s1_t16
+  csv=bench_results/fortran_merge_matrix_20260425T103952Z/1_n1000000_q8192_h100_dense_g1_j0_s1_t16.csv
+[2026-04-25T10:39:52Z] case=2 profile=n1000000_q8192_h100_dense_g1_j0_s17_t16
+  csv=bench_results/fortran_merge_matrix_20260425T103952Z/2_n1000000_q8192_h100_dense_g1_j0_s17_t16.csv
+[2026-04-25T10:39:52Z] case=3 profile=n1000000_q32768_h100_dense_g1_j0_s1_t16
+  csv=bench_results/fortran_merge_matrix_20260425T103952Z/3_n1000000_q32768_h100_dense_g1_j0_s1_t16.csv
+[2026-04-25T10:39:52Z] case=4 profile=n1000000_q32768_h100_dense_g1_j0_s17_t16
+  csv=bench_results/fortran_merge_matrix_20260425T103952Z/4_n1000000_q32768_h100_dense_g1_j0_s17_t16.csv
+[2026-04-25T10:39:52Z] case=5 profile=n1000000_q50000_h100_dense_g1_j0_s1_t16
+  csv=bench_results/fortran_merge_matrix_20260425T103952Z/5_n1000000_q50000_h100_dense_g1_j0_s1_t16.csv
+[2026-04-25T10:39:52Z] case=6 profile=n1000000_q50000_h100_dense_g1_j0_s17_t16
+  csv=bench_results/fortran_merge_matrix_20260425T103952Z/6_n1000000_q50000_h100_dense_g1_j0_s17_t16.csv
+[2026-04-25T10:39:52Z] case=7 profile=n1000000_q200000_h100_dense_g1_j0_s1_t16
+  csv=bench_results/fortran_merge_matrix_20260425T103952Z/7_n1000000_q200000_h100_dense_g1_j0_s1_t16.csv
+[2026-04-25T10:39:52Z] case=8 profile=n1000000_q200000_h100_dense_g1_j0_s17_t16
+  csv=bench_results/fortran_merge_matrix_20260425T103952Z/8_n1000000_q200000_h100_dense_g1_j0_s17_t16.csv

@@ -5,7 +5,6 @@
  */
 
 #include "../include/not_stisla.h"
-#include "../include/not_stisla_quantum.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <stdint.h>
@@ -52,18 +51,13 @@ static int64_t* load_dataset(const char* path, size_t* n) {
 }
 
 /* Apply AWS Graviton4 specific optimizations */
-static void apply_graviton4_optimizations(not_stisla_anchor_table_t* table, not_stisla_quantum_config_t* qconfig) {
+static void apply_graviton4_optimizations(not_stisla_anchor_table_t* table) {
     /* Manual override or library-level auto-detection */
     uint32_t cpu_features = not_stisla_detect_cpu_features();
     if (g_optimize_graviton4 || (cpu_features & NOT_STISLA_CPU_GRAVITON4)) {
         if (table) {
             /* Restrict anchor table to 2MB L2 cache per core (approx 65,536 anchors) */
             not_stisla_anchor_table_set_memory_limit(table, 65536);
-        }
-        if (qconfig) {
-            /* Optimize for Neoverse V2 pipeline depth and SVE vector registers */
-            qconfig->max_superposition_states = 512; 
-            qconfig->amplification_rounds = 4;
         }
     }
 }
@@ -84,54 +78,52 @@ static size_t bin_search(const int64_t* arr, size_t n, int64_t key) {
     return SIZE_MAX;
 }
 
-/* Benchmark quantum-enhanced search */
-static void benchmark_quantum_search(const int64_t* data, size_t data_size,
+/* Benchmark tuned/enhanced NOT_STISLA search */
+static void benchmark_tuned_search(const int64_t* data, size_t data_size,
                                    const int64_t* queries, size_t num_queries) {
-    printf("\n🌀 Quantum-Enhanced Search Benchmark\n");
-    printf("=====================================\n");
+    printf("\nTuned/Enhanced NOT_STISLA Search Benchmark\n");
+    printf("==========================================\n");
 
-    /* Initialize quantum configuration */
-    not_stisla_quantum_config_t qconfig;
-    not_stisla_quantum_config_init(&qconfig, SEARCH_MODE_QUANTUM_ENHANCED);
+    /* Initialize benchmark configuration */
+    not_stisla_config_t config;
+    not_stisla_config_init(&config, NOT_STISLA_WORKLOAD_TELEMETRY);
+    not_stisla_set_performance_tracking(1);
+    not_stisla_reset_performance_stats();
 
-    /* Apply Graviton4 optimizations (if not already handled by library defaults) */
-    apply_graviton4_optimizations(NULL, &qconfig);
-
-    /* Initialize anchor table for quantum learning */
+    /* Initialize anchor table for learned search hints */
     not_stisla_anchor_table_t* table = not_stisla_anchor_table_create();
-    assert(table && "Failed to create quantum anchor table");
+    assert(table && "Failed to create tuned anchor table");
 
-    /* Benchmark quantum search */
-    uint64_t quantum_start = ns_now();
-    size_t quantum_found = 0;
-    size_t quantum_successful = 0;
+    /* Benchmark tuned/enhanced search */
+    uint64_t tuned_start = ns_now();
+    size_t tuned_found = 0;
+    size_t tuned_successful = 0;
 
     for (size_t i = 0; i < num_queries; ++i) {
-        not_stisla_result_t result = not_stisla_adaptive_search(
-            data, data_size, queries[i], table, &qconfig
+        not_stisla_result_t result = not_stisla_search_enhanced(
+            data, data_size, queries[i], table, &config
         );
         if (result != NOT_STISLA_NOT_FOUND) {
-            quantum_found++;
-            quantum_successful++;
+            tuned_found++;
+            tuned_successful++;
         }
     }
-    uint64_t quantum_time = ns_now() - quantum_start;
+    uint64_t tuned_time = ns_now() - tuned_start;
 
-    double quantum_ns_per_op = (double)quantum_time / num_queries;
-    double quantum_success_rate = (double)quantum_successful / num_queries * 100.0;
+    double tuned_ns_per_op = (double)tuned_time / num_queries;
+    double tuned_success_rate = (double)tuned_successful / num_queries * 100.0;
 
-    printf("Quantum Search:    %.2f ns/op (%zu/%zu found, %.1f%% success)\n",
-           quantum_ns_per_op, quantum_found, num_queries, quantum_success_rate);
+    printf("Tuned Search:      %.2f ns/op (%zu/%zu found, %.1f%% success)\n",
+           tuned_ns_per_op, tuned_found, num_queries, tuned_success_rate);
 
-    /* Get quantum statistics */
-    size_t q_searches, q_fallbacks;
-    double avg_confidence, speedup;
-    not_stisla_quantum_get_stats(&q_searches, &q_fallbacks, &avg_confidence, &speedup);
+    /* Get tuned/enhanced search statistics */
+    not_stisla_performance_stats_t stats;
+    if (not_stisla_get_performance_stats(&stats) == 0) {
+        printf("Tuned Stats:       %llu searches, %.2f ns avg\n",
+               (unsigned long long)stats.total_searches,
+               stats.avg_search_time_ns);
+    }
 
-    printf("Quantum Stats:     %zu searches, %zu fallbacks, %.2f avg confidence\n",
-           q_searches, q_fallbacks, avg_confidence);
-
-    /* Cleanup */
     not_stisla_anchor_table_destroy(table);
 }
 
@@ -141,7 +133,7 @@ static void benchmark_comprehensive(const int64_t* data, size_t data_size,
     printf("🔬 Comprehensive Algorithm Comparison\n");
     printf("=====================================\n");
 
-    /* Benchmark binary search */
+    /* Benchmark baseline binary search */
     uint64_t bin_start = ns_now();
     size_t bin_found = 0;
     for (size_t i = 0; i < num_queries; ++i) {
@@ -152,64 +144,63 @@ static void benchmark_comprehensive(const int64_t* data, size_t data_size,
     uint64_t bin_time = ns_now() - bin_start;
     double bin_ns_per_op = (double)bin_time / num_queries;
 
-    /* Benchmark NOT_STISLA classical */
+    /* Benchmark NOT_STISLA core search */
     not_stisla_anchor_table_t* table = not_stisla_anchor_table_create();
     assert(table && "Failed to create anchor table");
 
     /* Apply Graviton4 optimizations (if not already handled by library defaults) */
-    apply_graviton4_optimizations(table, NULL);
+    apply_graviton4_optimizations(table);
 
-    uint64_t classical_start = ns_now();
-    size_t classical_found = 0;
+    uint64_t core_start = ns_now();
+    size_t core_found = 0;
     for (size_t i = 0; i < num_queries; ++i) {
         if (not_stisla_search(data, data_size, queries[i], table, 8) != NOT_STISLA_NOT_FOUND) {
-            classical_found++;
+            core_found++;
         }
     }
-    uint64_t classical_time = ns_now() - classical_start;
-    double classical_ns_per_op = (double)classical_time / num_queries;
+    uint64_t core_time = ns_now() - core_start;
+    double core_ns_per_op = (double)core_time / num_queries;
 
-    /* Benchmark quantum-enhanced */
-    not_stisla_quantum_config_t qconfig;
-    not_stisla_quantum_config_init(&qconfig, SEARCH_MODE_QUANTUM_ENHANCED);
+    /* Benchmark tuned/enhanced NOT_STISLA search */
+    not_stisla_config_t config;
+    not_stisla_config_init(&config, NOT_STISLA_WORKLOAD_TELEMETRY);
+    not_stisla_set_performance_tracking(1);
+    not_stisla_reset_performance_stats();
 
     /* Apply Graviton4 optimizations (if not already handled by library defaults) */
-    apply_graviton4_optimizations(table, &qconfig);
+    apply_graviton4_optimizations(table);
 
-    uint64_t quantum_start = ns_now();
-    size_t quantum_found = 0;
+    uint64_t tuned_start = ns_now();
+    size_t tuned_found = 0;
     for (size_t i = 0; i < num_queries; ++i) {
-        not_stisla_result_t result = not_stisla_adaptive_search(
-            data, data_size, queries[i], table, &qconfig
+        not_stisla_result_t result = not_stisla_search_enhanced(
+            data, data_size, queries[i], table, &config
         );
         if (result != NOT_STISLA_NOT_FOUND) {
-            quantum_found++;
+            tuned_found++;
         }
     }
-    uint64_t quantum_time = ns_now() - quantum_start;
-    double quantum_ns_per_op = (double)quantum_time / num_queries;
+    uint64_t tuned_time = ns_now() - tuned_start;
+    double tuned_ns_per_op = (double)tuned_time / num_queries;
 
     /* Results */
-    printf("Algorithm          | Time/op | Found | Speedup vs Binary\n");
-    printf("-------------------|---------|-------|------------------\n");
-    printf("Binary Search      | %6.1f ns| %5zu | 1.00x (baseline)\n",
+    printf("Algorithm                     | Time/op | Found | Speedup vs Baseline\n");
+    printf("------------------------------|---------|-------|--------------------\n");
+    printf("Baseline Binary Search        | %6.1f ns| %5zu | 1.00x\n",
            bin_ns_per_op, bin_found);
-    printf("NOT_STISLA Classic | %6.1f ns| %5zu | %.2fx\n",
-           classical_ns_per_op, classical_found, bin_ns_per_op / classical_ns_per_op);
-    printf("Quantum Enhanced   | %6.1f ns| %5zu | %.2fx\n",
-           quantum_ns_per_op, quantum_found, bin_ns_per_op / quantum_ns_per_op);
+    printf("NOT_STISLA Core Search        | %6.1f ns| %5zu | %.2fx\n",
+           core_ns_per_op, core_found, bin_ns_per_op / core_ns_per_op);
+    printf("Tuned/Enhanced NOT_STISLA     | %6.1f ns| %5zu | %.2fx\n",
+           tuned_ns_per_op, tuned_found, bin_ns_per_op / tuned_ns_per_op);
 
-    /* Quantum statistics */
-    size_t q_searches, q_fallbacks;
-    double avg_confidence, q_speedup;
-    not_stisla_quantum_get_stats(&q_searches, &q_fallbacks, &avg_confidence, &q_speedup);
-
-    printf("\n🌀 Quantum Performance Details:\n");
-    printf("Total quantum searches: %zu\n", q_searches);
-    printf("Classical fallbacks:    %zu (%.1f%%)\n", q_fallbacks,
-           q_searches > 0 ? (double)q_fallbacks / q_searches * 100.0 : 0.0);
-    printf("Average confidence:     %.3f\n", avg_confidence);
-    printf("Quantum speedup:        %.1fx\n", q_speedup);
+    not_stisla_performance_stats_t stats;
+    if (not_stisla_get_performance_stats(&stats) == 0) {
+        printf("\nTuned/Enhanced Search Details:\n");
+        printf("Total searches:       %llu\n", (unsigned long long)stats.total_searches);
+        printf("Successful searches:  %llu\n", (unsigned long long)stats.successful_searches);
+        printf("Average search time:  %.2f ns\n", stats.avg_search_time_ns);
+        printf("Reported speedup:     use measured table above\n");
+    }
 
     /* Cleanup */
     not_stisla_anchor_table_destroy(table);
@@ -232,11 +223,9 @@ int main(int argc, char** argv) {
         }
     }
 
-    printf("🎯 DSMIL NOT_STISLA Quantum-Enhanced Benchmark Suite\n");
-    printf("Quantum Version: %s\n", not_stisla_quantum_version());
-    printf("Classical Version: %s\n", not_stisla_version());
+    printf("DSMIL NOT_STISLA Search Benchmark Suite\n");
+    printf("NOT_STISLA Version: %s\n", not_stisla_version());
     printf("Build: %s\n", not_stisla_build_info());
-    printf("Quantum Build: %s\n", not_stisla_quantum_build_info());
 
     uint32_t cpu_features = not_stisla_detect_cpu_features();
     if (g_optimize_graviton4 || (cpu_features & NOT_STISLA_CPU_GRAVITON4)) {
@@ -276,9 +265,9 @@ int main(int argc, char** argv) {
     }
 
     /* Warm-up phase */
-    printf("🔥 Warming up algorithms...\n");
+    printf("Warming up search paths...\n");
     not_stisla_anchor_table_t* warm_table = not_stisla_anchor_table_create();
-    apply_graviton4_optimizations(warm_table, NULL);
+    apply_graviton4_optimizations(warm_table);
     for (size_t i = 0; i < 1000; ++i) {
         not_stisla_search(data, DATA_SIZE, queries[i % 1000], warm_table, 8);
     }
@@ -287,20 +276,19 @@ int main(int argc, char** argv) {
     /* Run comprehensive benchmark */
     benchmark_comprehensive(data, DATA_SIZE, queries, NUM_QUERIES);
 
-    /* Additional quantum-specific benchmark */
-    benchmark_quantum_search(data, DATA_SIZE, queries, NUM_QUERIES);
+    /* Additional tuned/enhanced benchmark */
+    benchmark_tuned_search(data, DATA_SIZE, queries, NUM_QUERIES);
 
-    printf("\n🚀 Quantum-Enhanced Search Technology\n");
-    printf("=====================================\n");
-    printf("✓ Higher-dimensional Hilbert space projection\n");
-    printf("✓ Grover-inspired amplitude amplification\n");
-    printf("✓ Dimensional collapse back to vector space\n");
-    printf("✓ SIMD-accelerated quantum operations\n");
-    printf("✓ Adaptive quantum-classical hybrid modes\n");
-    printf("✓ Workload-optimized configurations\n");
+    printf("\nNOT_STISLA Search Technology\n");
+    printf("============================\n");
+    printf("✓ Baseline binary search comparison\n");
+    printf("✓ Anchor-guided core search\n");
+    printf("✓ Tuned/enhanced search configuration\n");
+    printf("✓ SIMD-aware CPU feature detection\n");
+    printf("✓ Workload-optimized anchor management\n");
 
-    printf("\n✅ Quantum benchmark suite completed!\n");
-    printf("Quantum-inspired algorithms deliver massive parallel processing gains\n");
+    printf("\nNOT_STISLA benchmark suite completed.\n");
+    printf("Realistic search paths compared against the binary-search baseline.\n");
 
     /* Cleanup */
     free(queries);

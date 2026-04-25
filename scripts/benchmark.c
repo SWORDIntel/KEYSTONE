@@ -109,7 +109,7 @@ static void show_live_stats(int current, int total, const char* label,
     fflush(stdout);
 }
 
-/* Benchmark single search function (classical) */
+/* Benchmark a single NOT_STISLA core search function */
 static double benchmark_search(const char* name, int64_t* arr, size_t n, 
                                int64_t* keys, size_t num_keys, int iterations,
                                not_stisla_anchor_table_t* table, size_t tol) {
@@ -183,10 +183,10 @@ static void run_benchmark(size_t array_size, int workload_type, int use_huge_pag
     }
 
     /* Create anchor tables */
-    not_stisla_anchor_table_t* table_classical = not_stisla_anchor_table_create();
+    not_stisla_anchor_table_t* table_core = not_stisla_anchor_table_create();
     not_stisla_anchor_table_t* table_enhanced = not_stisla_anchor_table_create();
     
-    if (!table_classical || !table_enhanced) {
+    if (!table_core || !table_enhanced) {
         printf(RED "  ERROR: Failed to create anchor tables\n" RESET);
         free(arr);
         free(keys);
@@ -196,14 +196,14 @@ static void run_benchmark(size_t array_size, int workload_type, int use_huge_pag
     /* Initialize config */
     not_stisla_config_t config;
     not_stisla_config_init(&config, workload_type);
-    config.quantum.enable_performance_tracking = 1;
+    not_stisla_set_performance_tracking(1);
 
     /* Warmup */
     printf("\n  " YELLOW "Warming up..." RESET);
     fflush(stdout);
     for (int i = 0; i < WARMUP_ITERATIONS; i++) {
         int64_t key = keys[i % num_keys];
-        not_stisla_search(arr, array_size, key, table_classical, 8);
+        not_stisla_search(arr, array_size, key, table_core, 8);
         not_stisla_search_enhanced(arr, array_size, key, table_enhanced, &config);
     }
     printf(" " GREEN "Done" RESET "\n\n");
@@ -211,20 +211,19 @@ static void run_benchmark(size_t array_size, int workload_type, int use_huge_pag
     /* Test small array SIMD path if applicable */
     if (array_size < 32) {
         printf("  " BOLD MAGENTA "Small Array SIMD Test (AVX-512/AVX2 branchless):\n" RESET);
-        double classical_avg = benchmark_search("Classical (scalar fallback)", arr, array_size, 
-                                                keys, num_keys, BENCHMARK_ITERATIONS,
-                                                table_classical, 8);
+        benchmark_search("NOT_STISLA Core Search (scalar fallback)", arr, array_size,
+                         keys, num_keys, BENCHMARK_ITERATIONS, table_core, 8);
         printf("\n");
     }
 
-    /* Benchmark Classical */
-    printf("  " BOLD "Classical NOT_STISLA:\n" RESET);
-    double classical_avg = benchmark_search("Standard Search", arr, array_size, 
+    /* Benchmark NOT_STISLA core search */
+    printf("  " BOLD "NOT_STISLA Core Search:\n" RESET);
+    double core_avg = benchmark_search("Core Search", arr, array_size,
                                            keys, num_keys, BENCHMARK_ITERATIONS,
-                                           table_classical, 8);
+                                           table_core, 8);
 
-    /* Benchmark Enhanced */
-    printf("\n  " BOLD "Enhanced NOT_STISLA (with optimizations):\n" RESET);
+    /* Benchmark tuned/enhanced NOT_STISLA search */
+    printf("\n  " BOLD "Tuned/Enhanced NOT_STISLA Search:\n" RESET);
     not_stisla_reset_performance_stats();
     
     uint64_t enhanced_total = 0;
@@ -232,7 +231,7 @@ static void run_benchmark(size_t array_size, int workload_type, int use_huge_pag
     uint64_t enhanced_max_ns = 0;
     size_t enhanced_found = 0;
     
-    printf("    " BOLD "Enhanced Search:\n" RESET);
+    printf("    " BOLD "Tuned Search:\n" RESET);
     for (int i = 0; i < BENCHMARK_ITERATIONS; i++) {
         if ((i + 1) % LIVE_UPDATE_INTERVAL == 0 || i == BENCHMARK_ITERATIONS - 1) {
             double running_avg = (double)enhanced_total / (i + 1);
@@ -258,14 +257,14 @@ static void run_benchmark(size_t array_size, int workload_type, int use_huge_pag
 
     /* Comparison */
     printf("\n  " BOLD "Performance Comparison:\n" RESET);
-    double speedup = classical_avg / enhanced_avg;
-    double overhead_pct = ((enhanced_avg - classical_avg) / classical_avg) * 100.0;
+    double speedup = core_avg / enhanced_avg;
+    double overhead_pct = ((enhanced_avg - core_avg) / core_avg) * 100.0;
     
     if (speedup >= 1.0) {
-        printf("    " GREEN "Speedup: %.2fx" RESET " (Enhanced is %.1f%% faster)\n", 
+        printf("    " GREEN "Speedup: %.2fx" RESET " (Tuned/enhanced search is %.1f%% faster)\n",
                speedup, (speedup - 1.0) * 100.0);
     } else {
-        printf("    " YELLOW "Overhead: %.1f%%" RESET " (Enhanced is %.2fx slower)\n", 
+        printf("    " YELLOW "Overhead: %.1f%%" RESET " (Tuned/enhanced search is %.2fx slower)\n",
                overhead_pct, 1.0 / speedup);
     }
     
@@ -330,7 +329,7 @@ static void run_benchmark(size_t array_size, int workload_type, int use_huge_pag
     }
 
     /* Cleanup */
-    not_stisla_anchor_table_destroy(table_classical);
+    not_stisla_anchor_table_destroy(table_core);
     not_stisla_anchor_table_destroy(table_enhanced);
     free(keys);
     free(arr);

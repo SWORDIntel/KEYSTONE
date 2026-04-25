@@ -40,31 +40,30 @@ Algorithm          | Time/op | Found | Speedup vs Binary
 -------------------|---------|-------|------------------
 Binary Search      |  999.1 ns| 50000 | 1.00x (baseline)
 NOT_STISLA Classic |  213.7 ns| 50000 | 4.67x
-Quantum Enhanced   |  205.2 ns| 50000 | 4.87x
+Enhanced Search    |  205.2 ns| 50000 | 4.87x
 
-🌀 Quantum-Enhanced Search Benchmark
+Enhanced Search Benchmark
 =====================================
-Quantum Search:    171.54 ns/op (50000/50000 found, 100.0% success)
+Enhanced Search:   171.54 ns/op (50000/50000 found, 100.0% success)
 ```
 
 **`performance_proof` Output:**
 ```
-🚨 PERFORMANCE PROOF: NOT_STISLA vs Competitor ("Other Crappy Algorithm")
+PERFORMANCE COMPARISON: NOT_STISLA vs reference search
 =================================================================
 
 📊 Performance Comparison Matrix:
 ================================
 
-Binary Search:     164.3 ns/op - Baseline (1.00x)
-Competitor:        ~197 ns/op - Claimed 7-11x, actual ~1.2x (15% of claims)
-NOT_STISLA:        7.4 ns/op - Actual 22.28x speedup
+Binary Search:     measured per target run
+Reference Search:  measured per target run
+NOT_STISLA:        measured per target run
 
 🎯 CONCLUSION:
-   Competitor is indeed a 'crappy algorithm' as labeled
-   NOT_STISLA delivers actual high-performance search
-   The 18.5x performance gap proves NOT_STISLA's superiority
+   NOT_STISLA delivered the fastest observed latency in this run
+   The measured gap should be validated on target hardware and workloads
 
-✅ Performance proof complete. NOT_STISLA wins by massive margin.
+Performance proof complete.
 ```
 
 ## Contributing

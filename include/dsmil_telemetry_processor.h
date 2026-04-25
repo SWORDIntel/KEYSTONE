@@ -8,7 +8,7 @@
  * @brief High-performance telemetry processing with NOT_STISLA acceleration
  *
  * Provides telemetry event storage, timestamp-based lookups, and pattern analysis
- * using NOT_STISLA for 22.28× speedup over traditional search methods.
+ * using NOT_STISLA acceleration over traditional search methods.
  */
 
 #ifdef __cplusplus
@@ -56,7 +56,7 @@ int dsmil_telemetry_processor_add_event(dsmil_telemetry_processor_t *processor,
 /**
  * @brief Find telemetry event by exact timestamp (NOT_STISLA accelerated)
  *
- * Uses NOT_STISLA interpolation search for 22.28× speedup over binary search.
+ * Uses NOT_STISLA interpolation search for timestamp lookup.
  *
  * @param processor Telemetry processor
  * @param target_time Target timestamp to search for

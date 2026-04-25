@@ -1,0 +1,4 @@
+[2026-04-25T11:18:09Z] case=1 profile=n1000000_q1000000_h100_dense_g1_j0_s17_t32
+  csv=bench_results/thread_bigq_t32_20260425111809Z/1_n1000000_q1000000_h100_dense_g1_j0_s17_t32.csv
+[2026-04-25T11:18:09Z] case=2 profile=n1000000_q4000000_h100_dense_g1_j0_s17_t32
+  csv=bench_results/thread_bigq_t32_20260425111809Z/2_n1000000_q4000000_h100_dense_g1_j0_s17_t32.csv

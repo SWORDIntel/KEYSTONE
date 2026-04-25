@@ -1,0 +1,360 @@
+[2026-04-25T11:19:20Z] case=1 profile=n1000000_q512_h100_dense_g1_j0_s1_t16
+  csv=bench_results/agent1_query_scale_20260425T111920Z/1_n1000000_q512_h100_dense_g1_j0_s1_t16.csv
+[2026-04-25T11:19:20Z] case=2 profile=n1000000_q512_h100_dense_g1_j0_s17_t16
+  csv=bench_results/agent1_query_scale_20260425T111920Z/2_n1000000_q512_h100_dense_g1_j0_s17_t16.csv
+[2026-04-25T11:19:20Z] case=3 profile=n1000000_q512_h100_dense_g1_j0_s257_t16
+  csv=bench_results/agent1_query_scale_20260425T111920Z/3_n1000000_q512_h100_dense_g1_j0_s257_t16.csv
+[2026-04-25T11:19:20Z] case=4 profile=n1000000_q512_h100_sparse_g16_j0_s1_t16
+  csv=bench_results/agent1_query_scale_20260425T111920Z/4_n1000000_q512_h100_sparse_g16_j0_s1_t16.csv
+[2026-04-25T11:19:20Z] case=5 profile=n1000000_q512_h100_sparse_g16_j0_s17_t16
+  csv=bench_results/agent1_query_scale_20260425T111920Z/5_n1000000_q512_h100_sparse_g16_j0_s17_t16.csv
+[2026-04-25T11:19:20Z] case=6 profile=n1000000_q512_h100_sparse_g16_j0_s257_t16
+  csv=bench_results/agent1_query_scale_20260425T111920Z/6_n1000000_q512_h100_sparse_g16_j0_s257_t16.csv
+[2026-04-25T11:19:20Z] case=7 profile=n1000000_q512_h100_jitter_g8_j8_s1_t16
+  csv=bench_results/agent1_query_scale_20260425T111920Z/7_n1000000_q512_h100_jitter_g8_j8_s1_t16.csv
+[2026-04-25T11:19:20Z] case=8 profile=n1000000_q512_h100_jitter_g8_j8_s17_t16
+  csv=bench_results/agent1_query_scale_20260425T111920Z/8_n1000000_q512_h100_jitter_g8_j8_s17_t16.csv
+[2026-04-25T11:19:20Z] case=9 profile=n1000000_q512_h100_jitter_g8_j8_s257_t16
+  csv=bench_results/agent1_query_scale_20260425T111920Z/9_n1000000_q512_h100_jitter_g8_j8_s257_t16.csv
+[2026-04-25T11:19:20Z] case=10 profile=n1000000_q512_h75_dense_g1_j0_s1_t16
+  csv=bench_results/agent1_query_scale_20260425T111920Z/10_n1000000_q512_h75_dense_g1_j0_s1_t16.csv
+[2026-04-25T11:19:20Z] case=11 profile=n1000000_q512_h75_dense_g1_j0_s17_t16
+  csv=bench_results/agent1_query_scale_20260425T111920Z/11_n1000000_q512_h75_dense_g1_j0_s17_t16.csv
+[2026-04-25T11:19:20Z] case=12 profile=n1000000_q512_h75_dense_g1_j0_s257_t16
+  csv=bench_results/agent1_query_scale_20260425T111920Z/12_n1000000_q512_h75_dense_g1_j0_s257_t16.csv
+[2026-04-25T11:19:20Z] case=13 profile=n1000000_q512_h75_sparse_g16_j0_s1_t16
+  csv=bench_results/agent1_query_scale_20260425T111920Z/13_n1000000_q512_h75_sparse_g16_j0_s1_t16.csv
+[2026-04-25T11:19:20Z] case=14 profile=n1000000_q512_h75_sparse_g16_j0_s17_t16
+  csv=bench_results/agent1_query_scale_20260425T111920Z/14_n1000000_q512_h75_sparse_g16_j0_s17_t16.csv
+[2026-04-25T11:19:20Z] case=15 profile=n1000000_q512_h75_sparse_g16_j0_s257_t16
+  csv=bench_results/agent1_query_scale_20260425T111920Z/15_n1000000_q512_h75_sparse_g16_j0_s257_t16.csv
+[2026-04-25T11:19:20Z] case=16 profile=n1000000_q512_h75_jitter_g8_j8_s1_t16
+  csv=bench_results/agent1_query_scale_20260425T111920Z/16_n1000000_q512_h75_jitter_g8_j8_s1_t16.csv
+[2026-04-25T11:19:20Z] case=17 profile=n1000000_q512_h75_jitter_g8_j8_s17_t16
+  csv=bench_results/agent1_query_scale_20260425T111920Z/17_n1000000_q512_h75_jitter_g8_j8_s17_t16.csv
+[2026-04-25T11:19:20Z] case=18 profile=n1000000_q512_h75_jitter_g8_j8_s257_t16
+  csv=bench_results/agent1_query_scale_20260425T111920Z/18_n1000000_q512_h75_jitter_g8_j8_s257_t16.csv
+[2026-04-25T11:19:20Z] case=19 profile=n1000000_q512_h50_dense_g1_j0_s1_t16
+  csv=bench_results/agent1_query_scale_20260425T111920Z/19_n1000000_q512_h50_dense_g1_j0_s1_t16.csv
+[2026-04-25T11:19:20Z] case=20 profile=n1000000_q512_h50_dense_g1_j0_s17_t16
+  csv=bench_results/agent1_query_scale_20260425T111920Z/20_n1000000_q512_h50_dense_g1_j0_s17_t16.csv
+[2026-04-25T11:19:20Z] case=21 profile=n1000000_q512_h50_dense_g1_j0_s257_t16
+  csv=bench_results/agent1_query_scale_20260425T111920Z/21_n1000000_q512_h50_dense_g1_j0_s257_t16.csv
+[2026-04-25T11:19:20Z] case=22 profile=n1000000_q512_h50_sparse_g16_j0_s1_t16
+  csv=bench_results/agent1_query_scale_20260425T111920Z/22_n1000000_q512_h50_sparse_g16_j0_s1_t16.csv
+[2026-04-25T11:19:20Z] case=23 profile=n1000000_q512_h50_sparse_g16_j0_s17_t16
+  csv=bench_results/agent1_query_scale_20260425T111920Z/23_n1000000_q512_h50_sparse_g16_j0_s17_t16.csv
+[2026-04-25T11:19:20Z] case=24 profile=n1000000_q512_h50_sparse_g16_j0_s257_t16
+  csv=bench_results/agent1_query_scale_20260425T111920Z/24_n1000000_q512_h50_sparse_g16_j0_s257_t16.csv
+[2026-04-25T11:19:20Z] case=25 profile=n1000000_q512_h50_jitter_g8_j8_s1_t16
+  csv=bench_results/agent1_query_scale_20260425T111920Z/25_n1000000_q512_h50_jitter_g8_j8_s1_t16.csv
+[2026-04-25T11:19:20Z] case=26 profile=n1000000_q512_h50_jitter_g8_j8_s17_t16
+  csv=bench_results/agent1_query_scale_20260425T111920Z/26_n1000000_q512_h50_jitter_g8_j8_s17_t16.csv
+[2026-04-25T11:19:20Z] case=27 profile=n1000000_q512_h50_jitter_g8_j8_s257_t16
+  csv=bench_results/agent1_query_scale_20260425T111920Z/27_n1000000_q512_h50_jitter_g8_j8_s257_t16.csv
+[2026-04-25T11:19:20Z] case=28 profile=n1000000_q512_h25_dense_g1_j0_s1_t16
+  csv=bench_results/agent1_query_scale_20260425T111920Z/28_n1000000_q512_h25_dense_g1_j0_s1_t16.csv
+[2026-04-25T11:19:20Z] case=29 profile=n1000000_q512_h25_dense_g1_j0_s17_t16
+  csv=bench_results/agent1_query_scale_20260425T111920Z/29_n1000000_q512_h25_dense_g1_j0_s17_t16.csv
+[2026-04-25T11:19:20Z] case=30 profile=n1000000_q512_h25_dense_g1_j0_s257_t16
+  csv=bench_results/agent1_query_scale_20260425T111920Z/30_n1000000_q512_h25_dense_g1_j0_s257_t16.csv
+[2026-04-25T11:19:20Z] case=31 profile=n1000000_q512_h25_sparse_g16_j0_s1_t16
+  csv=bench_results/agent1_query_scale_20260425T111920Z/31_n1000000_q512_h25_sparse_g16_j0_s1_t16.csv
+[2026-04-25T11:19:20Z] case=32 profile=n1000000_q512_h25_sparse_g16_j0_s17_t16
+  csv=bench_results/agent1_query_scale_20260425T111920Z/32_n1000000_q512_h25_sparse_g16_j0_s17_t16.csv
+[2026-04-25T11:19:20Z] case=33 profile=n1000000_q512_h25_sparse_g16_j0_s257_t16
+  csv=bench_results/agent1_query_scale_20260425T111920Z/33_n1000000_q512_h25_sparse_g16_j0_s257_t16.csv
+[2026-04-25T11:19:20Z] case=34 profile=n1000000_q512_h25_jitter_g8_j8_s1_t16
+  csv=bench_results/agent1_query_scale_20260425T111920Z/34_n1000000_q512_h25_jitter_g8_j8_s1_t16.csv
+[2026-04-25T11:19:20Z] case=35 profile=n1000000_q512_h25_jitter_g8_j8_s17_t16
+  csv=bench_results/agent1_query_scale_20260425T111920Z/35_n1000000_q512_h25_jitter_g8_j8_s17_t16.csv
+[2026-04-25T11:19:20Z] case=36 profile=n1000000_q512_h25_jitter_g8_j8_s257_t16
+  csv=bench_results/agent1_query_scale_20260425T111920Z/36_n1000000_q512_h25_jitter_g8_j8_s257_t16.csv
+[2026-04-25T11:19:20Z] case=37 profile=n1000000_q512_h0_dense_g1_j0_s1_t16
+  csv=bench_results/agent1_query_scale_20260425T111920Z/37_n1000000_q512_h0_dense_g1_j0_s1_t16.csv
+[2026-04-25T11:19:20Z] case=38 profile=n1000000_q512_h0_dense_g1_j0_s17_t16
+  csv=bench_results/agent1_query_scale_20260425T111920Z/38_n1000000_q512_h0_dense_g1_j0_s17_t16.csv
+[2026-04-25T11:19:20Z] case=39 profile=n1000000_q512_h0_dense_g1_j0_s257_t16
+  csv=bench_results/agent1_query_scale_20260425T111920Z/39_n1000000_q512_h0_dense_g1_j0_s257_t16.csv
+[2026-04-25T11:19:20Z] case=40 profile=n1000000_q512_h0_sparse_g16_j0_s1_t16
+  csv=bench_results/agent1_query_scale_20260425T111920Z/40_n1000000_q512_h0_sparse_g16_j0_s1_t16.csv
+[2026-04-25T11:19:20Z] case=41 profile=n1000000_q512_h0_sparse_g16_j0_s17_t16
+  csv=bench_results/agent1_query_scale_20260425T111920Z/41_n1000000_q512_h0_sparse_g16_j0_s17_t16.csv
+[2026-04-25T11:19:20Z] case=42 profile=n1000000_q512_h0_sparse_g16_j0_s257_t16
+  csv=bench_results/agent1_query_scale_20260425T111920Z/42_n1000000_q512_h0_sparse_g16_j0_s257_t16.csv
+[2026-04-25T11:19:20Z] case=43 profile=n1000000_q512_h0_jitter_g8_j8_s1_t16
+  csv=bench_results/agent1_query_scale_20260425T111920Z/43_n1000000_q512_h0_jitter_g8_j8_s1_t16.csv
+[2026-04-25T11:19:20Z] case=44 profile=n1000000_q512_h0_jitter_g8_j8_s17_t16
+  csv=bench_results/agent1_query_scale_20260425T111920Z/44_n1000000_q512_h0_jitter_g8_j8_s17_t16.csv
+[2026-04-25T11:19:20Z] case=45 profile=n1000000_q512_h0_jitter_g8_j8_s257_t16
+  csv=bench_results/agent1_query_scale_20260425T111920Z/45_n1000000_q512_h0_jitter_g8_j8_s257_t16.csv
+[2026-04-25T11:19:20Z] case=46 profile=n1000000_q8192_h100_dense_g1_j0_s1_t16
+  csv=bench_results/agent1_query_scale_20260425T111920Z/46_n1000000_q8192_h100_dense_g1_j0_s1_t16.csv
+[2026-04-25T11:19:20Z] case=47 profile=n1000000_q8192_h100_dense_g1_j0_s17_t16
+  csv=bench_results/agent1_query_scale_20260425T111920Z/47_n1000000_q8192_h100_dense_g1_j0_s17_t16.csv
+[2026-04-25T11:19:20Z] case=48 profile=n1000000_q8192_h100_dense_g1_j0_s257_t16
+  csv=bench_results/agent1_query_scale_20260425T111920Z/48_n1000000_q8192_h100_dense_g1_j0_s257_t16.csv
+[2026-04-25T11:19:20Z] case=49 profile=n1000000_q8192_h100_sparse_g16_j0_s1_t16
+  csv=bench_results/agent1_query_scale_20260425T111920Z/49_n1000000_q8192_h100_sparse_g16_j0_s1_t16.csv
+[2026-04-25T11:19:20Z] case=50 profile=n1000000_q8192_h100_sparse_g16_j0_s17_t16
+  csv=bench_results/agent1_query_scale_20260425T111920Z/50_n1000000_q8192_h100_sparse_g16_j0_s17_t16.csv
+[2026-04-25T11:19:20Z] case=51 profile=n1000000_q8192_h100_sparse_g16_j0_s257_t16
+  csv=bench_results/agent1_query_scale_20260425T111920Z/51_n1000000_q8192_h100_sparse_g16_j0_s257_t16.csv
+[2026-04-25T11:19:20Z] case=52 profile=n1000000_q8192_h100_jitter_g8_j8_s1_t16
+  csv=bench_results/agent1_query_scale_20260425T111920Z/52_n1000000_q8192_h100_jitter_g8_j8_s1_t16.csv
+[2026-04-25T11:19:20Z] case=53 profile=n1000000_q8192_h100_jitter_g8_j8_s17_t16
+  csv=bench_results/agent1_query_scale_20260425T111920Z/53_n1000000_q8192_h100_jitter_g8_j8_s17_t16.csv
+[2026-04-25T11:19:20Z] case=54 profile=n1000000_q8192_h100_jitter_g8_j8_s257_t16
+  csv=bench_results/agent1_query_scale_20260425T111920Z/54_n1000000_q8192_h100_jitter_g8_j8_s257_t16.csv
+[2026-04-25T11:19:20Z] case=55 profile=n1000000_q8192_h75_dense_g1_j0_s1_t16
+  csv=bench_results/agent1_query_scale_20260425T111920Z/55_n1000000_q8192_h75_dense_g1_j0_s1_t16.csv
+[2026-04-25T11:19:20Z] case=56 profile=n1000000_q8192_h75_dense_g1_j0_s17_t16
+  csv=bench_results/agent1_query_scale_20260425T111920Z/56_n1000000_q8192_h75_dense_g1_j0_s17_t16.csv
+[2026-04-25T11:19:20Z] case=57 profile=n1000000_q8192_h75_dense_g1_j0_s257_t16
+  csv=bench_results/agent1_query_scale_20260425T111920Z/57_n1000000_q8192_h75_dense_g1_j0_s257_t16.csv
+[2026-04-25T11:19:20Z] case=58 profile=n1000000_q8192_h75_sparse_g16_j0_s1_t16
+  csv=bench_results/agent1_query_scale_20260425T111920Z/58_n1000000_q8192_h75_sparse_g16_j0_s1_t16.csv
+[2026-04-25T11:19:20Z] case=59 profile=n1000000_q8192_h75_sparse_g16_j0_s17_t16
+  csv=bench_results/agent1_query_scale_20260425T111920Z/59_n1000000_q8192_h75_sparse_g16_j0_s17_t16.csv
+[2026-04-25T11:19:20Z] case=60 profile=n1000000_q8192_h75_sparse_g16_j0_s257_t16
+  csv=bench_results/agent1_query_scale_20260425T111920Z/60_n1000000_q8192_h75_sparse_g16_j0_s257_t16.csv
+[2026-04-25T11:19:20Z] case=61 profile=n1000000_q8192_h75_jitter_g8_j8_s1_t16
+  csv=bench_results/agent1_query_scale_20260425T111920Z/61_n1000000_q8192_h75_jitter_g8_j8_s1_t16.csv
+[2026-04-25T11:19:20Z] case=62 profile=n1000000_q8192_h75_jitter_g8_j8_s17_t16
+  csv=bench_results/agent1_query_scale_20260425T111920Z/62_n1000000_q8192_h75_jitter_g8_j8_s17_t16.csv
+[2026-04-25T11:19:20Z] case=63 profile=n1000000_q8192_h75_jitter_g8_j8_s257_t16
+  csv=bench_results/agent1_query_scale_20260425T111920Z/63_n1000000_q8192_h75_jitter_g8_j8_s257_t16.csv
+[2026-04-25T11:19:20Z] case=64 profile=n1000000_q8192_h50_dense_g1_j0_s1_t16
+  csv=bench_results/agent1_query_scale_20260425T111920Z/64_n1000000_q8192_h50_dense_g1_j0_s1_t16.csv
+[2026-04-25T11:19:20Z] case=65 profile=n1000000_q8192_h50_dense_g1_j0_s17_t16
+  csv=bench_results/agent1_query_scale_20260425T111920Z/65_n1000000_q8192_h50_dense_g1_j0_s17_t16.csv
+[2026-04-25T11:19:20Z] case=66 profile=n1000000_q8192_h50_dense_g1_j0_s257_t16
+  csv=bench_results/agent1_query_scale_20260425T111920Z/66_n1000000_q8192_h50_dense_g1_j0_s257_t16.csv
+[2026-04-25T11:19:20Z] case=67 profile=n1000000_q8192_h50_sparse_g16_j0_s1_t16
+  csv=bench_results/agent1_query_scale_20260425T111920Z/67_n1000000_q8192_h50_sparse_g16_j0_s1_t16.csv
+[2026-04-25T11:19:20Z] case=68 profile=n1000000_q8192_h50_sparse_g16_j0_s17_t16
+  csv=bench_results/agent1_query_scale_20260425T111920Z/68_n1000000_q8192_h50_sparse_g16_j0_s17_t16.csv
+[2026-04-25T11:19:20Z] case=69 profile=n1000000_q8192_h50_sparse_g16_j0_s257_t16
+  csv=bench_results/agent1_query_scale_20260425T111920Z/69_n1000000_q8192_h50_sparse_g16_j0_s257_t16.csv
+[2026-04-25T11:19:20Z] case=70 profile=n1000000_q8192_h50_jitter_g8_j8_s1_t16
+  csv=bench_results/agent1_query_scale_20260425T111920Z/70_n1000000_q8192_h50_jitter_g8_j8_s1_t16.csv
+[2026-04-25T11:19:20Z] case=71 profile=n1000000_q8192_h50_jitter_g8_j8_s17_t16
+  csv=bench_results/agent1_query_scale_20260425T111920Z/71_n1000000_q8192_h50_jitter_g8_j8_s17_t16.csv
+[2026-04-25T11:19:20Z] case=72 profile=n1000000_q8192_h50_jitter_g8_j8_s257_t16
+  csv=bench_results/agent1_query_scale_20260425T111920Z/72_n1000000_q8192_h50_jitter_g8_j8_s257_t16.csv
+[2026-04-25T11:19:20Z] case=73 profile=n1000000_q8192_h25_dense_g1_j0_s1_t16
+  csv=bench_results/agent1_query_scale_20260425T111920Z/73_n1000000_q8192_h25_dense_g1_j0_s1_t16.csv
+[2026-04-25T11:19:21Z] case=74 profile=n1000000_q8192_h25_dense_g1_j0_s17_t16
+  csv=bench_results/agent1_query_scale_20260425T111920Z/74_n1000000_q8192_h25_dense_g1_j0_s17_t16.csv
+[2026-04-25T11:19:21Z] case=75 profile=n1000000_q8192_h25_dense_g1_j0_s257_t16
+  csv=bench_results/agent1_query_scale_20260425T111920Z/75_n1000000_q8192_h25_dense_g1_j0_s257_t16.csv
+[2026-04-25T11:19:21Z] case=76 profile=n1000000_q8192_h25_sparse_g16_j0_s1_t16
+  csv=bench_results/agent1_query_scale_20260425T111920Z/76_n1000000_q8192_h25_sparse_g16_j0_s1_t16.csv
+[2026-04-25T11:19:21Z] case=77 profile=n1000000_q8192_h25_sparse_g16_j0_s17_t16
+  csv=bench_results/agent1_query_scale_20260425T111920Z/77_n1000000_q8192_h25_sparse_g16_j0_s17_t16.csv
+[2026-04-25T11:19:21Z] case=78 profile=n1000000_q8192_h25_sparse_g16_j0_s257_t16
+  csv=bench_results/agent1_query_scale_20260425T111920Z/78_n1000000_q8192_h25_sparse_g16_j0_s257_t16.csv
+[2026-04-25T11:19:21Z] case=79 profile=n1000000_q8192_h25_jitter_g8_j8_s1_t16
+  csv=bench_results/agent1_query_scale_20260425T111920Z/79_n1000000_q8192_h25_jitter_g8_j8_s1_t16.csv
+[2026-04-25T11:19:21Z] case=80 profile=n1000000_q8192_h25_jitter_g8_j8_s17_t16
+  csv=bench_results/agent1_query_scale_20260425T111920Z/80_n1000000_q8192_h25_jitter_g8_j8_s17_t16.csv
+[2026-04-25T11:19:21Z] case=81 profile=n1000000_q8192_h25_jitter_g8_j8_s257_t16
+  csv=bench_results/agent1_query_scale_20260425T111920Z/81_n1000000_q8192_h25_jitter_g8_j8_s257_t16.csv
+[2026-04-25T11:19:21Z] case=82 profile=n1000000_q8192_h0_dense_g1_j0_s1_t16
+  csv=bench_results/agent1_query_scale_20260425T111920Z/82_n1000000_q8192_h0_dense_g1_j0_s1_t16.csv
+[2026-04-25T11:19:21Z] case=83 profile=n1000000_q8192_h0_dense_g1_j0_s17_t16
+  csv=bench_results/agent1_query_scale_20260425T111920Z/83_n1000000_q8192_h0_dense_g1_j0_s17_t16.csv
+[2026-04-25T11:19:21Z] case=84 profile=n1000000_q8192_h0_dense_g1_j0_s257_t16
+  csv=bench_results/agent1_query_scale_20260425T111920Z/84_n1000000_q8192_h0_dense_g1_j0_s257_t16.csv
+[2026-04-25T11:19:21Z] case=85 profile=n1000000_q8192_h0_sparse_g16_j0_s1_t16
+  csv=bench_results/agent1_query_scale_20260425T111920Z/85_n1000000_q8192_h0_sparse_g16_j0_s1_t16.csv
+[2026-04-25T11:19:21Z] case=86 profile=n1000000_q8192_h0_sparse_g16_j0_s17_t16
+  csv=bench_results/agent1_query_scale_20260425T111920Z/86_n1000000_q8192_h0_sparse_g16_j0_s17_t16.csv
+[2026-04-25T11:19:21Z] case=87 profile=n1000000_q8192_h0_sparse_g16_j0_s257_t16
+  csv=bench_results/agent1_query_scale_20260425T111920Z/87_n1000000_q8192_h0_sparse_g16_j0_s257_t16.csv
+[2026-04-25T11:19:21Z] case=88 profile=n1000000_q8192_h0_jitter_g8_j8_s1_t16
+  csv=bench_results/agent1_query_scale_20260425T111920Z/88_n1000000_q8192_h0_jitter_g8_j8_s1_t16.csv
+[2026-04-25T11:19:21Z] case=89 profile=n1000000_q8192_h0_jitter_g8_j8_s17_t16
+  csv=bench_results/agent1_query_scale_20260425T111920Z/89_n1000000_q8192_h0_jitter_g8_j8_s17_t16.csv
+[2026-04-25T11:19:21Z] case=90 profile=n1000000_q8192_h0_jitter_g8_j8_s257_t16
+  csv=bench_results/agent1_query_scale_20260425T111920Z/90_n1000000_q8192_h0_jitter_g8_j8_s257_t16.csv
+[2026-04-25T11:19:21Z] case=91 profile=n1000000_q32768_h100_dense_g1_j0_s1_t16
+  csv=bench_results/agent1_query_scale_20260425T111920Z/91_n1000000_q32768_h100_dense_g1_j0_s1_t16.csv
+[2026-04-25T11:19:21Z] case=92 profile=n1000000_q32768_h100_dense_g1_j0_s17_t16
+  csv=bench_results/agent1_query_scale_20260425T111920Z/92_n1000000_q32768_h100_dense_g1_j0_s17_t16.csv
+[2026-04-25T11:19:21Z] case=93 profile=n1000000_q32768_h100_dense_g1_j0_s257_t16
+  csv=bench_results/agent1_query_scale_20260425T111920Z/93_n1000000_q32768_h100_dense_g1_j0_s257_t16.csv
+[2026-04-25T11:19:21Z] case=94 profile=n1000000_q32768_h100_sparse_g16_j0_s1_t16
+  csv=bench_results/agent1_query_scale_20260425T111920Z/94_n1000000_q32768_h100_sparse_g16_j0_s1_t16.csv
+[2026-04-25T11:19:21Z] case=95 profile=n1000000_q32768_h100_sparse_g16_j0_s17_t16
+  csv=bench_results/agent1_query_scale_20260425T111920Z/95_n1000000_q32768_h100_sparse_g16_j0_s17_t16.csv
+[2026-04-25T11:19:21Z] case=96 profile=n1000000_q32768_h100_sparse_g16_j0_s257_t16
+  csv=bench_results/agent1_query_scale_20260425T111920Z/96_n1000000_q32768_h100_sparse_g16_j0_s257_t16.csv
+[2026-04-25T11:19:21Z] case=97 profile=n1000000_q32768_h100_jitter_g8_j8_s1_t16
+  csv=bench_results/agent1_query_scale_20260425T111920Z/97_n1000000_q32768_h100_jitter_g8_j8_s1_t16.csv
+[2026-04-25T11:19:21Z] case=98 profile=n1000000_q32768_h100_jitter_g8_j8_s17_t16
+  csv=bench_results/agent1_query_scale_20260425T111920Z/98_n1000000_q32768_h100_jitter_g8_j8_s17_t16.csv
+[2026-04-25T11:19:21Z] case=99 profile=n1000000_q32768_h100_jitter_g8_j8_s257_t16
+  csv=bench_results/agent1_query_scale_20260425T111920Z/99_n1000000_q32768_h100_jitter_g8_j8_s257_t16.csv
+[2026-04-25T11:19:21Z] case=100 profile=n1000000_q32768_h75_dense_g1_j0_s1_t16
+  csv=bench_results/agent1_query_scale_20260425T111920Z/100_n1000000_q32768_h75_dense_g1_j0_s1_t16.csv
+[2026-04-25T11:19:21Z] case=101 profile=n1000000_q32768_h75_dense_g1_j0_s17_t16
+  csv=bench_results/agent1_query_scale_20260425T111920Z/101_n1000000_q32768_h75_dense_g1_j0_s17_t16.csv
+[2026-04-25T11:19:21Z] case=102 profile=n1000000_q32768_h75_dense_g1_j0_s257_t16
+  csv=bench_results/agent1_query_scale_20260425T111920Z/102_n1000000_q32768_h75_dense_g1_j0_s257_t16.csv
+[2026-04-25T11:19:21Z] case=103 profile=n1000000_q32768_h75_sparse_g16_j0_s1_t16
+  csv=bench_results/agent1_query_scale_20260425T111920Z/103_n1000000_q32768_h75_sparse_g16_j0_s1_t16.csv
+[2026-04-25T11:19:21Z] case=104 profile=n1000000_q32768_h75_sparse_g16_j0_s17_t16
+  csv=bench_results/agent1_query_scale_20260425T111920Z/104_n1000000_q32768_h75_sparse_g16_j0_s17_t16.csv
+[2026-04-25T11:19:21Z] case=105 profile=n1000000_q32768_h75_sparse_g16_j0_s257_t16
+  csv=bench_results/agent1_query_scale_20260425T111920Z/105_n1000000_q32768_h75_sparse_g16_j0_s257_t16.csv
+[2026-04-25T11:19:21Z] case=106 profile=n1000000_q32768_h75_jitter_g8_j8_s1_t16
+  csv=bench_results/agent1_query_scale_20260425T111920Z/106_n1000000_q32768_h75_jitter_g8_j8_s1_t16.csv
+[2026-04-25T11:19:21Z] case=107 profile=n1000000_q32768_h75_jitter_g8_j8_s17_t16
+  csv=bench_results/agent1_query_scale_20260425T111920Z/107_n1000000_q32768_h75_jitter_g8_j8_s17_t16.csv
+[2026-04-25T11:19:21Z] case=108 profile=n1000000_q32768_h75_jitter_g8_j8_s257_t16
+  csv=bench_results/agent1_query_scale_20260425T111920Z/108_n1000000_q32768_h75_jitter_g8_j8_s257_t16.csv
+[2026-04-25T11:19:21Z] case=109 profile=n1000000_q32768_h50_dense_g1_j0_s1_t16
+  csv=bench_results/agent1_query_scale_20260425T111920Z/109_n1000000_q32768_h50_dense_g1_j0_s1_t16.csv
+[2026-04-25T11:19:21Z] case=110 profile=n1000000_q32768_h50_dense_g1_j0_s17_t16
+  csv=bench_results/agent1_query_scale_20260425T111920Z/110_n1000000_q32768_h50_dense_g1_j0_s17_t16.csv
+[2026-04-25T11:19:21Z] case=111 profile=n1000000_q32768_h50_dense_g1_j0_s257_t16
+  csv=bench_results/agent1_query_scale_20260425T111920Z/111_n1000000_q32768_h50_dense_g1_j0_s257_t16.csv
+[2026-04-25T11:19:21Z] case=112 profile=n1000000_q32768_h50_sparse_g16_j0_s1_t16
+  csv=bench_results/agent1_query_scale_20260425T111920Z/112_n1000000_q32768_h50_sparse_g16_j0_s1_t16.csv
+[2026-04-25T11:19:21Z] case=113 profile=n1000000_q32768_h50_sparse_g16_j0_s17_t16
+  csv=bench_results/agent1_query_scale_20260425T111920Z/113_n1000000_q32768_h50_sparse_g16_j0_s17_t16.csv
+[2026-04-25T11:19:21Z] case=114 profile=n1000000_q32768_h50_sparse_g16_j0_s257_t16
+  csv=bench_results/agent1_query_scale_20260425T111920Z/114_n1000000_q32768_h50_sparse_g16_j0_s257_t16.csv
+[2026-04-25T11:19:21Z] case=115 profile=n1000000_q32768_h50_jitter_g8_j8_s1_t16
+  csv=bench_results/agent1_query_scale_20260425T111920Z/115_n1000000_q32768_h50_jitter_g8_j8_s1_t16.csv
+[2026-04-25T11:19:21Z] case=116 profile=n1000000_q32768_h50_jitter_g8_j8_s17_t16
+  csv=bench_results/agent1_query_scale_20260425T111920Z/116_n1000000_q32768_h50_jitter_g8_j8_s17_t16.csv
+[2026-04-25T11:19:21Z] case=117 profile=n1000000_q32768_h50_jitter_g8_j8_s257_t16
+  csv=bench_results/agent1_query_scale_20260425T111920Z/117_n1000000_q32768_h50_jitter_g8_j8_s257_t16.csv
+[2026-04-25T11:19:21Z] case=118 profile=n1000000_q32768_h25_dense_g1_j0_s1_t16
+  csv=bench_results/agent1_query_scale_20260425T111920Z/118_n1000000_q32768_h25_dense_g1_j0_s1_t16.csv
+[2026-04-25T11:19:21Z] case=119 profile=n1000000_q32768_h25_dense_g1_j0_s17_t16
+  csv=bench_results/agent1_query_scale_20260425T111920Z/119_n1000000_q32768_h25_dense_g1_j0_s17_t16.csv
+[2026-04-25T11:19:21Z] case=120 profile=n1000000_q32768_h25_dense_g1_j0_s257_t16
+  csv=bench_results/agent1_query_scale_20260425T111920Z/120_n1000000_q32768_h25_dense_g1_j0_s257_t16.csv
+[2026-04-25T11:19:21Z] case=121 profile=n1000000_q32768_h25_sparse_g16_j0_s1_t16
+  csv=bench_results/agent1_query_scale_20260425T111920Z/121_n1000000_q32768_h25_sparse_g16_j0_s1_t16.csv
+[2026-04-25T11:19:21Z] case=122 profile=n1000000_q32768_h25_sparse_g16_j0_s17_t16
+  csv=bench_results/agent1_query_scale_20260425T111920Z/122_n1000000_q32768_h25_sparse_g16_j0_s17_t16.csv
+[2026-04-25T11:19:21Z] case=123 profile=n1000000_q32768_h25_sparse_g16_j0_s257_t16
+  csv=bench_results/agent1_query_scale_20260425T111920Z/123_n1000000_q32768_h25_sparse_g16_j0_s257_t16.csv
+[2026-04-25T11:19:21Z] case=124 profile=n1000000_q32768_h25_jitter_g8_j8_s1_t16
+  csv=bench_results/agent1_query_scale_20260425T111920Z/124_n1000000_q32768_h25_jitter_g8_j8_s1_t16.csv
+[2026-04-25T11:19:22Z] case=125 profile=n1000000_q32768_h25_jitter_g8_j8_s17_t16
+  csv=bench_results/agent1_query_scale_20260425T111920Z/125_n1000000_q32768_h25_jitter_g8_j8_s17_t16.csv
+[2026-04-25T11:19:22Z] case=126 profile=n1000000_q32768_h25_jitter_g8_j8_s257_t16
+  csv=bench_results/agent1_query_scale_20260425T111920Z/126_n1000000_q32768_h25_jitter_g8_j8_s257_t16.csv
+[2026-04-25T11:19:22Z] case=127 profile=n1000000_q32768_h0_dense_g1_j0_s1_t16
+  csv=bench_results/agent1_query_scale_20260425T111920Z/127_n1000000_q32768_h0_dense_g1_j0_s1_t16.csv
+[2026-04-25T11:19:22Z] case=128 profile=n1000000_q32768_h0_dense_g1_j0_s17_t16
+  csv=bench_results/agent1_query_scale_20260425T111920Z/128_n1000000_q32768_h0_dense_g1_j0_s17_t16.csv
+[2026-04-25T11:19:22Z] case=129 profile=n1000000_q32768_h0_dense_g1_j0_s257_t16
+  csv=bench_results/agent1_query_scale_20260425T111920Z/129_n1000000_q32768_h0_dense_g1_j0_s257_t16.csv
+[2026-04-25T11:19:22Z] case=130 profile=n1000000_q32768_h0_sparse_g16_j0_s1_t16
+  csv=bench_results/agent1_query_scale_20260425T111920Z/130_n1000000_q32768_h0_sparse_g16_j0_s1_t16.csv
+[2026-04-25T11:19:22Z] case=131 profile=n1000000_q32768_h0_sparse_g16_j0_s17_t16
+  csv=bench_results/agent1_query_scale_20260425T111920Z/131_n1000000_q32768_h0_sparse_g16_j0_s17_t16.csv
+[2026-04-25T11:19:22Z] case=132 profile=n1000000_q32768_h0_sparse_g16_j0_s257_t16
+  csv=bench_results/agent1_query_scale_20260425T111920Z/132_n1000000_q32768_h0_sparse_g16_j0_s257_t16.csv
+[2026-04-25T11:19:22Z] case=133 profile=n1000000_q32768_h0_jitter_g8_j8_s1_t16
+  csv=bench_results/agent1_query_scale_20260425T111920Z/133_n1000000_q32768_h0_jitter_g8_j8_s1_t16.csv
+[2026-04-25T11:19:22Z] case=134 profile=n1000000_q32768_h0_jitter_g8_j8_s17_t16
+  csv=bench_results/agent1_query_scale_20260425T111920Z/134_n1000000_q32768_h0_jitter_g8_j8_s17_t16.csv
+[2026-04-25T11:19:22Z] case=135 profile=n1000000_q32768_h0_jitter_g8_j8_s257_t16
+  csv=bench_results/agent1_query_scale_20260425T111920Z/135_n1000000_q32768_h0_jitter_g8_j8_s257_t16.csv
+[2026-04-25T11:19:22Z] case=136 profile=n1000000_q200000_h100_dense_g1_j0_s1_t16
+  csv=bench_results/agent1_query_scale_20260425T111920Z/136_n1000000_q200000_h100_dense_g1_j0_s1_t16.csv
+[2026-04-25T11:19:22Z] case=137 profile=n1000000_q200000_h100_dense_g1_j0_s17_t16
+  csv=bench_results/agent1_query_scale_20260425T111920Z/137_n1000000_q200000_h100_dense_g1_j0_s17_t16.csv
+[2026-04-25T11:19:22Z] case=138 profile=n1000000_q200000_h100_dense_g1_j0_s257_t16
+  csv=bench_results/agent1_query_scale_20260425T111920Z/138_n1000000_q200000_h100_dense_g1_j0_s257_t16.csv
+[2026-04-25T11:19:22Z] case=139 profile=n1000000_q200000_h100_sparse_g16_j0_s1_t16
+  csv=bench_results/agent1_query_scale_20260425T111920Z/139_n1000000_q200000_h100_sparse_g16_j0_s1_t16.csv
+[2026-04-25T11:19:22Z] case=140 profile=n1000000_q200000_h100_sparse_g16_j0_s17_t16
+  csv=bench_results/agent1_query_scale_20260425T111920Z/140_n1000000_q200000_h100_sparse_g16_j0_s17_t16.csv
+[2026-04-25T11:19:22Z] case=141 profile=n1000000_q200000_h100_sparse_g16_j0_s257_t16
+  csv=bench_results/agent1_query_scale_20260425T111920Z/141_n1000000_q200000_h100_sparse_g16_j0_s257_t16.csv
+[2026-04-25T11:19:22Z] case=142 profile=n1000000_q200000_h100_jitter_g8_j8_s1_t16
+  csv=bench_results/agent1_query_scale_20260425T111920Z/142_n1000000_q200000_h100_jitter_g8_j8_s1_t16.csv
+[2026-04-25T11:19:22Z] case=143 profile=n1000000_q200000_h100_jitter_g8_j8_s17_t16
+  csv=bench_results/agent1_query_scale_20260425T111920Z/143_n1000000_q200000_h100_jitter_g8_j8_s17_t16.csv
+[2026-04-25T11:19:22Z] case=144 profile=n1000000_q200000_h100_jitter_g8_j8_s257_t16
+  csv=bench_results/agent1_query_scale_20260425T111920Z/144_n1000000_q200000_h100_jitter_g8_j8_s257_t16.csv
+[2026-04-25T11:19:23Z] case=145 profile=n1000000_q200000_h75_dense_g1_j0_s1_t16
+  csv=bench_results/agent1_query_scale_20260425T111920Z/145_n1000000_q200000_h75_dense_g1_j0_s1_t16.csv
+[2026-04-25T11:19:23Z] case=146 profile=n1000000_q200000_h75_dense_g1_j0_s17_t16
+  csv=bench_results/agent1_query_scale_20260425T111920Z/146_n1000000_q200000_h75_dense_g1_j0_s17_t16.csv
+[2026-04-25T11:19:23Z] case=147 profile=n1000000_q200000_h75_dense_g1_j0_s257_t16
+  csv=bench_results/agent1_query_scale_20260425T111920Z/147_n1000000_q200000_h75_dense_g1_j0_s257_t16.csv
+[2026-04-25T11:19:23Z] case=148 profile=n1000000_q200000_h75_sparse_g16_j0_s1_t16
+  csv=bench_results/agent1_query_scale_20260425T111920Z/148_n1000000_q200000_h75_sparse_g16_j0_s1_t16.csv
+[2026-04-25T11:19:23Z] case=149 profile=n1000000_q200000_h75_sparse_g16_j0_s17_t16
+  csv=bench_results/agent1_query_scale_20260425T111920Z/149_n1000000_q200000_h75_sparse_g16_j0_s17_t16.csv
+[2026-04-25T11:19:23Z] case=150 profile=n1000000_q200000_h75_sparse_g16_j0_s257_t16
+  csv=bench_results/agent1_query_scale_20260425T111920Z/150_n1000000_q200000_h75_sparse_g16_j0_s257_t16.csv
+[2026-04-25T11:19:23Z] case=151 profile=n1000000_q200000_h75_jitter_g8_j8_s1_t16
+  csv=bench_results/agent1_query_scale_20260425T111920Z/151_n1000000_q200000_h75_jitter_g8_j8_s1_t16.csv
+[2026-04-25T11:19:23Z] case=152 profile=n1000000_q200000_h75_jitter_g8_j8_s17_t16
+  csv=bench_results/agent1_query_scale_20260425T111920Z/152_n1000000_q200000_h75_jitter_g8_j8_s17_t16.csv
+[2026-04-25T11:19:23Z] case=153 profile=n1000000_q200000_h75_jitter_g8_j8_s257_t16
+  csv=bench_results/agent1_query_scale_20260425T111920Z/153_n1000000_q200000_h75_jitter_g8_j8_s257_t16.csv
+[2026-04-25T11:19:23Z] case=154 profile=n1000000_q200000_h50_dense_g1_j0_s1_t16
+  csv=bench_results/agent1_query_scale_20260425T111920Z/154_n1000000_q200000_h50_dense_g1_j0_s1_t16.csv
+[2026-04-25T11:19:23Z] case=155 profile=n1000000_q200000_h50_dense_g1_j0_s17_t16
+  csv=bench_results/agent1_query_scale_20260425T111920Z/155_n1000000_q200000_h50_dense_g1_j0_s17_t16.csv
+[2026-04-25T11:19:23Z] case=156 profile=n1000000_q200000_h50_dense_g1_j0_s257_t16
+  csv=bench_results/agent1_query_scale_20260425T111920Z/156_n1000000_q200000_h50_dense_g1_j0_s257_t16.csv
+[2026-04-25T11:19:23Z] case=157 profile=n1000000_q200000_h50_sparse_g16_j0_s1_t16
+  csv=bench_results/agent1_query_scale_20260425T111920Z/157_n1000000_q200000_h50_sparse_g16_j0_s1_t16.csv
+[2026-04-25T11:19:24Z] case=158 profile=n1000000_q200000_h50_sparse_g16_j0_s17_t16
+  csv=bench_results/agent1_query_scale_20260425T111920Z/158_n1000000_q200000_h50_sparse_g16_j0_s17_t16.csv
+[2026-04-25T11:19:24Z] case=159 profile=n1000000_q200000_h50_sparse_g16_j0_s257_t16
+  csv=bench_results/agent1_query_scale_20260425T111920Z/159_n1000000_q200000_h50_sparse_g16_j0_s257_t16.csv
+[2026-04-25T11:19:24Z] case=160 profile=n1000000_q200000_h50_jitter_g8_j8_s1_t16
+  csv=bench_results/agent1_query_scale_20260425T111920Z/160_n1000000_q200000_h50_jitter_g8_j8_s1_t16.csv
+[2026-04-25T11:19:24Z] case=161 profile=n1000000_q200000_h50_jitter_g8_j8_s17_t16
+  csv=bench_results/agent1_query_scale_20260425T111920Z/161_n1000000_q200000_h50_jitter_g8_j8_s17_t16.csv
+[2026-04-25T11:19:24Z] case=162 profile=n1000000_q200000_h50_jitter_g8_j8_s257_t16
+  csv=bench_results/agent1_query_scale_20260425T111920Z/162_n1000000_q200000_h50_jitter_g8_j8_s257_t16.csv
+[2026-04-25T11:19:24Z] case=163 profile=n1000000_q200000_h25_dense_g1_j0_s1_t16
+  csv=bench_results/agent1_query_scale_20260425T111920Z/163_n1000000_q200000_h25_dense_g1_j0_s1_t16.csv
+[2026-04-25T11:19:24Z] case=164 profile=n1000000_q200000_h25_dense_g1_j0_s17_t16
+  csv=bench_results/agent1_query_scale_20260425T111920Z/164_n1000000_q200000_h25_dense_g1_j0_s17_t16.csv
+[2026-04-25T11:19:24Z] case=165 profile=n1000000_q200000_h25_dense_g1_j0_s257_t16
+  csv=bench_results/agent1_query_scale_20260425T111920Z/165_n1000000_q200000_h25_dense_g1_j0_s257_t16.csv
+[2026-04-25T11:19:24Z] case=166 profile=n1000000_q200000_h25_sparse_g16_j0_s1_t16
+  csv=bench_results/agent1_query_scale_20260425T111920Z/166_n1000000_q200000_h25_sparse_g16_j0_s1_t16.csv
+[2026-04-25T11:19:24Z] case=167 profile=n1000000_q200000_h25_sparse_g16_j0_s17_t16
+  csv=bench_results/agent1_query_scale_20260425T111920Z/167_n1000000_q200000_h25_sparse_g16_j0_s17_t16.csv
+[2026-04-25T11:19:24Z] case=168 profile=n1000000_q200000_h25_sparse_g16_j0_s257_t16
+  csv=bench_results/agent1_query_scale_20260425T111920Z/168_n1000000_q200000_h25_sparse_g16_j0_s257_t16.csv
+[2026-04-25T11:19:24Z] case=169 profile=n1000000_q200000_h25_jitter_g8_j8_s1_t16
+  csv=bench_results/agent1_query_scale_20260425T111920Z/169_n1000000_q200000_h25_jitter_g8_j8_s1_t16.csv
+[2026-04-25T11:19:24Z] case=170 profile=n1000000_q200000_h25_jitter_g8_j8_s17_t16
+  csv=bench_results/agent1_query_scale_20260425T111920Z/170_n1000000_q200000_h25_jitter_g8_j8_s17_t16.csv
+[2026-04-25T11:19:24Z] case=171 profile=n1000000_q200000_h25_jitter_g8_j8_s257_t16
+  csv=bench_results/agent1_query_scale_20260425T111920Z/171_n1000000_q200000_h25_jitter_g8_j8_s257_t16.csv
+[2026-04-25T11:19:24Z] case=172 profile=n1000000_q200000_h0_dense_g1_j0_s1_t16
+  csv=bench_results/agent1_query_scale_20260425T111920Z/172_n1000000_q200000_h0_dense_g1_j0_s1_t16.csv
+[2026-04-25T11:19:24Z] case=173 profile=n1000000_q200000_h0_dense_g1_j0_s17_t16
+  csv=bench_results/agent1_query_scale_20260425T111920Z/173_n1000000_q200000_h0_dense_g1_j0_s17_t16.csv
+[2026-04-25T11:19:24Z] case=174 profile=n1000000_q200000_h0_dense_g1_j0_s257_t16
+  csv=bench_results/agent1_query_scale_20260425T111920Z/174_n1000000_q200000_h0_dense_g1_j0_s257_t16.csv
+[2026-04-25T11:19:25Z] case=175 profile=n1000000_q200000_h0_sparse_g16_j0_s1_t16
+  csv=bench_results/agent1_query_scale_20260425T111920Z/175_n1000000_q200000_h0_sparse_g16_j0_s1_t16.csv
+[2026-04-25T11:19:25Z] case=176 profile=n1000000_q200000_h0_sparse_g16_j0_s17_t16
+  csv=bench_results/agent1_query_scale_20260425T111920Z/176_n1000000_q200000_h0_sparse_g16_j0_s17_t16.csv
+[2026-04-25T11:19:25Z] case=177 profile=n1000000_q200000_h0_sparse_g16_j0_s257_t16
+  csv=bench_results/agent1_query_scale_20260425T111920Z/177_n1000000_q200000_h0_sparse_g16_j0_s257_t16.csv
+[2026-04-25T11:19:25Z] case=178 profile=n1000000_q200000_h0_jitter_g8_j8_s1_t16
+  csv=bench_results/agent1_query_scale_20260425T111920Z/178_n1000000_q200000_h0_jitter_g8_j8_s1_t16.csv
+[2026-04-25T11:19:25Z] case=179 profile=n1000000_q200000_h0_jitter_g8_j8_s17_t16
+  csv=bench_results/agent1_query_scale_20260425T111920Z/179_n1000000_q200000_h0_jitter_g8_j8_s17_t16.csv
+[2026-04-25T11:19:25Z] case=180 profile=n1000000_q200000_h0_jitter_g8_j8_s257_t16
+  csv=bench_results/agent1_query_scale_20260425T111920Z/180_n1000000_q200000_h0_jitter_g8_j8_s257_t16.csv

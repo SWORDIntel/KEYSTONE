@@ -1,0 +1,14 @@
+#profile=mem_n8000000_q1000000_h0_dense_g1_j0_s17_t16_mwarm
+#bench_mode=warm,warmup_runs=1
+#n=8000000,queries=1000000,runs=3
+#workload=hit_rate_pct=0,data_gap=1,data_gap_jitter=0,query_stride=17,query_effective_stride=17,query_cycle=8000000,expected_hits=0,expected_misses=1000000
+#workload_pattern=data[0]=0,data[i]=data[i-1]+data_gap+jitter(i),jitter=0..data_gap_jitter,hit_when=i%100<hit_rate_pct,hit_index_stride=query_stride%n,miss_key=-1-(i%1000000)
+#env=NOT_STISLA_PROFILE,NOT_STISLA_BENCH_MODE,NOT_STISLA_WARMUP_RUNS,NOT_STISLA_N,NOT_STISLA_QUERIES,NOT_STISLA_RUNS,NOT_STISLA_HIT_RATE_PCT,NOT_STISLA_DATA_GAP,NOT_STISLA_DATA_GAP_JITTER,NOT_STISLA_QUERY_STRIDE
+#setup_ms=data_alloc=0.008,data_init=29.107,query_alloc=0.010,query_init=2.566,total=31.691
+#buffer_bytes=data=64000000,queries=8000000,batch=24000000,total=96000000,data_gib=0.059605,total_gib=0.089407
+#effective_data_gib_s=dataset_gib/(backend_ns_per_key*queries);proxy_not_raw_dram_bandwidth
+#auto_backend_bench=1
+#run,binary_ns,not_stisla_ns,batch_parallel_ns,fortran_batch_ns,auto_batch_ns,fortran_available,auto_backend_bench,auto_decision_available,auto_backend,auto_cpu_features,auto_array_bucket,auto_query_bucket,auto_thread_count,auto_estimated_ns_per_key,auto_p95_ns_per_key,data_alloc_ms,data_init_ms,query_alloc_ms,query_init_ms,setup_total_ms,data_bytes,query_bytes,batch_bytes,total_buffer_bytes,data_gib,total_buffer_gib,binary_effective_gib_s,not_stisla_effective_gib_s,batch_parallel_effective_gib_s,fortran_effective_gib_s,auto_effective_gib_s,bench_mode,warmup_runs
+1,12.64,2.21,2.30,9.83,5.86,1,1,1,scalar,9,8388608,1048576,16,3.07,3.07,0.008,29.107,0.010,2.566,31.691,64000000,8000000,24000000,96000000,0.059605,0.089407,4.716,27.031,25.869,6.063,10.176,warm,1
+2,12.42,2.41,2.84,10.08,5.66,1,1,1,scalar,9,8388608,1048576,16,2.83,2.83,0.008,29.107,0.010,2.566,31.691,64000000,8000000,24000000,96000000,0.059605,0.089407,4.799,24.699,20.993,5.913,10.527,warm,1
+3,12.39,2.28,2.97,12.29,5.73,1,1,1,scalar,9,8388608,1048576,16,2.97,2.97,0.008,29.107,0.010,2.566,31.691,64000000,8000000,24000000,96000000,0.059605,0.089407,4.811,26.109,20.102,4.850,10.402,warm,1

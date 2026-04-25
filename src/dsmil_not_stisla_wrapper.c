@@ -677,6 +677,8 @@ int dsmil_search_reset_stats(dsmil_search_context_t *ctx) {
     ctx->search_operations = 0;
     ctx->cache_hits = 0;
     ctx->memory_usage = 0;
+    ctx->last_data_ptr = NULL;
+    ctx->cached_count = 0;
 
     return DSMIL_SEARCH_SUCCESS;
 }

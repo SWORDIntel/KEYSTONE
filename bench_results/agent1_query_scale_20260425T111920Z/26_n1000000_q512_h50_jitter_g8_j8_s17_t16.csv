@@ -1,0 +1,16 @@
+#profile=n1000000_q512_h50_jitter_g8_j8_s17_t16
+#bench_mode=cold,warmup_runs=0
+#n=1000000,queries=512,runs=5
+#workload=hit_rate_pct=50,data_gap=8,data_gap_jitter=8,query_stride=17,query_effective_stride=17,query_cycle=1000000,expected_hits=262,expected_misses=250
+#workload_pattern=data[0]=0,data[i]=data[i-1]+data_gap+jitter(i),jitter=0..data_gap_jitter,hit_when=i%100<hit_rate_pct,hit_index_stride=query_stride%n,miss_key=-1-(i%1000000)
+#env=NOT_STISLA_PROFILE,NOT_STISLA_BENCH_MODE,NOT_STISLA_WARMUP_RUNS,NOT_STISLA_N,NOT_STISLA_QUERIES,NOT_STISLA_RUNS,NOT_STISLA_HIT_RATE_PCT,NOT_STISLA_DATA_GAP,NOT_STISLA_DATA_GAP_JITTER,NOT_STISLA_QUERY_STRIDE
+#setup_ms=data_alloc=0.006,data_init=5.073,query_alloc=0.003,query_init=0.003,total=5.084
+#buffer_bytes=data=8000000,queries=4096,batch=12288,total=8016384,data_gib=0.007451,total_gib=0.007466
+#effective_data_gib_s=dataset_gib/(backend_ns_per_key*queries);proxy_not_raw_dram_bandwidth
+#auto_backend_bench=1
+#run,binary_ns,not_stisla_ns,batch_parallel_ns,fortran_batch_ns,auto_batch_ns,fortran_available,auto_backend_bench,auto_decision_available,auto_backend,auto_cpu_features,auto_array_bucket,auto_query_bucket,auto_thread_count,auto_estimated_ns_per_key,auto_p95_ns_per_key,data_alloc_ms,data_init_ms,query_alloc_ms,query_init_ms,setup_total_ms,data_bytes,query_bytes,batch_bytes,total_buffer_bytes,data_gib,total_buffer_gib,binary_effective_gib_s,not_stisla_effective_gib_s,batch_parallel_effective_gib_s,fortran_effective_gib_s,auto_effective_gib_s,bench_mode,warmup_runs
+1,31.30,6.48,7435.57,185.60,27.85,1,1,1,scalar,9,1048576,512,16,25.19,25.19,0.006,5.073,0.003,0.003,5.084,8000000,4096,12288,8016384,0.007451,0.007466,464.848,2245.503,1.957,78.404,522.481,cold,0
+2,60.46,16.33,209.17,151.92,19.15,1,1,1,scalar,9,1048576,512,16,17.85,17.85,0.006,5.073,0.003,0.003,5.084,8000000,4096,12288,8016384,0.007451,0.007466,240.675,891.218,69.570,95.788,759.798,cold,0
+3,59.73,16.87,166.16,126.98,18.83,1,1,1,scalar,9,1048576,512,16,17.58,17.58,0.006,5.073,0.003,0.003,5.084,8000000,4096,12288,8016384,0.007451,0.007466,243.610,862.635,87.577,114.603,772.962,cold,0
+4,58.18,16.84,166.87,136.21,7.94,1,1,1,scalar,9,1048576,512,16,6.66,6.66,0.006,5.073,0.003,0.003,5.084,8000000,4096,12288,8016384,0.007451,0.007466,250.103,863.936,87.204,106.835,1833.312,cold,0
+5,28.09,5.55,130.14,102.51,6.45,1,1,1,scalar,9,1048576,512,16,5.73,5.73,0.006,5.073,0.003,0.003,5.084,8000000,4096,12288,8016384,0.007451,0.007466,518.013,2621.598,111.817,141.956,2256.384,cold,0

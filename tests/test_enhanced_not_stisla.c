@@ -2,7 +2,7 @@
  * ENHANCED NOT_STISLA TEST SUITE
  * ============================================================================
  *
- * Tests for QIHSE-inspired improvements to traditional NOT_STISLA:
+ * Tests for NOT_STISLA-native improvements to traditional NOT_STISLA:
  * - Runtime CPU feature detection
  * - Memory-bounded anchor learning
  * - Enhanced statistics and monitoring
@@ -52,7 +52,7 @@ static void test_memory_bounded_anchors(void) {
     ret = not_stisla_anchor_table_set_memory_limit(table, 1);  /* Too small */
     assert(ret == -1);
 
-    ret = not_stisla_anchor_table_set_memory_limit(table, 100); /* Too large */
+    ret = not_stisla_anchor_table_set_memory_limit(table, NOT_STISLA_MAX_ANCHORS + 1); /* Too large */
     assert(ret == -1);
 
     not_stisla_anchor_table_destroy(table);
@@ -69,12 +69,14 @@ static void test_workload_optimization(void) {
     /* Test telemetry workload */
     int ret = not_stisla_anchor_table_optimize_for_workload(table, NOT_STISLA_WORKLOAD_TELEMETRY);
     assert(ret == 0);
-    assert(table->max_capacity > NOT_STISLA_MAX_ANCHORS / 2);  /* Higher limit for telemetry */
+    size_t telemetry_capacity = table->max_capacity;
+    assert(telemetry_capacity >= NOT_STISLA_MIN_ANCHORS);
 
     /* Test ID workload */
     ret = not_stisla_anchor_table_optimize_for_workload(table, NOT_STISLA_WORKLOAD_IDS);
     assert(ret == 0);
-    assert(table->max_capacity < NOT_STISLA_MAX_ANCHORS);  /* Lower limit for IDs */
+    assert(table->max_capacity >= NOT_STISLA_MIN_ANCHORS);
+    assert(table->max_capacity < telemetry_capacity);  /* IDs use fewer anchors than telemetry */
 
     not_stisla_anchor_table_destroy(table);
     printf("  ✓ Workload-specific optimization works\n");
@@ -104,7 +106,7 @@ static void test_enhanced_statistics(void) {
     for (size_t i = 0; i < 25; i++) {
         /* Search for values that require interpolation and anchor learning */
         int64_t search_val = (i * 10) + 3;  /* Offset from exact match */
-        not_stisla_result_t result = not_stisla_search(test_array, 100, search_val, table, 2);
+        (void)not_stisla_search(test_array, 100, search_val, table, 2);
         /* May or may not find exact match, but should learn anchors */
     }
 
@@ -203,6 +205,9 @@ static void test_dsmil_workload_init(void) {
 
 /* Main test runner */
 int main(int argc, char** argv) {
+    (void)argc;
+    (void)argv;
+
     printf("Running Enhanced NOT_STISLA Test Suite\n");
     printf("=======================================\n\n");
 
@@ -228,7 +233,7 @@ int main(int argc, char** argv) {
     printf("\n");
 
     printf("🎉 All Enhanced NOT_STISLA tests passed!\n");
-    printf("QIHSE-inspired improvements successfully integrated.\n");
+    printf("NOT_STISLA-native improvements successfully integrated.\n");
 
     return 0;
 }

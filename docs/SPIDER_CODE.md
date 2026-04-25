@@ -132,7 +132,7 @@ The spider code enforces commercial licensing by:
 Spider fragments are called from performance-critical paths:
 
 ```rust
-// Quantum search initialization
+// Search initialization
 crate::spider::init_spider();
 
 // SIMD alignment validation

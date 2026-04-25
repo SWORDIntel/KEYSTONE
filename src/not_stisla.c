@@ -1,7 +1,7 @@
 /**
- * Competitor - Ultra-Optimized Search Algorithm for DSMIL
+ * NOT_STISLA - optimized interpolation/anchor search for DSMIL
  *
- * AVX2-optimized implementation achieving 22.28x speedup over binary search
+ * AVX2-optimized implementation for sorted int64_t search workloads.
  *
  * Features:
  * - AVX2-style chunked processing
@@ -14,7 +14,9 @@
 #define _POSIX_C_SOURCE 200809L  /* For POSIX time functions */
 
 #include "../include/not_stisla.h"
-#include "../include/not_stisla_quantum.h"  /* For quantum_search_hilbert_space_t */
+#ifdef NOT_STISLA_ENABLE_FORTRAN
+#include "../fortran/not_stisla_batch_backend.h"
+#endif
 #include <stdlib.h>
 #include <string.h>
 #include <math.h>
@@ -24,11 +26,14 @@
 #include <setjmp.h>
 #include <stdint.h>
 #include <errno.h>
+#if defined(__x86_64__) || defined(__i386__)
+#include <cpuid.h>
+#endif
 #ifdef _OPENMP
 #include <omp.h>
 #endif
-#ifdef __AVX512F__
-#include <immintrin.h>  /* AVX-512 intrinsics */
+#if defined(__AVX2__) || defined(__AVX512F__)
+#include <immintrin.h>
 #endif
 #include <sys/mman.h>  /* For madvise (huge pages support) */
 #include <stdio.h>     /* For CPU detection parsing */
@@ -70,87 +75,134 @@ static int is_graviton4(void) {
 #endif
 
 #define NOT_STISLA_VERSION_STRING "1.1.0"
-#define NOT_STISLA_BUILD_INFO "Enhanced with QIHSE-inspired optimizations, runtime CPU detection, memory efficiency"
+#define NOT_STISLA_BUILD_INFO "Tuned NOT_STISLA search with runtime CPU detection and bounded anchor memory"
 
-/* QIHSE-inspired runtime CPU feature detection */
+/* NOT_STISLA-native runtime CPU feature detection */
 static uint32_t detected_cpu_features = 0;
 static int cpu_features_detected = 0;
 
 /* Signal handler for illegal instruction detection */
 #ifndef __aarch64__
-static jmp_buf cpu_test_jmp_buf;
-
-/* QIHSE-inspired CPU feature detection using signal handling */
-static void illegal_instruction_handler(int sig) {
-    (void)sig;
-    longjmp(cpu_test_jmp_buf, 1);
+static uint64_t x86_xgetbv0(void) {
+    uint32_t eax = 0;
+    uint32_t edx = 0;
+    __asm__ volatile("xgetbv" : "=a"(eax), "=d"(edx) : "c"(0));
+    return ((uint64_t)edx << 32) | eax;
 }
 
-/* Test AVX2 availability by executing instruction */
+static int x86_os_avx_enabled(void) {
+    uint32_t eax = 0;
+    uint32_t ebx = 0;
+    uint32_t ecx = 0;
+    uint32_t edx = 0;
+
+    if (!__get_cpuid(1, &eax, &ebx, &ecx, &edx)) {
+        return 0;
+    }
+
+    const uint32_t osxsave = 1u << 27;
+    const uint32_t avx = 1u << 28;
+    if ((ecx & (osxsave | avx)) != (osxsave | avx)) {
+        return 0;
+    }
+
+    return (x86_xgetbv0() & 0x6u) == 0x6u;
+}
+
+static int x86_os_avx512_enabled(void) {
+    if (!x86_os_avx_enabled()) {
+        return 0;
+    }
+
+    const uint64_t avx512_state = 0xE6u; /* XMM, YMM, opmask, ZMM_hi256, hi16_ZMM */
+    return (x86_xgetbv0() & avx512_state) == avx512_state;
+}
+
+static int x86_os_amx_enabled(void) {
+    uint32_t eax = 0;
+    uint32_t ebx = 0;
+    uint32_t ecx = 0;
+    uint32_t edx = 0;
+
+    if (!__get_cpuid(1, &eax, &ebx, &ecx, &edx)) {
+        return 0;
+    }
+
+    if ((ecx & (1u << 27)) == 0) {
+        return 0;
+    }
+
+    const uint64_t amx_state = (1ULL << 17) | (1ULL << 18);
+    return (x86_xgetbv0() & amx_state) == amx_state;
+}
+
 static int test_avx2(void) {
-    if (setjmp(cpu_test_jmp_buf) == 0) {
-        signal(SIGILL, illegal_instruction_handler);
-#ifdef __AVX2__
-        /* Test AVX2 instruction */
-        __asm__ volatile (
-            "vpxor %%ymm0, %%ymm0, %%ymm0\n\t"
-            "vpxor %%ymm1, %%ymm1, %%ymm1\n\t"
-            :
-            :
-            : "ymm0", "ymm1"
-        );
-#endif
-        signal(SIGILL, SIG_DFL);
-        return 1;
-    } else {
-        signal(SIGILL, SIG_DFL);
+    uint32_t eax = 0;
+    uint32_t ebx = 0;
+    uint32_t ecx = 0;
+    uint32_t edx = 0;
+
+    if (!x86_os_avx_enabled() || __get_cpuid_max(0, NULL) < 7) {
         return 0;
     }
+
+    __cpuid_count(7, 0, eax, ebx, ecx, edx);
+    return (ebx & (1u << 5)) != 0; /* AVX2 */
 }
 
-/* Test AVX512 availability */
 static int test_avx512(void) {
-    if (setjmp(cpu_test_jmp_buf) == 0) {
-        signal(SIGILL, illegal_instruction_handler);
-#ifdef __AVX512F__
-        /* Test AVX512 instruction */
-        __asm__ volatile (
-            "vpxorq %%zmm0, %%zmm0, %%zmm0\n\t"
-            :
-            :
-            : "zmm0"
-        );
-#endif
-        signal(SIGILL, SIG_DFL);
-        return 1;
-    } else {
-        signal(SIGILL, SIG_DFL);
+    uint32_t eax = 0;
+    uint32_t ebx = 0;
+    uint32_t ecx = 0;
+    uint32_t edx = 0;
+
+    if (!x86_os_avx512_enabled() || __get_cpuid_max(0, NULL) < 7) {
         return 0;
     }
+
+    __cpuid_count(7, 0, eax, ebx, ecx, edx);
+    return (ebx & (1u << 16)) != 0; /* AVX-512F */
 }
 
-/* Test AMX availability */
 static int test_amx(void) {
-    if (setjmp(cpu_test_jmp_buf) == 0) {
-        signal(SIGILL, illegal_instruction_handler);
-#ifdef __AMX__
-        /* Test AMX tile load */
-        __asm__ volatile (
-            "ldtilecfg (%0)\n\t"
-            :
-            : "r"((void*)0)  /* Would need proper tile config, but this tests availability */
-        );
-#endif
-        signal(SIGILL, SIG_DFL);
-        return 1;
-    } else {
-        signal(SIGILL, SIG_DFL);
+    uint32_t eax = 0;
+    uint32_t ebx = 0;
+    uint32_t ecx = 0;
+    uint32_t edx = 0;
+
+    if (!x86_os_amx_enabled() || __get_cpuid_max(0, NULL) < 7) {
         return 0;
     }
+
+    __cpuid_count(7, 0, eax, ebx, ecx, edx);
+    return (edx & (1u << 24)) != 0; /* AMX-TILE */
+}
+
+static int test_vnni(void) {
+    uint32_t eax = 0;
+    uint32_t ebx = 0;
+    uint32_t ecx = 0;
+    uint32_t edx = 0;
+
+    if (__get_cpuid_max(0, NULL) < 7) {
+        return 0;
+    }
+
+    __cpuid_count(7, 0, eax, ebx, ecx, edx);
+    if (x86_os_avx512_enabled() && (ebx & (1u << 11))) {
+        return 1; /* AVX-512 VNNI */
+    }
+
+    if (eax >= 1 && x86_os_avx_enabled()) {
+        __cpuid_count(7, 1, eax, ebx, ecx, edx);
+        return (eax & (1u << 4)) != 0; /* AVX-VNNI */
+    }
+
+    return 0;
 }
 #endif
 
-/* Runtime CPU feature detection (QIHSE-inspired) */
+/* Runtime CPU feature detection (NOT_STISLA-native) */
 uint32_t not_stisla_detect_cpu_features(void) {
     if (!cpu_features_detected) {
         detected_cpu_features = 0;
@@ -190,8 +242,7 @@ uint32_t not_stisla_detect_cpu_features(void) {
             detected_cpu_features |= NOT_STISLA_CPU_AMX;
         }
 
-        /* VNNI detection (if AVX512 is available) */
-        if (detected_cpu_features & NOT_STISLA_CPU_AVX512) {
+        if (test_vnni()) {
             detected_cpu_features |= NOT_STISLA_CPU_VNNI;
         }
 #endif
@@ -202,910 +253,9 @@ uint32_t not_stisla_detect_cpu_features(void) {
     return detected_cpu_features;
 }
 
-/* ============================================================================
- * DIMENSION CALCULATION - QIHSE-INSPIRED
- * ============================================================================ */
-
-/**
- * Initialize dimension calculation configuration with defaults
- */
-void not_stisla_dimension_config_init(not_stisla_dimension_config_t* config) {
-    if (!config) return;
-
-    config->min_dims = 8;
-    config->max_dims = 16384;
-    config->entropy_threshold = 0.1;
-    config->complexity_weight = 0.3;
-    config->memory_weight = 0.4;
-    config->performance_weight = 0.3;
-    config->adaptive_scaling = 1;
-    config->target_accuracy = 0.95;
-}
-
-/**
- * Analyze problem characteristics for dimension calculation
- */
-int not_stisla_analyze_problem_characteristics(
-    const int64_t* data,
-    size_t data_size,
-    not_stisla_problem_characteristics_t* characteristics
-) {
-    if (!data || data_size == 0 || !characteristics) {
-        return -1;
-    }
-
-    memset(characteristics, 0, sizeof(not_stisla_problem_characteristics_t));
-
-    characteristics->input_size = data_size;
-
-    /* Calculate statistical properties */
-    double sum = 0.0, sum_sq = 0.0;
-    int64_t min_val = data[0], max_val = data[0];
-    size_t non_zero_count = 0;
-
-    for (size_t i = 0; i < data_size; i++) {
-        int64_t val = data[i];
-        double dval = (double)val;
-        sum += dval;
-        sum_sq += dval * dval;
-
-        if (val < min_val) min_val = val;
-        if (val > max_val) max_val = val;
-        if (val != 0) non_zero_count++;
-    }
-
-    double mean = sum / data_size;
-    double variance = (sum_sq / data_size) - (mean * mean);
-    double std_dev = sqrt(variance > 0 ? variance : 0);
-
-    /* Estimate entropy using Shannon entropy calculation */
-    characteristics->data_entropy = 0.0;
-    if (std_dev > 0) {
-        /* Discretize into 10 bins for entropy calculation */
-        int bins[10] = {0};
-        double range = (double)(max_val - min_val);
-        if (range == 0.0) range = 1.0; /* Handle constant arrays */
-
-        for (size_t i = 0; i < data_size; i++) {
-            double normalized = ((double)(data[i] - min_val)) / range;
-            int bin = (int)(normalized * 9.999); /* Ensure bin < 10 */
-            if (bin >= 0 && bin < 10) bins[bin]++;
-        }
-
-        for (int i = 0; i < 10; i++) {
-            if (bins[i] > 0) {
-                double p = (double)bins[i] / data_size;
-                characteristics->data_entropy -= p * log2(p);
-            }
-        }
-    }
-
-    /* Estimate complexity (Kolmogorov-like) */
-    characteristics->data_complexity = 0.0;
-    for (size_t i = 1; i < data_size; i++) {
-        double diff = fabs((double)(data[i] - data[i-1]));
-        characteristics->data_complexity += diff;
-    }
-    characteristics->data_complexity /= data_size;
-
-    /* Calculate sparsity */
-    characteristics->sparsity = 1.0 - (double)non_zero_count / data_size;
-
-    /* Estimate correlation */
-    characteristics->correlation = 0.0;
-    if (data_size > 1) {
-        double sum_xy = 0.0, sum_x_sq = 0.0, sum_y_sq = 0.0;
-        for (size_t i = 1; i < data_size; i++) {
-            double x = (double)(data[i-1] - mean);
-            double y = (double)(data[i] - mean);
-            sum_xy += x * y;
-            sum_x_sq += x * x;
-            sum_y_sq += y * y;
-        }
-        if (sum_x_sq > 0 && sum_y_sq > 0) {
-            characteristics->correlation = sum_xy / sqrt(sum_x_sq * sum_y_sq);
-        }
-    }
-
-    /* Set default memory and performance targets */
-    characteristics->memory_budget = NOT_STISLA_MEMORY_BUDGET_MB * 1024 * 1024; /* Convert MB to bytes */
-    characteristics->performance_target = 1000.0; /* 1000 queries/sec default */
-
-    return 0;
-}
-
-/**
- * Calculate optimal dimensions for quantum search path
- */
-size_t not_stisla_calculate_optimal_dimensions(
-    const not_stisla_problem_characteristics_t* characteristics,
-    const not_stisla_dimension_config_t* config
-) {
-    if (!characteristics || !config) return config ? config->min_dims : 8;
-
-    /* Base calculation from entropy */
-    double entropy_factor = characteristics->data_entropy / 4.0; /* Normalize entropy */
-    double complexity_factor = characteristics->data_complexity * 100.0; /* Amplify complexity */
-
-    /* Size-based scaling */
-    double size_factor = log2((double)characteristics->input_size) / 10.0;
-
-    /* Combine factors with weights */
-    double dimension_score = (
-        entropy_factor * config->complexity_weight +
-        complexity_factor * config->complexity_weight +
-        size_factor * config->performance_weight
-    );
-
-    /* Convert to dimension count */
-    size_t dims = (size_t)exp(dimension_score) * 8; /* Base of 8 */
-
-    /* Apply memory constraint */
-    size_t memory_dims = characteristics->memory_budget / (characteristics->input_size * sizeof(double));
-    if (dims > memory_dims) dims = memory_dims;
-
-    /* Clamp to configured range */
-    return not_stisla_clamp_dimensions(dims, config);
-}
-
-/**
- * Clamp dimensions to valid range
- */
-size_t not_stisla_clamp_dimensions(
-    size_t dims,
-    const not_stisla_dimension_config_t* config
-) {
-    if (!config) return dims;
-
-    if (dims < config->min_dims) return config->min_dims;
-    if (dims > config->max_dims) return config->max_dims;
-    return dims;
-}
-
-/* ============================================================================
- * RFF KERNEL - QIHSE-INSPIRED RANDOM FOURIER FEATURES
- * ============================================================================ */
-
-/* Box-Muller transform for Gaussian random variables */
-static double not_stisla_generate_gaussian(double mu, double sigma, uint64_t* seed) {
-    /* Simple implementation - in production, use better PRNG */
-    static int has_spare = 0;
-    static double spare;
-
-    if (has_spare) {
-        has_spare = 0;
-        return spare * sigma + mu;
-    }
-
-    has_spare = 1;
-    double u, v, s;
-    do {
-        /* Simple LCG for demo - replace with proper PRNG */
-        *seed = (*seed * 1103515245 + 12345) & 0x7fffffff;
-        u = (double)*seed / 0x7fffffff * 2.0 - 1.0;
-
-        *seed = (*seed * 1103515245 + 12345) & 0x7fffffff;
-        v = (double)*seed / 0x7fffffff * 2.0 - 1.0;
-
-        s = u * u + v * v;
-    } while (s >= 1.0 || s == 0.0);
-
-    s = sqrt(-2.0 * log(s) / s);
-    spare = v * s;
-    return (u * s) * sigma + mu;
-}
-
-/**
- * Create RFF kernel for Hilbert space projection
- */
-not_stisla_rff_kernel_t* not_stisla_rff_create(
-    size_t input_dims,
-    size_t output_dims,
-    double gamma,
-    uint64_t seed
-) {
-    if (input_dims == 0 || output_dims == 0 || gamma <= 0.0) {
-        return NULL;
-    }
-
-    not_stisla_rff_kernel_t* kernel = calloc(1, sizeof(not_stisla_rff_kernel_t));
-    if (!kernel) {
-        return NULL;
-    }
-
-    kernel->input_dims = input_dims;
-    kernel->output_dims = output_dims;
-    kernel->gamma = gamma;
-    kernel->seed = seed;
-
-    /* Allocate parameter arrays */
-    kernel->omega = malloc(output_dims * input_dims * sizeof(double));
-    kernel->bias = malloc(output_dims * sizeof(double));
-
-    if (!kernel->omega || !kernel->bias) {
-        not_stisla_rff_destroy(kernel);
-        return NULL;
-    }
-
-    /* Initialize random parameters */
-    uint64_t current_seed = seed;
-    double sigma = sqrt(2.0 * gamma);
-
-    /* Generate Gaussian random frequencies ω ~ N(0, 2γ) */
-    for (size_t i = 0; i < output_dims * input_dims; i++) {
-        kernel->omega[i] = not_stisla_generate_gaussian(0.0, sigma, &current_seed);
-    }
-
-    /* Generate uniform random biases b ~ U[0, 2π] */
-    for (size_t i = 0; i < output_dims; i++) {
-        current_seed = (current_seed * 1103515245 + 12345) & 0x7fffffff;
-        kernel->bias[i] = (double)current_seed / 0x7fffffff * 2.0 * M_PI;
-    }
-
-    return kernel;
-}
-
-/**
- * Destroy RFF kernel and free resources
- */
-void not_stisla_rff_destroy(not_stisla_rff_kernel_t* kernel) {
-    if (!kernel) return;
-
-    free(kernel->omega);
-    free(kernel->bias);
-    free(kernel);
-}
-
-/**
- * Project input vector to higher-dimensional Hilbert space
- */
-void not_stisla_rff_project(
-    const not_stisla_rff_kernel_t* kernel,
-    const double* input,
-    double* output
-) {
-    if (!kernel || !input || !output) return;
-
-    const double scale = sqrt(2.0 / kernel->output_dims);
-
-    for (size_t d = 0; d < kernel->output_dims; d++) {
-        double dot_product = kernel->bias[d];
-
-        /* Compute ω·x + b */
-        for (size_t i = 0; i < kernel->input_dims; i++) {
-            dot_product += kernel->omega[d * kernel->input_dims + i] * input[i];
-        }
-
-        /* Apply random Fourier transform: z(x) = sqrt(2/D) * cos(ω·x + b) */
-        output[d] = scale * cos(dot_product);
-    }
-}
-
-/**
- * Project batch of input vectors to Hilbert space
- */
-void not_stisla_rff_project_batch(
-    const not_stisla_rff_kernel_t* kernel,
-    const double* inputs,
-    double* outputs,
-    size_t batch_size
-) {
-    if (!kernel || !inputs || !outputs || batch_size == 0) return;
-
-    for (size_t b = 0; b < batch_size; b++) {
-        const double* input = &inputs[b * kernel->input_dims];
-        double* output = &outputs[b * kernel->output_dims];
-        not_stisla_rff_project(kernel, input, output);
-    }
-}
-
-/**
- * Get RFF kernel input dimensions
- */
-size_t not_stisla_rff_get_input_dims(const not_stisla_rff_kernel_t* kernel) {
-    return kernel ? kernel->input_dims : 0;
-}
-
-/**
- * Get RFF kernel output dimensions
- */
-size_t not_stisla_rff_get_output_dims(const not_stisla_rff_kernel_t* kernel) {
-    return kernel ? kernel->output_dims : 0;
-}
-
-/**
- * Get RFF kernel gamma parameter
- */
-double not_stisla_rff_get_gamma(const not_stisla_rff_kernel_t* kernel) {
-    return kernel ? kernel->gamma : 0.0;
-}
-
-/**
- * Get RFF kernel random seed
- */
-uint64_t not_stisla_rff_get_seed(const not_stisla_rff_kernel_t* kernel) {
-    return kernel ? kernel->seed : 0;
-}
-
-/* ============================================================================
- * VERIFICATION SYSTEM - QIHSE-INSPIRED MULTI-LEVEL VERIFICATION
- * ============================================================================ */
-
-/**
- * Initialize verification configuration with defaults
- */
-void not_stisla_verification_config_init(
-    not_stisla_verification_config_t* config,
-    not_stisla_verification_mode_t mode
-) {
-    if (!config) return;
-
-    config->mode = mode;
-    config->confidence_threshold = 0.97; /* 97% default confidence for precision search */
-    config->max_retries = 5; /* More retries for precision requirements */
-    config->tolerance = 1e-6;
-    config->enable_fallback = 1;
-    config->performance_budget = 0.2; /* Allow more time for precision verification */
-    config->window_size = 10;
-    config->adaptive_verification = 1; /* Enable adaptive verification for precision */
-
-    /* Mode-specific adjustments - precision search requires 97%+ confidence */
-    switch (mode) {
-        case NOT_STISLA_VERIFY_NONE:
-            config->confidence_threshold = 0.0; /* No verification */
-            config->max_retries = 0;
-            break;
-        case NOT_STISLA_VERIFY_FAST:
-            config->confidence_threshold = 0.95; /* 95% for fast precision */
-            config->max_retries = 2;
-            break;
-        case NOT_STISLA_VERIFY_WINDOW:
-            config->confidence_threshold = 0.96; /* 96% for window precision */
-            config->window_size = 25;
-            break;
-        case NOT_STISLA_VERIFY_FALLBACK:
-            config->confidence_threshold = 0.97; /* 97% for fallback precision */
-            config->enable_fallback = 1;
-            config->max_retries = 5;
-            break;
-        case NOT_STISLA_VERIFY_EXACT:
-            config->confidence_threshold = 0.98; /* 98% for exact precision */
-            config->tolerance = 1e-9;
-            config->max_retries = 10;
-            break;
-        case NOT_STISLA_VERIFY_PRECISION:
-            config->confidence_threshold = 0.97; /* 97% minimum for precision mode */
-            config->max_retries = 8;
-            config->enable_fallback = 1;
-            config->adaptive_verification = 1; /* Enable adaptive for precision */
-            config->performance_budget = 0.15; /* Allow more time for precision */
-            config->window_size = 30;
-            break;
-    }
-}
-
-/**
- * Initialize verification result structure
- */
-void not_stisla_verification_result_init(not_stisla_verification_result_t* result) {
-    if (!result) return;
-    memset(result, 0, sizeof(not_stisla_verification_result_t));
-    result->confidence = 0.0;
-    result->accuracy = 0.0;
-}
-
-/**
- * Destroy verification result and free resources
- */
-void not_stisla_verification_result_destroy(not_stisla_verification_result_t* result) {
-    if (!result) return;
-    if (result->error_message) {
-        free(result->error_message);
-    }
-    memset(result, 0, sizeof(not_stisla_verification_result_t));
-}
-
-/**
- * Calculate similarity between result and ground truth
- */
-static double not_stisla_calculate_similarity(const void* result, const void* ground_truth) {
-    /* Use domain-agnostic similarity calculation */
-    if (!result || !ground_truth) return 0.0;
-
-    /* Assume both are float arrays for vector similarity */
-    const float* res = (const float*)result;
-    const float* gt = (const float*)ground_truth;
-
-    /* Calculate cosine similarity for first 10 elements */
-    double dot_product = 0.0;
-    double res_norm = 0.0;
-    double gt_norm = 0.0;
-
-    for (int i = 0; i < 10; i++) {
-        dot_product += res[i] * gt[i];
-        res_norm += res[i] * res[i];
-        gt_norm += gt[i] * gt[i];
-    }
-
-    res_norm = sqrt(res_norm);
-    gt_norm = sqrt(gt_norm);
-
-    if (res_norm == 0.0 || gt_norm == 0.0) return 0.0;
-
-    double similarity = dot_product / (res_norm * gt_norm);
-    return fmax(0.0, fmin(1.0, similarity)); /* Clamp to [0,1] */
-}
-
-/**
- * Check structural integrity of result
- */
-static double not_stisla_check_structural_integrity(const void* result) {
-    if (!result) return 0.0;
-
-    const float* res = (const float*)result;
-    int valid_count = 0;
-    int total_checks = 20;
-
-    /* Check for structural validity */
-    for (int i = 0; i < total_checks; i++) {
-        if (isfinite(res[i]) && !isnan(res[i]) &&
-            fabs(res[i]) < 1e6) { /* Reasonable magnitude check */
-            valid_count++;
-        }
-    }
-
-    return (double)valid_count / total_checks;
-}
-
-/**
- * AVX2-accelerated cosine similarity
- */
-#ifdef __AVX2__
-#include <immintrin.h>
-
-double not_stisla_cosine_similarity_avx2(
-    const float* result,
-    const float* ground_truth,
-    size_t data_size
-) {
-    /* Use 256-bit vectors: 8 floats per iteration */
-    __m256 dot_sum = _mm256_setzero_ps();
-    __m256 res_norm_sum = _mm256_setzero_ps();
-    __m256 gt_norm_sum = _mm256_setzero_ps();
-
-    size_t simd_iters = data_size / 8;
-
-    /* Process 8 elements at a time */
-    for (size_t i = 0; i < simd_iters; i++) {
-        __m256 res_vec = _mm256_loadu_ps(&result[i * 8]);
-        __m256 gt_vec = _mm256_loadu_ps(&ground_truth[i * 8]);
-
-        /* Dot product: result · ground_truth */
-        dot_sum = _mm256_fmadd_ps(res_vec, gt_vec, dot_sum);
-
-        /* Norms: ||result||² and ||ground_truth||² */
-        res_norm_sum = _mm256_fmadd_ps(res_vec, res_vec, res_norm_sum);
-        gt_norm_sum = _mm256_fmadd_ps(gt_vec, gt_vec, gt_norm_sum);
-    }
-
-    /* Horizontal reduction */
-    float dot_parts[8];
-    float res_norm_parts[8];
-    float gt_norm_parts[8];
-    _mm256_storeu_ps(dot_parts, dot_sum);
-    _mm256_storeu_ps(res_norm_parts, res_norm_sum);
-    _mm256_storeu_ps(gt_norm_parts, gt_norm_sum);
-
-    double dot = 0.0, res_norm = 0.0, gt_norm = 0.0;
-    for (int i = 0; i < 8; i++) {
-        dot += dot_parts[i];
-        res_norm += res_norm_parts[i];
-        gt_norm += gt_norm_parts[i];
-    }
-
-    /* Handle remainder with scalar code */
-    for (size_t i = simd_iters * 8; i < data_size; i++) {
-        dot += result[i] * ground_truth[i];
-        res_norm += result[i] * result[i];
-        gt_norm += ground_truth[i] * ground_truth[i];
-    }
-    res_norm = sqrt(res_norm);
-    gt_norm = sqrt(gt_norm);
-
-    return (res_norm > 0.0 && gt_norm > 0.0) ? (dot / (res_norm * gt_norm)) : 0.0;
-}
-#endif
-
-#if defined(__ARM_NEON)
-double not_stisla_cosine_similarity_neon(
-    const float* result,
-    const float* ground_truth,
-    size_t data_size
-) {
-    float32x4_t dot_sum = vdupq_n_f32(0.0f);
-    float32x4_t res_norm_sum = vdupq_n_f32(0.0f);
-    float32x4_t gt_norm_sum = vdupq_n_f32(0.0f);
-
-    size_t simd_iters = data_size / 4;
-    for (size_t i = 0; i < simd_iters; i++) {
-        float32x4_t res_vec = vld1q_f32(&result[i * 4]);
-        float32x4_t gt_vec = vld1q_f32(&ground_truth[i * 4]);
-
-        dot_sum = vfmaq_f32(dot_sum, res_vec, gt_vec);
-        res_norm_sum = vfmaq_f32(res_norm_sum, res_vec, res_vec);
-        gt_norm_sum = vfmaq_f32(gt_norm_sum, gt_vec, gt_vec);
-    }
-
-    double dot = (double)(vgetq_lane_f32(dot_sum, 0) + vgetq_lane_f32(dot_sum, 1) + 
-                          vgetq_lane_f32(dot_sum, 2) + vgetq_lane_f32(dot_sum, 3));
-    double res_norm = (double)(vgetq_lane_f32(res_norm_sum, 0) + vgetq_lane_f32(res_norm_sum, 1) + 
-                               vgetq_lane_f32(res_norm_sum, 2) + vgetq_lane_f32(res_norm_sum, 3));
-    double gt_norm = (double)(vgetq_lane_f32(gt_norm_sum, 0) + vgetq_lane_f32(gt_norm_sum, 1) + 
-                              vgetq_lane_f32(gt_norm_sum, 2) + vgetq_lane_f32(gt_norm_sum, 3));
-
-    for (size_t i = simd_iters * 4; i < data_size; i++) {
-        dot += (double)result[i] * (double)ground_truth[i];
-        res_norm += (double)result[i] * (double)result[i];
-        gt_norm += (double)ground_truth[i] * (double)ground_truth[i];
-    }
-    
-    res_norm = sqrt(res_norm);
-    gt_norm = sqrt(gt_norm);
-    
-    return (res_norm > 0.0 && gt_norm > 0.0) ? (dot / (res_norm * gt_norm)) : 0.0;
-}
-#endif
-
-#if defined(__ARM_FEATURE_SVE)
-double not_stisla_cosine_similarity_sve(
-    const float* result,
-    const float* ground_truth,
-    size_t data_size
-) {
-    svfloat32_t dot_sum = svdup_n_f32(0.0f);
-    svfloat32_t res_norm_sum = svdup_n_f32(0.0f);
-    svfloat32_t gt_norm_sum = svdup_n_f32(0.0f);
-
-    uint64_t i = 0;
-    svbool_t pg = svwhilelt_b32(i, data_size);
-    do {
-        svfloat32_t res_vec = svld1_f32(pg, &result[i]);
-        svfloat32_t gt_vec = svld1_f32(pg, &ground_truth[i]);
-
-        dot_sum = svmla_f32_m(pg, dot_sum, res_vec, gt_vec);
-        res_norm_sum = svmla_f32_m(pg, res_norm_sum, res_vec, res_vec);
-        gt_norm_sum = svmla_f32_m(pg, gt_norm_sum, gt_vec, gt_vec);
-
-        i += svcntw();
-        pg = svwhilelt_b32(i, data_size);
-    } while (svptest_any(svptrue_b32(), pg));
-
-    double dot = (double)svaddv_f32(svptrue_b32(), dot_sum);
-    double res_norm = (double)svaddv_f32(svptrue_b32(), res_norm_sum);
-    double gt_norm = (double)svaddv_f32(svptrue_b32(), gt_norm_sum);
-
-    res_norm = sqrt(res_norm);
-    gt_norm = sqrt(gt_norm);
-
-    return (res_norm > 0.0 && gt_norm > 0.0) ? (dot / (res_norm * gt_norm)) : 0.0;
-}
-#endif
-
-/**
- * Scalar cosine similarity fallback
- */
-double not_stisla_cosine_similarity_scalar(
-    const float* result,
-    const float* ground_truth,
-    size_t data_size
-) {
-    double dot = 0.0, res_norm = 0.0, gt_norm = 0.0;
-
-    for (size_t i = 0; i < data_size; i++) {
-        dot += (double)result[i] * (double)ground_truth[i];
-        res_norm += (double)result[i] * (double)result[i];
-        gt_norm += (double)ground_truth[i] * (double)ground_truth[i];
-    }
-
-    res_norm = sqrt(res_norm);
-    gt_norm = sqrt(gt_norm);
-
-    return (res_norm > 0.0 && gt_norm > 0.0) ? (dot / (res_norm * gt_norm)) : 0.0;
-}
-
-/**
- * Main verification function
- */
-int not_stisla_verify_result(
-    const void* query,
-    const void* result,
-    const void* ground_truth,
-    const not_stisla_verification_config_t* config,
-    not_stisla_verification_result_t* verification_result
-) {
-    (void)query;  /* Reserved for future query-based verification */
-    /* Initialize result */
-    verification_result->is_valid = 0;
-    verification_result->confidence = 0.0;
-    verification_result->accuracy = 0.0;
-    verification_result->verification_time_us = 0;
-
-    /* Perform actual verification based on configuration */
-    if (!result) {
-        return -1; /* No result provided */
-    }
-
-    /* Check result structure validity */
-    verification_result->is_valid = 1;
-
-    /* Perform verification based on mode */
-    switch (config->mode) {
-        case NOT_STISLA_VERIFY_NONE:
-            verification_result->confidence = 1.0;
-            verification_result->accuracy = 1.0;
-            break;
-
-        case NOT_STISLA_VERIFY_FAST:
-            /* Fast verification using SIMD-accelerated similarity */
-            if (ground_truth) {
-                /* Use SIMD-accelerated cosine similarity for speed */
-                double similarity_score;
-#ifdef __AVX2__
-                uint32_t cpu_features = not_stisla_detect_cpu_features();
-                if (cpu_features & NOT_STISLA_CPU_AVX2) {
-                    similarity_score = not_stisla_cosine_similarity_avx2(
-                        (const float*)result, (const float*)ground_truth, 1024); /* Check first 1024 elements */
-                } else {
-#endif
-                    similarity_score = not_stisla_cosine_similarity_scalar(
-                        (const float*)result, (const float*)ground_truth, 1024);
-                    (void)similarity_score; /* Use the variable to avoid warning */
-#ifdef __AVX2__
-                }
-#endif
-                verification_result->accuracy = similarity_score;
-                verification_result->confidence = fmin(0.95, similarity_score + 0.1);
-            } else {
-                verification_result->confidence = 0.8;
-                verification_result->accuracy = 0.75;
-            }
-            break;
-
-        case NOT_STISLA_VERIFY_WINDOW:
-            /* Window-based verification with statistical validation */
-            if (ground_truth) {
-                /* Use statistical similarity for distribution comparison */
-                double stat_similarity = not_stisla_calculate_similarity(result, ground_truth);
-                double consistency_score = not_stisla_check_structural_integrity(result);
-
-                verification_result->accuracy = (stat_similarity + consistency_score) / 2.0;
-                verification_result->confidence = fmin(0.96, verification_result->accuracy + 0.1);
-            } else {
-                verification_result->confidence = 0.85;
-                verification_result->accuracy = 0.8;
-            }
-            break;
-
-        case NOT_STISLA_VERIFY_FALLBACK:
-            /* Fallback verification with multiple approaches */
-            if (ground_truth) {
-                /* Use SIMD similarity as primary, statistical as fallback */
-                double primary_similarity, fallback_similarity;
-                uint32_t cpu_features = not_stisla_detect_cpu_features();
-#if defined(__ARM_FEATURE_SVE)
-                if (cpu_features & NOT_STISLA_CPU_SVE) {
-                    primary_similarity = not_stisla_cosine_similarity_sve(
-                        (const float*)result, (const float*)ground_truth, 1024);
-                } else
-#endif
-#if defined(__ARM_NEON)
-                if (cpu_features & NOT_STISLA_CPU_NEON) {
-                    primary_similarity = not_stisla_cosine_similarity_neon(
-                        (const float*)result, (const float*)ground_truth, 1024);
-                } else
-#endif
-#if defined(__AVX2__)
-                if (cpu_features & NOT_STISLA_CPU_AVX2) {
-                    primary_similarity = not_stisla_cosine_similarity_avx2(
-                        (const float*)result, (const float*)ground_truth, 1024);
-                } else
-#endif
-                {
-                    primary_similarity = not_stisla_cosine_similarity_scalar(
-                        (const float*)result, (const float*)ground_truth, 1024);
-                }
-
-                fallback_similarity = not_stisla_calculate_similarity(result, ground_truth);
-                double consistency = not_stisla_check_structural_integrity(result);
-
-                verification_result->accuracy = (primary_similarity + fallback_similarity + consistency) / 3.0;
-                verification_result->confidence = fmin(0.97, verification_result->accuracy + 0.05);
-            } else {
-                verification_result->confidence = 0.9;
-                verification_result->accuracy = 0.85;
-            }
-            break;
-
-        case NOT_STISLA_VERIFY_EXACT:
-            /* Exact verification with RFF-based methods */
-            if (ground_truth) {
-                /* Use RFF and statistical validation */
-                double rff_similarity = not_stisla_calculate_similarity(result, ground_truth);
-                double structural_integrity = not_stisla_check_structural_integrity(result);
-
-                verification_result->accuracy = (rff_similarity + structural_integrity) / 2.0;
-                verification_result->confidence = fmin(0.98, verification_result->accuracy + 0.02);
-            } else {
-                verification_result->confidence = 0.95;
-                verification_result->accuracy = 0.9;
-            }
-            break;
-
-        case NOT_STISLA_VERIFY_PRECISION:
-            /* Precision mode: Use comprehensive multi-method similarity */
-            if (ground_truth) {
-                /* Use all available precision methods with adaptive weighting */
-                double similarities[3] = {0.0};
-                double weights[3] = {0.4, 0.4, 0.2}; /* SIMD, statistical, structural */
-
-                /* 1. SIMD-accelerated cosine similarity */
-                uint32_t cpu_features = not_stisla_detect_cpu_features();
-#if defined(__ARM_FEATURE_SVE)
-                if (cpu_features & NOT_STISLA_CPU_SVE) {
-                    const float* res = (const float*)result;
-                    const float* gt = (const float*)ground_truth;
-                    similarities[0] = not_stisla_cosine_similarity_sve(res, gt, 1024);
-                } else
-#endif
-#if defined(__ARM_NEON)
-                if (cpu_features & NOT_STISLA_CPU_NEON) {
-                    const float* res = (const float*)result;
-                    const float* gt = (const float*)ground_truth;
-                    similarities[0] = not_stisla_cosine_similarity_neon(res, gt, 1024);
-                } else
-#endif
-#if defined(__AVX2__)
-                if (cpu_features & NOT_STISLA_CPU_AVX2) {
-                    const float* res = (const float*)result;
-                    const float* gt = (const float*)ground_truth;
-                    similarities[0] = not_stisla_cosine_similarity_avx2(res, gt, 1024);
-                } else
-#endif
-                {
-                    similarities[0] = not_stisla_cosine_similarity_scalar(
-                        (const float*)result, (const float*)ground_truth, 1024);
-                }
-
-                /* 2. Statistical similarity */
-                similarities[1] = not_stisla_calculate_similarity(result, ground_truth);
-
-                /* 3. Structural integrity */
-                similarities[2] = not_stisla_check_structural_integrity(result);
-
-                /* Weighted combination for precision search */
-                double final_similarity = 0.0;
-                for (int i = 0; i < 3; i++) {
-                    final_similarity += weights[i] * similarities[i];
-                }
-
-                verification_result->accuracy = final_similarity;
-                verification_result->confidence = fmin(0.97, final_similarity + 0.01);
-            } else {
-                verification_result->confidence = 0.97;
-                verification_result->accuracy = 0.95;
-            }
-            break;
-
-        default:
-            verification_result->is_valid = 0;
-            return -1; /* Unknown verification mode */
-    }
-
-    /* Set verification time based on mode complexity */
-    switch (config->mode) {
-        case NOT_STISLA_VERIFY_NONE: verification_result->verification_time_us = 10; break;
-        case NOT_STISLA_VERIFY_FAST: verification_result->verification_time_us = 500; break;
-        case NOT_STISLA_VERIFY_WINDOW: verification_result->verification_time_us = 2000; break;
-        case NOT_STISLA_VERIFY_FALLBACK: verification_result->verification_time_us = 5000; break;
-        case NOT_STISLA_VERIFY_EXACT: verification_result->verification_time_us = 10000; break;
-        case NOT_STISLA_VERIFY_PRECISION: verification_result->verification_time_us = 15000; break;
-        default: verification_result->verification_time_us = 1000; break;
-    }
-
-    /* REJECT results below confidence threshold for precision search */
-    if (verification_result->confidence < config->confidence_threshold) {
-        verification_result->is_valid = 0;  /* REJECT - confidence too low */
-        const char* error_msg = "Confidence below precision threshold";
-        verification_result->error_message = malloc(strlen(error_msg) + 1);
-        if (verification_result->error_message) {
-            strcpy(verification_result->error_message, error_msg);
-        }
-        return -1;  /* Return error - result rejected */
-    }
-
-    /* Result passes precision requirements */
-    verification_result->is_valid = 1;
-    return 0;
-}
-
-/**
- * Validate verification configuration
- */
-int not_stisla_verification_config_validate(const not_stisla_verification_config_t* config) {
-    if (!config) {
-        return 0;  /* Invalid: NULL config */
-    }
-
-    /* Validate confidence threshold ranges */
-    if (config->confidence_threshold < 0.0 || config->confidence_threshold > 1.0) {
-        return 0;  /* Invalid: confidence threshold out of range */
-    }
-
-    /* For precision search, enforce minimum 97% confidence threshold */
-    if (config->mode == NOT_STISLA_VERIFY_PRECISION && config->confidence_threshold < 0.97) {
-        return 0;  /* Invalid: precision mode requires 97%+ confidence */
-    }
-
-    /* For all non-NONE modes, enforce minimum 90% confidence for precision search */
-    if (config->mode != NOT_STISLA_VERIFY_NONE && config->confidence_threshold < 0.9) {
-        return 0;  /* Invalid: precision search requires 90%+ confidence */
-    }
-
-    /* Validate max_retries */
-    if (config->max_retries > 100) {
-        return 0;  /* Invalid: max_retries out of reasonable range */
-    }
-
-    /* Validate tolerance */
-    if (config->tolerance < 0.0 || config->tolerance > 1.0) {
-        return 0;  /* Invalid: tolerance out of range */
-    }
-
-    /* Validate performance_budget */
-    if (config->performance_budget < 0.0 || config->performance_budget > 1.0) {
-        return 0;  /* Invalid: performance budget out of range */
-    }
-
-    /* Validate window_size for relevant modes */
-    if ((config->mode == NOT_STISLA_VERIFY_WINDOW || config->mode == NOT_STISLA_VERIFY_PRECISION) &&
-        (config->window_size < 1 || config->window_size > 10000)) {
-        return 0;  /* Invalid: window size out of reasonable range */
-    }
-
-    /* Validate verification mode */
-    if (config->mode < NOT_STISLA_VERIFY_NONE || config->mode > NOT_STISLA_VERIFY_PRECISION) {
-        return 0;  /* Invalid: unknown verification mode */
-    }
-
-    return 1;  /* Configuration is valid */
-}
-
-/**
- * Get verification mode name as string
- */
-const char* not_stisla_verification_mode_name(not_stisla_verification_mode_t mode) {
-    switch (mode) {
-        case NOT_STISLA_VERIFY_NONE: return "NONE";
-        case NOT_STISLA_VERIFY_FAST: return "FAST";
-        case NOT_STISLA_VERIFY_WINDOW: return "WINDOW";
-        case NOT_STISLA_VERIFY_FALLBACK: return "FALLBACK";
-        case NOT_STISLA_VERIFY_EXACT: return "EXACT";
-        case NOT_STISLA_VERIFY_PRECISION: return "PRECISION";
-        default: return "UNKNOWN";
-    }
-}
-
-/* ============================================================================
- * PERFORMANCE TRACKING - QIHSE-INSPIRED STATISTICS
- * ============================================================================ */
-
-/* Global performance statistics */
 static not_stisla_performance_stats_t g_performance_stats = {0};
 static int g_performance_enabled = 0;
 
-/**
- * Get current performance statistics
- */
 int not_stisla_get_performance_stats(not_stisla_performance_stats_t* stats) {
     if (!stats) return -1;
 
@@ -1113,55 +263,28 @@ int not_stisla_get_performance_stats(not_stisla_performance_stats_t* stats) {
     return 0;
 }
 
-/**
- * Reset performance statistics
- */
 void not_stisla_reset_performance_stats(void) {
     memset(&g_performance_stats, 0, sizeof(not_stisla_performance_stats_t));
 }
 
-/**
- * Enable/disable performance tracking
- */
 void not_stisla_set_performance_tracking(int enabled) {
     g_performance_enabled = enabled ? 1 : 0;
 }
 
-/**
- * Check if performance tracking is enabled
- */
 int not_stisla_is_performance_tracking_enabled(void) {
     return g_performance_enabled;
 }
 
-/**
- * Internal function to update performance stats after a search
- */
 static void not_stisla_update_performance_stats(
-    uint64_t total_time_ns,
-    uint64_t dim_calc_time_ns,
-    uint64_t rff_time_ns,
-    uint64_t superposition_time_ns,
-    uint64_t amplification_time_ns,
-    uint64_t collapse_time_ns,
-    uint64_t verification_time_ns,
-    double confidence,
+    uint64_t search_time_ns,
     int search_successful,
     size_t memory_used,
+    uint64_t anchors_learned,
+    uint64_t anchors_pruned,
     uint32_t cpu_features_used
 ) {
-    if (!g_performance_enabled) return;
-
-    /* Update timing stats */
-    g_performance_stats.total_time_ns += total_time_ns;
-    g_performance_stats.dimension_calc_time_ns += dim_calc_time_ns;
-    g_performance_stats.rff_time_ns += rff_time_ns;
-    g_performance_stats.superposition_time_ns += superposition_time_ns;
-    g_performance_stats.amplification_time_ns += amplification_time_ns;
-    g_performance_stats.collapse_time_ns += collapse_time_ns;
-    g_performance_stats.verification_time_ns += verification_time_ns;
-
-    /* Update search statistics */
+    g_performance_stats.total_time_ns += search_time_ns;
+    g_performance_stats.search_time_ns += search_time_ns;
     g_performance_stats.total_searches++;
     if (search_successful) {
         g_performance_stats.successful_searches++;
@@ -1169,17 +292,9 @@ static void not_stisla_update_performance_stats(
     g_performance_stats.search_success_rate =
         (double)g_performance_stats.successful_searches / g_performance_stats.total_searches;
 
-    /* Update confidence and timing averages */
-    double alpha = 1.0 / g_performance_stats.total_searches;
-    g_performance_stats.avg_confidence =
-        (1 - alpha) * g_performance_stats.avg_confidence + alpha * confidence;
+    g_performance_stats.avg_search_time_ns =
+        (double)g_performance_stats.search_time_ns / g_performance_stats.total_searches;
 
-    uint64_t total_ns = g_performance_stats.total_time_ns;
-    if (g_performance_stats.total_searches > 0) {
-        g_performance_stats.avg_search_time_ns = (double)total_ns / g_performance_stats.total_searches;
-    }
-
-    /* Update memory tracking */
     if (memory_used > g_performance_stats.peak_memory_usage) {
         g_performance_stats.peak_memory_usage = memory_used;
     }
@@ -1188,10 +303,10 @@ static void not_stisla_update_performance_stats(
         (g_performance_stats.avg_memory_usage * (g_performance_stats.total_searches - 1) + memory_used) /
         g_performance_stats.total_searches;
 
-    /* Update CPU feature tracking */
+    g_performance_stats.anchors_learned = anchors_learned;
+    g_performance_stats.anchors_pruned = anchors_pruned;
     g_performance_stats.cpu_features_used |= cpu_features_used;
 
-    /* Calculate SIMD efficiency (rough estimate based on CPU features used) */
     int vector_features = 0;
     if (cpu_features_used & NOT_STISLA_CPU_AVX2) vector_features++;
     if (cpu_features_used & NOT_STISLA_CPU_AVX512) vector_features++;
@@ -1203,256 +318,85 @@ static void not_stisla_update_performance_stats(
     if (cpu_features_used & NOT_STISLA_CPU_I8MM) vector_features++;
 
     g_performance_stats.vectorization_efficiency = (double)vector_features / 8.0;
-
-    /* Calculate speedup estimates (rough heuristics) */
-    /* Binary search baseline: O(log n) */
-    /* NOT_STISLA speedup: ~22x based on benchmarks */
-    g_performance_stats.speedup_vs_binary = 22.0;
-
-    /* Quantum speedup: additional ~2-5x for large arrays */
-    g_performance_stats.speedup_vs_classical = g_performance_stats.speedup_vs_binary *
-        (1.0 + 0.1 * g_performance_stats.vectorization_efficiency);
+    g_performance_stats.speedup_vs_binary = 0.0; /* Benchmark harnesses compute baseline-relative speedup. */
 }
 
-/**
- * Estimate memory usage for quantum search with given dimensions
- */
-size_t not_stisla_estimate_memory_usage(
-    size_t dims,
-    const not_stisla_problem_characteristics_t* characteristics
-) {
-    if (!characteristics) return 0;
-
-    /* Estimate memory for RFF kernel */
-    size_t rff_memory = dims * characteristics->input_size * sizeof(double) * 2; /* omega + bias */
-
-    /* Estimate memory for superposition */
-    size_t superposition_memory = dims * characteristics->input_size * sizeof(double) * 2; /* real + imag */
-
-    /* Estimate memory for intermediate buffers */
-    size_t buffer_memory = dims * sizeof(double) * 4; /* Various temp buffers */
-
-    return rff_memory + superposition_memory + buffer_memory;
-}
-
-/**
- * Calculate dimensions with memory budget constraints
- */
-size_t not_stisla_calculate_dimensions_with_memory(
-    const not_stisla_problem_characteristics_t* characteristics,
-    size_t memory_budget,
-    const not_stisla_dimension_config_t* config
-) {
-    if (!characteristics || !config) return config ? config->min_dims : 8;
-
-    /* Calculate maximum dimensions that fit in memory */
-    /* Assume each dimension stores: input_size * sizeof(double) for projections */
-    size_t max_dims = memory_budget / (characteristics->input_size * sizeof(double));
-    if (max_dims == 0) max_dims = config->min_dims;
-
-    /* Take minimum of calculated optimal and memory-limited */
-    size_t optimal_dims = not_stisla_calculate_optimal_dimensions(characteristics, config);
-
-    return not_stisla_clamp_dimensions(max_dims < optimal_dims ? max_dims : optimal_dims, config);
-}
-
-/**
- * Get recommended memory budget for quantum search
- */
-size_t not_stisla_get_recommended_memory_budget(size_t array_size) {
-    /* Base memory budget scales with array size */
-    size_t base_budget = array_size * sizeof(double) * 64; /* 64 dimensions baseline */
-
-    /* Cap at reasonable maximum */
-    const size_t max_budget = NOT_STISLA_MEMORY_BUDGET_MB * 1024 * 1024; /* Convert MB to bytes */
-    if (base_budget > max_budget) base_budget = max_budget;
-
-    /* Minimum budget */
-    const size_t min_budget = 1024 * 1024; /* 1MB minimum */
-    if (base_budget < min_budget) base_budget = min_budget;
-
-    return base_budget;
-}
-
-/* ============================================================================
- * CONFIGURATION SYSTEM - COMPREHENSIVE SETTINGS
- * ============================================================================ */
-
-/**
- * Initialize master configuration with defaults
- */
 void not_stisla_config_init(not_stisla_config_t* config, int workload_type) {
     if (!config) return;
 
     memset(config, 0, sizeof(not_stisla_config_t));
-
-    /* Basic search settings */
-    config->tol = 8; /* Default tolerance */
-    config->enable_anchor_learning = 1; /* Enable anchor learning by default */
-
-    /* Initialize quantum configuration */
-    not_stisla_enhanced_quantum_config_init(&config->quantum, workload_type);
-
-    /* Performance monitoring */
-    config->enable_profiling = 0; /* Disabled by default for performance */
-
-    /* Validation */
-    config->strict_mode = 1; /* Enable strict validation */
-}
-
-/**
- * Initialize enhanced quantum configuration with defaults
- */
-void not_stisla_enhanced_quantum_config_init(not_stisla_enhanced_quantum_config_t* config, int workload_type) {
-    if (!config) return;
-
-    memset(config, 0, sizeof(not_stisla_quantum_config_t));
-
-    /* Enable quantum search for large arrays */
-    config->enable_quantum_search = 1;
-
-    /* Initialize dimension calculation */
-    not_stisla_dimension_config_init(&config->dimensions);
-
-    /* RFF kernel settings */
-    config->rff_gamma = 1.0; /* Standard RBF parameter */
-    config->rff_seed = 42; /* Default seed */
-
-    /* Initialize verification */
-    not_stisla_verification_config_init(&config->verification, NOT_STISLA_VERIFY_PRECISION);
-
-    /* Performance settings */
-    config->enable_performance_tracking = 0; /* Disabled by default */
-    config->performance_budget = 0.1; /* 100ms budget */
-
-    /* Memory settings */
-    config->memory_budget = NOT_STISLA_MEMORY_BUDGET_MB * 1024 * 1024;
-    config->adaptive_memory = 1; /* Enable adaptive memory */
-
-    /* Workload optimization */
     config->workload_type = workload_type;
-    config->optimize_for_workload = 1;
-
-    /* SIMD settings */
-    config->enable_simd = 1; /* Enable SIMD by default */
-    config->force_cpu_features = 0; /* Auto-detect */
-
-    /* Quantum-specific settings */
-    config->quantum_threshold = 10000; /* Enable quantum for arrays > 10K */
-    config->quantum_confidence_min = 0.97; /* 97% minimum confidence */
-    config->quantum_fallback_enabled = 1; /* Enable fallback */
-
-    /* AWS Graviton4 Auto-Optimization: Tune for Neoverse V2 pipeline depth */
-    uint32_t cpu_features = not_stisla_detect_cpu_features();
-    if (cpu_features & NOT_STISLA_CPU_GRAVITON4) {
-        /* Default to precision-optimized quantum exploration for ARM */
-        config->verification.window_size = 64; 
-    }
-
-    /* Optimize for workload type */
-    not_stisla_config_optimize_for_workload((not_stisla_config_t*)config, workload_type);
+    config->tol = 8;
+    config->enable_anchor_learning = 1;
+    config->max_anchors = 64;
+    config->enable_simd = 1;
+    config->force_cpu_features = 0;
+    config->enable_profiling = 0;
+    config->strict_mode = 1;
+    not_stisla_config_optimize_for_workload(config, workload_type);
 }
 
-/**
- * Validate configuration
- */
 int not_stisla_config_validate(const not_stisla_config_t* config) {
     if (!config) return 0;
-
-    /* Validate basic settings */
     if (config->tol == 0 || config->tol > 1000) return 0;
-
-    /* Validate quantum configuration */
-    if (config->quantum.enable_quantum_search) {
-        if (config->quantum.quantum_threshold < 100) return 0; /* Minimum threshold */
-        if (config->quantum.quantum_confidence_min < 0.9 || config->quantum.quantum_confidence_min > 1.0) return 0;
-        if (config->quantum.memory_budget < 1024 * 1024) return 0; /* Minimum 1MB */
-        if (!not_stisla_verification_config_validate(&config->quantum.verification)) return 0;
+    if (config->max_anchors != 0 &&
+        (config->max_anchors < NOT_STISLA_MIN_ANCHORS ||
+         config->max_anchors > NOT_STISLA_MAX_ANCHORS)) return 0;
+    if (config->workload_type < NOT_STISLA_WORKLOAD_TELEMETRY ||
+        config->workload_type > NOT_STISLA_WORKLOAD_EVENTS) return 0;
+    if (config->strict_mode) {
+        if (config->enable_anchor_learning != 0 && config->enable_anchor_learning != 1) return 0;
+        if (config->enable_simd != 0 && config->enable_simd != 1) return 0;
+        if (config->enable_profiling != 0 && config->enable_profiling != 1) return 0;
     }
-
-    /* Validate workload type */
-    if (config->quantum.workload_type < 0 || config->quantum.workload_type > 3) return 0;
-
-    return 1; /* Configuration is valid */
+    return 1;
 }
 
-/**
- * Optimize configuration for specific workload
- */
 void not_stisla_config_optimize_for_workload(not_stisla_config_t* config, int workload_type) {
     if (!config) return;
 
-    config->quantum.workload_type = workload_type;
+    config->workload_type = workload_type;
 
     switch (workload_type) {
         case NOT_STISLA_WORKLOAD_TELEMETRY:
-            /* Telemetry: Variable gaps, higher tolerance */
             config->tol = 12;
-            config->quantum.dimensions.target_accuracy = 0.9; /* Slightly lower accuracy acceptable */
-            config->quantum.verification.mode = NOT_STISLA_VERIFY_FAST; /* Faster verification */
-            config->quantum.memory_budget = 16 * 1024 * 1024; /* More memory for anchors */
+            config->max_anchors = 20;
             break;
-
         case NOT_STISLA_WORKLOAD_IDS:
-            /* IDs: More uniform, lower tolerance */
             config->tol = 6;
-            config->quantum.dimensions.target_accuracy = 0.95; /* Higher accuracy needed */
-            config->quantum.verification.mode = NOT_STISLA_VERIFY_PRECISION; /* Precise verification */
-            config->quantum.memory_budget = 8 * 1024 * 1024; /* Standard memory */
+            config->max_anchors = 8;
             break;
-
         case NOT_STISLA_WORKLOAD_OFFSETS:
-            /* Offsets: Exponential patterns, higher tolerance */
             config->tol = 16;
-            config->quantum.dimensions.target_accuracy = 0.92; /* Moderate accuracy */
-            config->quantum.verification.mode = NOT_STISLA_VERIFY_FALLBACK; /* Robust verification */
-            config->quantum.memory_budget = 24 * 1024 * 1024; /* More memory for complex patterns */
+            config->max_anchors = 24;
             break;
-
         case NOT_STISLA_WORKLOAD_EVENTS:
-            /* Events: Burst patterns, medium tolerance */
             config->tol = 10;
-            config->quantum.dimensions.target_accuracy = 0.93; /* Good accuracy */
-            config->quantum.verification.mode = NOT_STISLA_VERIFY_WINDOW; /* Window verification */
-            config->quantum.memory_budget = 12 * 1024 * 1024; /* Medium memory */
+            config->max_anchors = 16;
             break;
-
         default:
-            /* Default settings */
+            config->workload_type = NOT_STISLA_WORKLOAD_IDS;
             config->tol = 8;
-            config->quantum.dimensions.target_accuracy = 0.95;
-            config->quantum.verification.mode = NOT_STISLA_VERIFY_PRECISION;
-            config->quantum.memory_budget = NOT_STISLA_MEMORY_BUDGET_MB * 1024 * 1024;
+            config->max_anchors = 64;
             break;
     }
 }
 
-/**
- * Get configuration for quantum search
- */
-void not_stisla_get_quantum_config(size_t array_size, not_stisla_config_t* config) {
+void not_stisla_get_tuned_config(size_t array_size, not_stisla_config_t* config) {
     if (!config) return;
 
-    /* Initialize with defaults */
-    not_stisla_config_init(config, NOT_STISLA_WORKLOAD_TELEMETRY); /* Default workload */
+    not_stisla_config_init(config, NOT_STISLA_WORKLOAD_IDS);
 
-    /* Adjust settings based on array size */
     if (array_size < 1000) {
-        /* Small arrays: disable quantum search */
-        config->quantum.enable_quantum_search = 0;
+        config->tol = 6;
+        config->max_anchors = 8;
     } else if (array_size < 10000) {
-        /* Medium arrays: enable with conservative settings */
-        config->quantum.quantum_threshold = 5000;
-        config->quantum.verification.mode = NOT_STISLA_VERIFY_FAST;
+        config->tol = 8;
+        config->max_anchors = 16;
     } else {
-        /* Large arrays: enable with full quantum search */
-        config->quantum.quantum_threshold = 10000;
-        config->quantum.verification.mode = NOT_STISLA_VERIFY_PRECISION;
-        config->quantum.enable_performance_tracking = 1; /* Track performance for large arrays */
+        config->tol = 12;
+        config->max_anchors = 64;
     }
-
-    /* Adjust memory budget based on array size */
-    config->quantum.memory_budget = not_stisla_get_recommended_memory_budget(array_size);
 }
 
 /* ============================================================================
@@ -1472,18 +416,10 @@ const char* not_stisla_error_message(not_stisla_error_t error) {
             return "Memory allocation failure";
         case NOT_STISLA_ERROR_NOT_FOUND:
             return "Item not found";
-        case NOT_STISLA_ERROR_VERIFICATION:
-            return "Verification failure";
-        case NOT_STISLA_ERROR_DIMENSION:
-            return "Dimension calculation error";
-        case NOT_STISLA_ERROR_RFF:
-            return "RFF kernel error";
         case NOT_STISLA_ERROR_CONFIG:
             return "Configuration error";
         case NOT_STISLA_ERROR_CPU_FEATURE:
             return "CPU feature detection error";
-        case NOT_STISLA_ERROR_QUANTUM:
-            return "Quantum search error";
         default:
             return "Unknown error";
     }
@@ -1500,363 +436,6 @@ __attribute__((unused)) static not_stisla_error_t not_stisla_validate_anchor_tab
     return NOT_STISLA_SUCCESS;
 }
 
-/**
- * Validate search parameters
- */
-static not_stisla_error_t not_stisla_validate_search_params(
-    const int64_t* arr, size_t n, int64_t key __attribute__((unused)), const not_stisla_config_t* config
-) {
-    if (!arr || n == 0) return NOT_STISLA_ERROR_INVALID_PARAM;
-    if (!config) return NOT_STISLA_ERROR_INVALID_PARAM;
-    if (config->tol == 0 || config->tol > 1000) return NOT_STISLA_ERROR_INVALID_PARAM;
-    if (!not_stisla_config_validate(config)) return NOT_STISLA_ERROR_CONFIG;
-    return NOT_STISLA_SUCCESS;
-}
-
-/**
- * Validate quantum search parameters
- */
-static not_stisla_error_t not_stisla_validate_quantum_params(
-    const not_stisla_config_t* config, size_t array_size
-) {
-    if (!config) return NOT_STISLA_ERROR_INVALID_PARAM;
-    if (!config->quantum.enable_quantum_search) return NOT_STISLA_SUCCESS; /* Not using quantum */
-
-    if (array_size < config->quantum.quantum_threshold) return NOT_STISLA_SUCCESS; /* Too small for quantum */
-
-    if (config->quantum.memory_budget < 1024 * 1024) return NOT_STISLA_ERROR_CONFIG; /* Minimum 1MB */
-    if (config->quantum.quantum_confidence_min < 0.9 || config->quantum.quantum_confidence_min > 1.0) {
-        return NOT_STISLA_ERROR_CONFIG;
-    }
-
-    return NOT_STISLA_SUCCESS;
-}
-
-/* ============================================================================
- * ENHANCED QUANTUM SEARCH - INTEGRATION OF ALL QIHSE FEATURES
- * ============================================================================ */
-
-/* Forward declaration for anchor learning (used in enhanced quantum search) */
-static void not_stisla_learn_anchor(not_stisla_anchor_table_t* table, int64_t value, size_t index, size_t pred, size_t tol);
-
-/**
- * Enhanced quantum search with full QIHSE integration
- */
-not_stisla_result_t not_stisla_enhanced_quantum_search(
-    const int64_t* arr,
-    size_t n,
-    int64_t key,
-    not_stisla_anchor_table_t* table,
-    const not_stisla_config_t* config
-) {
-    not_stisla_error_t validation_error;
-
-    /* Validate inputs */
-    validation_error = not_stisla_validate_search_params(arr, n, key, config);
-    if (validation_error != NOT_STISLA_SUCCESS) {
-        return NOT_STISLA_NOT_FOUND;
-    }
-
-    /* Validate quantum parameters */
-    validation_error = not_stisla_validate_quantum_params(config, n);
-    if (validation_error != NOT_STISLA_SUCCESS) {
-        /* Fall back to classical search */
-        return not_stisla_search(arr, n, key, table, config->tol);
-    }
-
-    /* Enable performance tracking if configured */
-    int original_performance_enabled = g_performance_enabled;
-    if (config->quantum.enable_performance_tracking) {
-        not_stisla_set_performance_tracking(1);
-    }
-
-    /* Initialize timing variables */
-    struct timespec search_start, search_end;
-    uint64_t total_time_ns = 0;
-
-    if (g_performance_enabled) {
-        clock_gettime(CLOCK_MONOTONIC, &search_start);
-    }
-
-    /* Step 1: Analyze problem characteristics */
-    struct timespec dim_start, dim_end;
-    uint64_t dim_calc_time_ns = 0;
-
-    if (g_performance_enabled) {
-        clock_gettime(CLOCK_MONOTONIC, &dim_start);
-    }
-
-    not_stisla_problem_characteristics_t characteristics;
-    if (not_stisla_analyze_problem_characteristics(arr, n, &characteristics) != 0) {
-        not_stisla_set_performance_tracking(original_performance_enabled);
-        return not_stisla_search(arr, n, key, table, config->tol);
-    }
-
-    /* Step 2: Calculate optimal dimensions */
-    size_t optimal_dims = not_stisla_calculate_dimensions_with_memory(
-        &characteristics, config->quantum.memory_budget, &config->quantum.dimensions);
-    
-    /* Limit dimensions for performance - too many dimensions make RFF projection too expensive */
-    /* For arrays < 100K, use max 64 dimensions; for larger arrays, use max 128 */
-    size_t max_practical_dims = (n < 100000) ? 64 : 128;
-    if (optimal_dims > max_practical_dims) {
-        optimal_dims = max_practical_dims;
-    }
-
-    if (g_performance_enabled) {
-        clock_gettime(CLOCK_MONOTONIC, &dim_end);
-        dim_calc_time_ns = (dim_end.tv_sec - dim_start.tv_sec) * 1000000000LL +
-                          (dim_end.tv_nsec - dim_start.tv_nsec);
-    }
-
-    /* Step 3: Create RFF kernel */
-    struct timespec rff_start, rff_end;
-    uint64_t rff_time_ns = 0;
-
-    if (g_performance_enabled) {
-        clock_gettime(CLOCK_MONOTONIC, &rff_start);
-    }
-
-    not_stisla_rff_kernel_t* rff_kernel = not_stisla_rff_create(
-        1, optimal_dims, config->quantum.rff_gamma, config->quantum.rff_seed);
-
-    if (!rff_kernel) {
-        not_stisla_set_performance_tracking(original_performance_enabled);
-        return not_stisla_search(arr, n, key, table, config->tol);
-    }
-
-    if (g_performance_enabled) {
-        clock_gettime(CLOCK_MONOTONIC, &rff_end);
-        rff_time_ns = (rff_end.tv_sec - rff_start.tv_sec) * 1000000000LL +
-                     (rff_end.tv_nsec - rff_start.tv_nsec);
-    }
-
-    /* Step 4: Project data to Hilbert space */
-    struct timespec proj_start, proj_end;
-    uint64_t superposition_time_ns = 0;
-
-    if (g_performance_enabled) {
-        clock_gettime(CLOCK_MONOTONIC, &proj_start);
-    }
-
-    /* Convert array to double for RFF projection */
-    double* rff_projections = malloc(n * optimal_dims * sizeof(double));
-    if (!rff_projections) {
-        not_stisla_rff_destroy(rff_kernel);
-        not_stisla_set_performance_tracking(original_performance_enabled);
-        return not_stisla_search(arr, n, key, table, config->tol);
-    }
-
-    /* Project all array elements using batch projection for better performance */
-    /* Convert array to double format for batch projection */
-    double* arr_double = malloc(n * sizeof(double));
-    if (!arr_double) {
-        free(rff_projections);
-        not_stisla_rff_destroy(rff_kernel);
-        not_stisla_set_performance_tracking(original_performance_enabled);
-        return not_stisla_search(arr, n, key, table, config->tol);
-    }
-    
-    for (size_t i = 0; i < n; i++) {
-        arr_double[i] = (double)arr[i];
-    }
-    
-    /* Use batch projection if available, otherwise individual projections */
-    not_stisla_rff_project_batch(rff_kernel, arr_double, rff_projections, n);
-    
-    free(arr_double);
-
-    /* Project query */
-    double query_double[1] = { (double)key };
-    double* query_projection = malloc(optimal_dims * sizeof(double));
-    if (!query_projection) {
-        free(rff_projections);
-        not_stisla_rff_destroy(rff_kernel);
-        not_stisla_set_performance_tracking(original_performance_enabled);
-        return not_stisla_search(arr, n, key, table, config->tol);
-    }
-#pragma GCC diagnostic push
-#pragma GCC diagnostic ignored "-Wmaybe-uninitialized"
-    not_stisla_rff_project(rff_kernel, query_double, query_projection);
-#pragma GCC diagnostic pop
-
-    if (g_performance_enabled) {
-        clock_gettime(CLOCK_MONOTONIC, &proj_end);
-        superposition_time_ns = (proj_end.tv_sec - proj_start.tv_sec) * 1000000000LL +
-                               (proj_end.tv_nsec - proj_start.tv_nsec);
-    }
-
-    /* Step 5: Perform quantum-inspired search (simplified) */
-    struct timespec amp_start, amp_end;
-    uint64_t amplification_time_ns = 0;
-
-    if (g_performance_enabled) {
-        clock_gettime(CLOCK_MONOTONIC, &amp_start);
-    }
-
-    /* Step 5: Perform quantum-inspired search (amplitude amplification) */
-    if (g_performance_enabled) {
-        clock_gettime(CLOCK_MONOTONIC, &amp_start);
-    }
-
-    /* Find best match using cosine similarity in Hilbert space */
-    size_t best_match = NOT_STISLA_NOT_FOUND;
-    double best_similarity = -1.0;
-
-    /* Pre-convert all projections to float for SIMD efficiency */
-    float* query_float = malloc(optimal_dims * sizeof(float));
-    float* rff_projections_float = malloc(n * optimal_dims * sizeof(float));
-    if (!query_float || !rff_projections_float) {
-        if (query_float) free(query_float);
-        if (rff_projections_float) free(rff_projections_float);
-        free(query_projection);
-        free(rff_projections);
-        not_stisla_rff_destroy(rff_kernel);
-        not_stisla_set_performance_tracking(original_performance_enabled);
-        return not_stisla_search(arr, n, key, table, config->tol);
-    }
-
-    /* Convert query once */
-    for (size_t d = 0; d < optimal_dims; d++) {
-        query_float[d] = (float)query_projection[d];
-    }
-
-    /* Convert all projections once (better cache locality) */
-    for (size_t i = 0; i < n * optimal_dims; i++) {
-        rff_projections_float[i] = (float)rff_projections[i];
-    }
-
-    /* Check if we can use SIMD-accelerated similarity */
-    uint32_t cpu_features = not_stisla_detect_cpu_features();
-    int use_simd = (cpu_features & NOT_STISLA_CPU_AVX2) && (optimal_dims >= 8);
-
-    if (use_simd) {
-#ifdef __AVX2__
-        /* Use SIMD-accelerated search */
-        for (size_t i = 0; i < n; i++) {
-            const float* candidate = &rff_projections_float[i * optimal_dims];
-            double similarity = not_stisla_cosine_similarity_avx2(
-                query_float, candidate, optimal_dims);
-
-            if (similarity > best_similarity) {
-                best_similarity = similarity;
-                best_match = i;
-            }
-        }
-#else
-        use_simd = 0; /* Fallback if AVX2 not compiled */
-#endif
-    }
-
-    if (!use_simd) {
-        /* Scalar fallback */
-        for (size_t i = 0; i < n; i++) {
-            const float* candidate = &rff_projections_float[i * optimal_dims];
-            double similarity = not_stisla_cosine_similarity_scalar(
-                query_float, candidate, optimal_dims);
-
-            if (similarity > best_similarity) {
-                best_similarity = similarity;
-                best_match = i;
-            }
-        }
-    }
-
-    free(rff_projections_float);
-    free(query_float);
-
-    if (g_performance_enabled) {
-        clock_gettime(CLOCK_MONOTONIC, &amp_end);
-        amplification_time_ns = (amp_end.tv_sec - amp_start.tv_sec) * 1000000000LL +
-                               (amp_end.tv_nsec - amp_start.tv_nsec);
-    }
-
-    if (g_performance_enabled) {
-        clock_gettime(CLOCK_MONOTONIC, &amp_end);
-        amplification_time_ns = (amp_end.tv_sec - amp_start.tv_sec) * 1000000000LL +
-                               (amp_end.tv_nsec - amp_start.tv_nsec);
-    }
-
-    /* Step 6: Verification */
-    struct timespec verify_start, verify_end;
-    uint64_t verification_time_ns = 0;
-
-    if (g_performance_enabled) {
-        clock_gettime(CLOCK_MONOTONIC, &verify_start);
-    }
-
-    not_stisla_verification_result_t verification_result;
-    not_stisla_verify_result(
-        query_double, query_projection, best_match != NOT_STISLA_NOT_FOUND ? &rff_projections[best_match * optimal_dims] : NULL,
-        &config->quantum.verification, &verification_result);
-
-    if (g_performance_enabled) {
-        clock_gettime(CLOCK_MONOTONIC, &verify_end);
-        verification_time_ns = (verify_end.tv_sec - verify_start.tv_sec) * 1000000000LL +
-                              (verify_end.tv_nsec - verify_start.tv_nsec);
-    }
-
-    /* Step 7: Dimensional collapse (verify result) */
-    struct timespec collapse_start, collapse_end;
-    uint64_t collapse_time_ns = 0;
-
-    if (g_performance_enabled) {
-        clock_gettime(CLOCK_MONOTONIC, &collapse_start);
-    }
-
-    size_t final_result = NOT_STISLA_NOT_FOUND;
-
-    /* Check if verification passed and result is valid */
-    if (verification_result.is_valid && best_match != NOT_STISLA_NOT_FOUND) {
-        /* Additional validation: check actual array value */
-        if (arr[best_match] == key) {
-            final_result = best_match;
-        }
-    }
-
-    if (g_performance_enabled) {
-        clock_gettime(CLOCK_MONOTONIC, &collapse_end);
-        collapse_time_ns = (collapse_end.tv_sec - collapse_start.tv_sec) * 1000000000LL +
-                          (collapse_end.tv_nsec - collapse_start.tv_nsec);
-    }
-
-    /* Step 8: Update performance statistics */
-    if (g_performance_enabled) {
-        clock_gettime(CLOCK_MONOTONIC, &search_end);
-        total_time_ns = (search_end.tv_sec - search_start.tv_sec) * 1000000000LL +
-                       (search_end.tv_nsec - search_start.tv_nsec);
-
-        not_stisla_update_performance_stats(
-            total_time_ns, dim_calc_time_ns, rff_time_ns, superposition_time_ns,
-            amplification_time_ns, collapse_time_ns, verification_time_ns,
-            verification_result.confidence, final_result != NOT_STISLA_NOT_FOUND,
-            n * optimal_dims * sizeof(double) + optimal_dims * sizeof(double),
-            not_stisla_detect_cpu_features());
-    }
-
-    /* Cleanup */
-    free(query_projection);
-    free(rff_projections);
-    not_stisla_rff_destroy(rff_kernel);
-    not_stisla_verification_result_destroy(&verification_result);
-
-    /* Restore original performance tracking setting */
-    not_stisla_set_performance_tracking(original_performance_enabled);
-
-    /* Learn from successful search */
-    if (final_result != NOT_STISLA_NOT_FOUND && table) {
-        not_stisla_learn_anchor(table, arr[final_result], final_result, best_match, config->tol);
-        table->searches_performed++;
-    }
-
-    /* If quantum search failed confidence check, fallback to classical */
-    if (!verification_result.is_valid || verification_result.confidence < config->quantum.quantum_confidence_min) {
-        return not_stisla_search(arr, n, key, table, config->tol);
-    }
-
-    return final_result;
-}
-
 /* DSMIL workload types are now defined in the header file */
 
 /* Forward declarations */
@@ -1865,7 +444,7 @@ static inline int64_t not_stisla_interpolate(int64_t l_val, int64_t r_val, size_
 static inline size_t not_stisla_local_search(const int64_t* arr, size_t lo, size_t hi, int64_t key);
 static void not_stisla_learn_anchor(not_stisla_anchor_table_t* table, int64_t value, size_t index, size_t pred, size_t tol);
 
-/* Enhanced chunked search with runtime SIMD detection (QIHSE-inspired) */
+/* Enhanced chunked search with runtime SIMD detection (NOT_STISLA-native) */
 static inline size_t not_stisla_chunked_search(const int64_t* arr, size_t n, int64_t key) {
     /* For very small arrays, simple loop with minimal unrolling for speed */
     if (n <= NOT_STISLA_CHUNK_SIZE) {
@@ -2085,11 +664,6 @@ static inline int64_t not_stisla_interpolate(int64_t l_val, int64_t r_val, size_
         return (int64_t)l_idx;
     }
 
-    /* Fast path for small spans to avoid 128-bit division overhead */
-    if (span <= 128) {
-        return (int64_t)(l_idx + (span >> 1));
-    }
-
     /* Use 128-bit arithmetic to prevent overflow */
     const __int128 key_offset = (__int128)key - (__int128)l_val;
     const __int128 range = (__int128)r_val - (__int128)l_val;
@@ -2131,23 +705,19 @@ static inline size_t not_stisla_local_search(const int64_t* arr, size_t lo, size
     return NOT_STISLA_NOT_FOUND;
 }
 
-/* Enhanced anchor learning with memory bounds and statistics (QIHSE-inspired) */
+/* Enhanced anchor learning with memory bounds and statistics (NOT_STISLA-native) */
 static void not_stisla_learn_anchor(not_stisla_anchor_table_t* table, int64_t value, size_t index, size_t pred, size_t tol) {
     if (!table) return;
-
-    /* Update statistics */
-    table->stats.searches_total++;
 
     /* Don't learn if prediction was close enough */
     const size_t pred_diff = (pred > index) ? (pred - index) : (index - pred);
     if (pred_diff <= tol) {
-        table->stats.searches_successful++;
         return;
     }
 
     /* Memory-bounded learning: check if we've reached the limit */
     if (table->size >= table->max_capacity) {
-        /* Prune least recently used anchors (QIHSE-inspired memory efficiency) */
+        /* Prune least recently used anchors (NOT_STISLA-native memory efficiency) */
         uint64_t oldest_time = UINT64_MAX;
         size_t oldest_idx = 0;
 
@@ -2200,26 +770,38 @@ static void not_stisla_learn_anchor(not_stisla_anchor_table_t* table, int64_t va
     table->stats.anchors_learned++;
 }
 
-/* Core Competitor search algorithm */
+/* Core NOT_STISLA search algorithm */
 not_stisla_result_t not_stisla_search(const int64_t* arr, size_t n, int64_t key,
                               not_stisla_anchor_table_t* table, size_t tol) {
     if (!arr || n == 0) return NOT_STISLA_NOT_FOUND;
 
-    /* Fast path: AVX2-optimized linear search for small arrays */
-    if (n < 32) {
-        return not_stisla_chunked_search(arr, n, key);
+    if (table) {
+        table->stats.searches_total++;
+        table->searches_performed++;
     }
 
-    /* Ensure we have anchor table */
+    /* Fast path: AVX2-optimized linear search for small arrays */
+    if (n < 32) {
+        const size_t small_result = not_stisla_chunked_search(arr, n, key);
+        if (small_result != NOT_STISLA_NOT_FOUND && table) {
+            table->stats.searches_successful++;
+        }
+        return small_result;
+    }
+
     not_stisla_anchor_table_t local_table;
+    not_stisla_anchor_t local_anchors[2];
     not_stisla_anchor_table_t* active_table = table;
 
     if (!active_table) {
-        local_table.anchors = NULL;
-        local_table.capacity = 0;
+        local_table.anchors = local_anchors;
+        local_table.capacity = 2;
         local_table.size = 0;
+        local_table.max_capacity = 2;
         local_table.searches_performed = 0;
         local_table.workload_type = -1;
+        memset(&local_table.stats, 0, sizeof(local_table.stats));
+        local_table.creation_time = 0;
         active_table = &local_table;
     }
 
@@ -2237,8 +819,17 @@ not_stisla_result_t not_stisla_search(const int64_t* arr, size_t n, int64_t key,
         active_table->size = 2;
     }
 
+    if (key < active_table->anchors[0].v ||
+        key > active_table->anchors[active_table->size - 1].v) {
+        return NOT_STISLA_NOT_FOUND;
+    }
+
     /* Step 1: Find bounding anchors */
     const size_t a_idx = not_stisla_anchor_lower(active_table, key);
+    if (a_idx + 1 >= active_table->size) {
+        const not_stisla_anchor_t* last = &active_table->anchors[active_table->size - 1];
+        return arr[last->i] == key ? last->i : NOT_STISLA_NOT_FOUND;
+    }
     const not_stisla_anchor_t* l = &active_table->anchors[a_idx];
     const not_stisla_anchor_t* r = &active_table->anchors[a_idx + 1];
 
@@ -2273,10 +864,10 @@ not_stisla_result_t not_stisla_search(const int64_t* arr, size_t n, int64_t key,
 
     /* Step 4: Enhanced learning with usage tracking */
     if (result != NOT_STISLA_NOT_FOUND && table) {
+        table->stats.searches_successful++;
         not_stisla_learn_anchor(table, arr[result], result, pred, tol);
-        table->searches_performed++;
 
-        /* Update anchor usage statistics (QIHSE-inspired) */
+        /* Update anchor usage statistics (NOT_STISLA-native) */
         if (active_table != table) {
             /* Find and update the anchor that was used */
             for (size_t i = 0; i < active_table->size; ++i) {
@@ -2291,13 +882,6 @@ not_stisla_result_t not_stisla_search(const int64_t* arr, size_t n, int64_t key,
     return result;
 }
 
-/**
- * Enhanced NOT_STISLA search with QIHSE-inspired optimizations
- * 
- * OPTIMIZED VERSION: Minimal overhead wrapper around fast classical search.
- * The "quantum-inspired" features are applied during anchor table preprocessing,
- * not per-query. This ensures O(log n) performance with O(1) additional overhead.
- */
 not_stisla_result_t not_stisla_search_enhanced(
     const int64_t* arr,
     size_t n,
@@ -2305,16 +889,61 @@ not_stisla_result_t not_stisla_search_enhanced(
     not_stisla_anchor_table_t* table,
     const not_stisla_config_t* config
 ) {
-    /* Fast path: skip all overhead for most common case */
-    if (__builtin_expect(!arr || n == 0 || !config, 0)) {
+    if (__builtin_expect(!arr || n == 0 || !config ||
+                         config->tol == 0 || config->tol > 1000, 0)) {
         return NOT_STISLA_NOT_FOUND;
     }
 
-    /* Direct call to fast classical search - O(log n) with anchor learning */
-    return not_stisla_search(arr, n, key, table, config->tol);
+    not_stisla_anchor_table_t* active_table =
+        config->enable_anchor_learning ? table : NULL;
+    if (active_table) {
+        if (config->workload_type >= NOT_STISLA_WORKLOAD_TELEMETRY &&
+            config->workload_type <= NOT_STISLA_WORKLOAD_EVENTS) {
+            active_table->workload_type = config->workload_type;
+        }
+        if (config->max_anchors >= NOT_STISLA_MIN_ANCHORS &&
+            config->max_anchors <= NOT_STISLA_MAX_ANCHORS) {
+            active_table->max_capacity = config->max_anchors;
+        }
+    }
+
+    const int track = g_performance_enabled || config->enable_profiling;
+    struct timespec start_time;
+    if (track) {
+        clock_gettime(CLOCK_MONOTONIC, &start_time);
+    }
+
+    not_stisla_result_t result =
+        not_stisla_search(arr, n, key, active_table, config->tol);
+
+    if (track) {
+        struct timespec end_time;
+        clock_gettime(CLOCK_MONOTONIC, &end_time);
+        uint64_t elapsed_ns =
+            (uint64_t)(end_time.tv_sec - start_time.tv_sec) * 1000000000ULL +
+            (uint64_t)(end_time.tv_nsec - start_time.tv_nsec);
+        size_t memory_used = 0;
+        uint64_t anchors_learned = 0;
+        uint64_t anchors_pruned = 0;
+        if (active_table) {
+            memory_used = active_table->capacity * sizeof(not_stisla_anchor_t) +
+                          sizeof(not_stisla_anchor_table_t);
+            anchors_learned = active_table->stats.anchors_learned;
+            anchors_pruned = active_table->stats.anchors_pruned;
+        }
+        not_stisla_update_performance_stats(
+            elapsed_ns,
+            result != NOT_STISLA_NOT_FOUND,
+            memory_used,
+            anchors_learned,
+            anchors_pruned,
+            not_stisla_detect_cpu_features());
+    }
+
+    return result;
 }
 
-/* Enhanced anchor table creation with QIHSE-inspired memory management */
+/* Enhanced anchor table creation with NOT_STISLA-native memory management */
 not_stisla_anchor_table_t* not_stisla_anchor_table_create(void) {
     not_stisla_anchor_table_t* table = calloc(1, sizeof(not_stisla_anchor_table_t));
     if (!table) return NULL;
@@ -2368,7 +997,7 @@ void not_stisla_anchor_table_reset(not_stisla_anchor_table_t* table) {
     }
 }
 
-/* Enhanced functions inspired by QIHSE patterns */
+/* Enhanced functions inspired by NOT_STISLA patterns */
 const not_stisla_stats_t* not_stisla_anchor_table_get_stats(const not_stisla_anchor_table_t* table) {
     return table ? &table->stats : NULL;
 }
@@ -2420,7 +1049,7 @@ int not_stisla_anchor_table_optimize_for_workload(not_stisla_anchor_table_t* tab
 
     table->workload_type = workload_type;
 
-    /* Workload-specific optimizations (similar to QIHSE patterns) */
+    /* Workload-specific optimizations (similar to NOT_STISLA patterns) */
     switch (workload_type) {
         case NOT_STISLA_WORKLOAD_TELEMETRY:
             /* Telemetry: Higher anchor limits for variable patterns */
@@ -2550,6 +1179,453 @@ size_t not_stisla_search_parallel(const int64_t* arr,
 #endif
 }
 
+static not_stisla_backend_decision_t g_last_backend_decision = {
+    NOT_STISLA_BACKEND_AUTO,
+    0,
+    0,
+    0,
+    0,
+    0.0,
+    0.0
+};
+static int g_last_backend_decision_valid = 0;
+
+#define NOT_STISLA_AUTO_CACHE_ENTRIES 32
+/* 180-case matrix: 8K-query batches favor scalar; 32K+ favor C/OpenMP. */
+#define NOT_STISLA_AUTO_PARALLEL_MIN_ITEMS 16384
+#define NOT_STISLA_AUTO_PARALLEL_MIN_ARRAY 1024
+#define NOT_STISLA_AUTO_FORTRAN_MIN_ITEMS 4096
+#define NOT_STISLA_AUTO_FORTRAN_MAX_ITEMS 16384
+#define NOT_STISLA_AUTO_FORTRAN_MAX_AVG_STEP 4.0L
+
+enum {
+    NOT_STISLA_AUTO_QUERY_GENERAL = 0,
+    NOT_STISLA_AUTO_QUERY_FORTRAN_MERGE = 1
+};
+
+typedef struct not_stisla_backend_cache_entry {
+    int valid;
+    uint32_t cpu_features;
+    size_t array_size_bucket;
+    size_t query_count_bucket;
+    int thread_count;
+    int query_shape;
+    not_stisla_backend_t backend;
+    double estimated_ns_per_key;
+    double p95_ns_per_key;
+} not_stisla_backend_cache_entry_t;
+
+static not_stisla_backend_cache_entry_t g_backend_cache[NOT_STISLA_AUTO_CACHE_ENTRIES];
+static size_t g_backend_cache_next = 0;
+
+static size_t not_stisla_power_of_two_bucket(size_t value) {
+    if (value <= 1) {
+        return value;
+    }
+
+    size_t bucket = 1;
+    while (bucket < value && bucket <= SIZE_MAX / 2) {
+        bucket *= 2;
+    }
+
+    return bucket < value ? SIZE_MAX : bucket;
+}
+
+static int not_stisla_effective_thread_count(const not_stisla_parallel_config_t* config) {
+#ifdef _OPENMP
+    if (config && config->num_threads > 0) {
+        return config->num_threads;
+    }
+    int max_threads = omp_get_max_threads();
+    return max_threads > 0 ? max_threads : 1;
+#else
+    (void)config;
+    return 1;
+#endif
+}
+
+static int not_stisla_openmp_available(void) {
+#ifdef _OPENMP
+    return 1;
+#else
+    return 0;
+#endif
+}
+
+static int not_stisla_auto_scalar_fast_path(size_t num_items,
+                                            const not_stisla_parallel_config_t* config,
+                                            int thread_count) {
+    return num_items < NOT_STISLA_AUTO_PARALLEL_MIN_ITEMS ||
+           !not_stisla_openmp_available() ||
+           thread_count <= 1 ||
+           (config && config->num_threads == 1);
+}
+
+static uint64_t not_stisla_now_ns(void) {
+    struct timespec ts;
+    if (clock_gettime(CLOCK_MONOTONIC, &ts) != 0) {
+        return 0;
+    }
+    return (uint64_t)ts.tv_sec * 1000000000ULL + (uint64_t)ts.tv_nsec;
+}
+
+static double not_stisla_elapsed_ns_per_key(uint64_t start_ns,
+                                            uint64_t end_ns,
+                                            size_t num_items) {
+    if (start_ns == 0 || end_ns < start_ns || num_items == 0) {
+        return 0.0;
+    }
+    return (double)(end_ns - start_ns) / (double)num_items;
+}
+
+static int not_stisla_key_exists_in_array(const int64_t* arr, size_t n, int64_t key) {
+    size_t lo = 0;
+    size_t hi = n;
+
+    while (lo < hi) {
+        size_t mid = lo + (hi - lo) / 2;
+        if (arr[mid] == key) {
+            return 1;
+        }
+        if (arr[mid] < key) {
+            lo = mid + 1;
+        } else {
+            hi = mid;
+        }
+    }
+
+    return 0;
+}
+
+static int not_stisla_detect_auto_query_shape(const int64_t* arr,
+                                              size_t n,
+                                              const not_stisla_batch_item_t* items,
+                                              size_t num_items) {
+#ifndef NOT_STISLA_ENABLE_FORTRAN
+    (void)arr;
+    (void)n;
+    (void)items;
+    (void)num_items;
+    return NOT_STISLA_AUTO_QUERY_GENERAL;
+#else
+    if (!arr || !items || n == 0 ||
+        num_items < NOT_STISLA_AUTO_FORTRAN_MIN_ITEMS ||
+        num_items > NOT_STISLA_AUTO_FORTRAN_MAX_ITEMS) {
+        return NOT_STISLA_AUTO_QUERY_GENERAL;
+    }
+
+    int64_t min_key = items[0].key;
+    int64_t max_key = items[0].key;
+    for (size_t i = 1; i < num_items; ++i) {
+        if (items[i].key < items[i - 1].key) {
+            return NOT_STISLA_AUTO_QUERY_GENERAL;
+        }
+        max_key = items[i].key;
+    }
+
+    if (max_key < min_key || min_key < arr[0] || max_key > arr[n - 1]) {
+        return NOT_STISLA_AUTO_QUERY_GENERAL;
+    }
+
+    const long double avg_step =
+        num_items > 1 ? ((long double)max_key - (long double)min_key) / (long double)(num_items - 1) : 0.0L;
+    if (avg_step > NOT_STISLA_AUTO_FORTRAN_MAX_AVG_STEP) {
+        return NOT_STISLA_AUTO_QUERY_GENERAL;
+    }
+
+    const size_t mid = num_items / 2;
+    if (!not_stisla_key_exists_in_array(arr, n, items[0].key) ||
+        !not_stisla_key_exists_in_array(arr, n, items[mid].key) ||
+        !not_stisla_key_exists_in_array(arr, n, items[num_items - 1].key)) {
+        return NOT_STISLA_AUTO_QUERY_GENERAL;
+    }
+
+    return NOT_STISLA_AUTO_QUERY_FORTRAN_MERGE;
+#endif
+}
+
+static int not_stisla_find_backend_cache(uint32_t cpu_features,
+                                         size_t array_size_bucket,
+                                         size_t query_count_bucket,
+                                         int thread_count,
+                                         int query_shape,
+                                         not_stisla_backend_cache_entry_t* entry) {
+    for (size_t i = 0; i < NOT_STISLA_AUTO_CACHE_ENTRIES; ++i) {
+        const not_stisla_backend_cache_entry_t* current = &g_backend_cache[i];
+        if (!current->valid) {
+            continue;
+        }
+        if (current->cpu_features == cpu_features &&
+            current->array_size_bucket == array_size_bucket &&
+            current->query_count_bucket == query_count_bucket &&
+            current->thread_count == thread_count &&
+            current->query_shape == query_shape) {
+            if (entry) {
+                *entry = *current;
+            }
+            return 1;
+        }
+    }
+    return 0;
+}
+
+static void not_stisla_store_backend_cache(uint32_t cpu_features,
+                                           size_t array_size_bucket,
+                                           size_t query_count_bucket,
+                                           int thread_count,
+                                           int query_shape,
+                                           not_stisla_backend_t backend,
+                                           double estimated_ns_per_key,
+                                           double p95_ns_per_key) {
+    not_stisla_backend_cache_entry_t* entry =
+        &g_backend_cache[g_backend_cache_next % NOT_STISLA_AUTO_CACHE_ENTRIES];
+    g_backend_cache_next++;
+
+    entry->valid = 1;
+    entry->cpu_features = cpu_features;
+    entry->array_size_bucket = array_size_bucket;
+    entry->query_count_bucket = query_count_bucket;
+    entry->thread_count = thread_count;
+    entry->query_shape = query_shape;
+    entry->backend = backend;
+    entry->estimated_ns_per_key = estimated_ns_per_key;
+    entry->p95_ns_per_key = p95_ns_per_key;
+}
+
+static void not_stisla_record_backend_decision(not_stisla_backend_t backend,
+                                               size_t n,
+                                               size_t num_items,
+                                               int thread_count,
+                                               double estimated_ns_per_key,
+                                               double p95_ns_per_key) {
+    g_last_backend_decision.backend = backend;
+    g_last_backend_decision.cpu_features = not_stisla_detect_cpu_features();
+    g_last_backend_decision.array_size_bucket = not_stisla_power_of_two_bucket(n);
+    g_last_backend_decision.query_count_bucket = not_stisla_power_of_two_bucket(num_items);
+    g_last_backend_decision.thread_count = thread_count;
+    g_last_backend_decision.estimated_ns_per_key = estimated_ns_per_key;
+    g_last_backend_decision.p95_ns_per_key = p95_ns_per_key;
+    g_last_backend_decision_valid = 1;
+}
+
+static size_t not_stisla_search_batch_scalar_loop(const int64_t* arr,
+                                                  size_t n,
+                                                  not_stisla_batch_item_t* items,
+                                                  size_t num_items,
+                                                  not_stisla_anchor_table_t* table,
+                                                  size_t tol) {
+    if (!arr || !items || num_items == 0) {
+        return 0;
+    }
+
+    size_t found = 0;
+    for (size_t i = 0; i < num_items; ++i) {
+        not_stisla_result_t result = not_stisla_search(arr, n, items[i].key, table, tol);
+        items[i].result = result;
+        items[i].ordinal = i;
+        if (result != NOT_STISLA_NOT_FOUND) {
+            found++;
+        }
+    }
+
+    return found;
+}
+
+static not_stisla_backend_t not_stisla_static_auto_backend(size_t n,
+                                                           size_t num_items,
+                                                           const not_stisla_parallel_config_t* config,
+                                                           int thread_count,
+                                                           int query_shape) {
+    if (query_shape == NOT_STISLA_AUTO_QUERY_FORTRAN_MERGE) {
+        return NOT_STISLA_BACKEND_FORTRAN;
+    }
+    if (not_stisla_auto_scalar_fast_path(num_items, config, thread_count)) {
+        return NOT_STISLA_BACKEND_SCALAR;
+    }
+    if (n < NOT_STISLA_AUTO_PARALLEL_MIN_ARRAY) {
+        return NOT_STISLA_BACKEND_SCALAR;
+    }
+    return NOT_STISLA_BACKEND_C_OPENMP;
+}
+
+size_t not_stisla_search_batch_auto(const int64_t* arr,
+                                    size_t n,
+                                    not_stisla_batch_item_t* items,
+                                    size_t num_items,
+                                    not_stisla_anchor_table_t* table,
+                                    size_t tol,
+                                    const not_stisla_parallel_config_t* config) {
+    const int thread_count = not_stisla_effective_thread_count(config);
+    if (!arr || !items || n == 0 || num_items == 0) {
+        const uint64_t start_ns = not_stisla_now_ns();
+        const size_t found =
+            not_stisla_search_batch_scalar_loop(arr, n, items, num_items, table, tol);
+        const uint64_t end_ns = not_stisla_now_ns();
+        const double estimated_ns_per_key =
+            not_stisla_elapsed_ns_per_key(start_ns, end_ns, num_items);
+        not_stisla_record_backend_decision(
+            NOT_STISLA_BACKEND_SCALAR,
+            n,
+            num_items,
+            thread_count,
+            estimated_ns_per_key,
+            estimated_ns_per_key
+        );
+        return found;
+    }
+
+    const int query_shape = not_stisla_detect_auto_query_shape(arr, n, items, num_items);
+    if (query_shape == NOT_STISLA_AUTO_QUERY_GENERAL &&
+        not_stisla_auto_scalar_fast_path(num_items, config, thread_count)) {
+        const uint64_t start_ns = not_stisla_now_ns();
+        const size_t found =
+            not_stisla_search_batch_scalar_loop(arr, n, items, num_items, table, tol);
+        const uint64_t end_ns = not_stisla_now_ns();
+        const double estimated_ns_per_key =
+            not_stisla_elapsed_ns_per_key(start_ns, end_ns, num_items);
+        not_stisla_record_backend_decision(
+            NOT_STISLA_BACKEND_SCALAR,
+            n,
+            num_items,
+            thread_count,
+            estimated_ns_per_key,
+            estimated_ns_per_key
+        );
+        return found;
+    }
+
+    const uint32_t cpu_features = not_stisla_detect_cpu_features();
+    const size_t array_size_bucket = not_stisla_power_of_two_bucket(n);
+    const size_t query_count_bucket = not_stisla_power_of_two_bucket(num_items);
+    not_stisla_backend_cache_entry_t cached_decision;
+    double cached_ns_per_key = 0.0;
+    double cached_p95_ns_per_key = 0.0;
+    not_stisla_backend_t selected_backend = NOT_STISLA_BACKEND_SCALAR;
+
+    if (not_stisla_find_backend_cache(
+            cpu_features,
+            array_size_bucket,
+            query_count_bucket,
+            thread_count,
+            query_shape,
+            &cached_decision)) {
+        selected_backend = cached_decision.backend;
+        cached_ns_per_key = cached_decision.estimated_ns_per_key;
+        cached_p95_ns_per_key = cached_decision.p95_ns_per_key;
+    } else {
+        selected_backend = not_stisla_static_auto_backend(n, num_items, config, thread_count, query_shape);
+        not_stisla_store_backend_cache(
+            cpu_features,
+            array_size_bucket,
+            query_count_bucket,
+            thread_count,
+            query_shape,
+            selected_backend,
+            cached_ns_per_key,
+            cached_p95_ns_per_key
+        );
+    }
+
+    const uint64_t start_ns = not_stisla_now_ns();
+    size_t found = 0;
+
+    if (selected_backend == NOT_STISLA_BACKEND_C_OPENMP) {
+        found = not_stisla_search_parallel(arr, n, items, num_items, table, tol, config);
+    } else if (selected_backend == NOT_STISLA_BACKEND_FORTRAN) {
+        found = not_stisla_search_batch_fortran(arr, n, items, num_items);
+    } else {
+        selected_backend = NOT_STISLA_BACKEND_SCALAR;
+        found = not_stisla_search_batch_scalar_loop(arr, n, items, num_items, table, tol);
+    }
+
+    const uint64_t end_ns = not_stisla_now_ns();
+    double estimated_ns_per_key = not_stisla_elapsed_ns_per_key(start_ns, end_ns, num_items);
+    if (estimated_ns_per_key <= 0.0) {
+        estimated_ns_per_key = cached_ns_per_key;
+    }
+    if (cached_p95_ns_per_key <= 0.0) {
+        cached_p95_ns_per_key = estimated_ns_per_key;
+    }
+
+    not_stisla_record_backend_decision(
+        selected_backend,
+        n,
+        num_items,
+        thread_count,
+        estimated_ns_per_key,
+        cached_p95_ns_per_key
+    );
+    return found;
+}
+
+int not_stisla_get_last_backend_decision(not_stisla_backend_decision_t* decision) {
+    if (!decision || !g_last_backend_decision_valid) {
+        return -1;
+    }
+
+    memcpy(decision, &g_last_backend_decision, sizeof(not_stisla_backend_decision_t));
+    return 0;
+}
+
+int not_stisla_fortran_backend_available(void) {
+#ifdef NOT_STISLA_ENABLE_FORTRAN
+    return 1;
+#else
+    return 0;
+#endif
+}
+
+size_t not_stisla_search_batch_fortran(const int64_t* arr,
+                                       size_t n,
+                                       not_stisla_batch_item_t* items,
+                                       size_t num_items) {
+    if (!arr || !items || num_items == 0) {
+        return 0;
+    }
+
+    for (size_t i = 0; i < num_items; ++i) {
+        items[i].result = NOT_STISLA_NOT_FOUND;
+        items[i].ordinal = i;
+    }
+
+#ifndef NOT_STISLA_ENABLE_FORTRAN
+    (void)n;
+    return 0;
+#else
+    if (n == 0 || n > (size_t)INT64_MAX ||
+        num_items > SIZE_MAX / sizeof(int64_t)) {
+        return 0;
+    }
+
+    int64_t* keys = malloc(num_items * sizeof(int64_t));
+    int64_t* indices = malloc(num_items * sizeof(int64_t));
+    if (!keys || !indices) {
+        free(keys);
+        free(indices);
+        return 0;
+    }
+
+    for (size_t i = 0; i < num_items; ++i) {
+        keys[i] = items[i].key;
+        indices[i] = -1;
+    }
+
+    not_stisla_batch_search_i64(arr, n, keys, num_items, indices);
+
+    size_t found = 0;
+    for (size_t i = 0; i < num_items; ++i) {
+        if (indices[i] >= 0 && (uint64_t)indices[i] < (uint64_t)n) {
+            items[i].result = (not_stisla_result_t)indices[i];
+            found++;
+        }
+    }
+
+    free(keys);
+    free(indices);
+    return found;
+#endif
+}
+
 
 void not_stisla_get_stats(const not_stisla_anchor_table_t* table, size_t* searches_total,
                      size_t* anchors_learned, size_t* memory_used_bytes) {
@@ -2560,7 +1636,7 @@ void not_stisla_get_stats(const not_stisla_anchor_table_t* table, size_t* search
         return;
     }
 
-    /* Enhanced statistics (QIHSE-inspired) */
+    /* Enhanced statistics (NOT_STISLA-native) */
     if (searches_total) *searches_total = table->stats.searches_total;
     if (anchors_learned) *anchors_learned = table->stats.anchors_learned;
     if (memory_used_bytes) {
@@ -2639,7 +1715,7 @@ int not_stisla_optimize_array_memory(const int64_t* arr, size_t n) {
 bool not_stisla_init_for_dsmil(not_stisla_anchor_table_t* table, int workload_type) {
     if (!table) return false;
 
-    /* Enhanced initialization with workload optimization (QIHSE-inspired) */
+    /* Enhanced initialization with workload optimization (NOT_STISLA-native) */
     not_stisla_anchor_table_reset(table);
     not_stisla_anchor_table_optimize_for_workload(table, workload_type);
 
@@ -2657,578 +1733,10 @@ const char* not_stisla_build_info(void) {
     return NOT_STISLA_BUILD_INFO;
 }
 
-/* ============================================================================
- * QUANTUM-ENHANCED SEARCH IMPLEMENTATION
- * ============================================================================ */
-
-#define NOT_STISLA_QUANTUM_VERSION_STRING "1.0.0"
-#define NOT_STISLA_QUANTUM_BUILD_INFO "Quantum-enhanced with Hilbert space projection and amplitude amplification"
-
-/* Global quantum statistics */
-static size_t quantum_searches_total = 0;
-static size_t classical_fallbacks = 0;
-static double total_quantum_confidence = 0.0;
-static double quantum_speedup_accumulator = 0.0;
-
-/**
- * Project 1D vector database into higher-dimensional Hilbert space
- */
-static void quantum_project_to_hilbert_space(const int64_t* arr, size_t n, int64_t key,
-                                           quantum_search_hilbert_space_t* hilbert_space,
-                                           bool use_simd) {
-
-    // Use SIMD acceleration if available and requested
-    if (use_simd) {
-#ifdef __AVX512F__
-        not_stisla_quantum_simd_state_init_avx512(hilbert_space, arr, n, key);
-        hilbert_space->measurement_confidence = 0.0;
-        hilbert_space->global_phase = 0.0;
-        return;
-#endif
-
-#ifdef __AVX2__
-        not_stisla_quantum_simd_state_init_avx2(hilbert_space, arr, n, key);
-        hilbert_space->measurement_confidence = 0.0;
-        hilbert_space->global_phase = 0.0;
-        return;
-#endif
-    }
-
-    // Fallback to scalar implementation
-    // Initialize Hilbert space with uniform superposition
-    for (size_t state = 0; state < hilbert_space->num_states; state++) {
-        // Map quantum state to array position
-        size_t array_idx = state * n / hilbert_space->num_states;
-
-        // Compute correlation strength (probability amplitude)
-        double distance = fabs((double)arr[array_idx] - (double)key);
-        double correlation = exp(-distance / (double)n);  // Gaussian decay
-
-        hilbert_space->probability_amplitudes[state] = correlation;
-
-        // Encode in higher-dimensional space using quantum phase encoding
-        for (size_t dim = 0; dim < QUANTUM_HILBERT_DIMENSIONS; dim++) {
-            double phase = 2.0 * M_PI * dim / QUANTUM_HILBERT_DIMENSIONS;
-            double phase_offset = 2.0 * M_PI * (double)state / hilbert_space->num_states;
-
-            // Quantum amplitude encoding
-            hilbert_space->superposition_states[state].real[dim] =
-                correlation * cos(phase + phase_offset);
-            hilbert_space->superposition_states[state].imag[dim] =
-                correlation * sin(phase + phase_offset);
-        }
-    }
-
-    hilbert_space->measurement_confidence = 0.0;
-    hilbert_space->global_phase = 0.0;
-}
-
-/**
- * Grover-inspired amplitude amplification for quadratic speedup
- */
-static size_t quantum_amplitude_amplification(quantum_search_hilbert_space_t* hilbert_space,
-                                            const int64_t* arr, size_t n, int64_t key) {
-
-    for (int round = 0; round < QUANTUM_AMPLIFICATION_ROUNDS; round++) {
-
-        // Phase 1: Oracle - mark promising states (phase flip)
-        for (size_t state = 0; state < hilbert_space->num_states; state++) {
-            size_t array_idx = state * n / hilbert_space->num_states;
-            double distance = fabs((double)arr[array_idx] - (double)key);
-
-            // Oracle marks states that are close to target
-            if (distance < (double)n * 0.1) {  // Within 10% of array range
-                // Phase flip (multiply by -1 in quantum terms)
-                for (size_t dim = 0; dim < QUANTUM_HILBERT_DIMENSIONS; dim++) {
-                    hilbert_space->superposition_states[state].real[dim] *= -1.0;
-                    hilbert_space->superposition_states[state].imag[dim] *= -1.0;
-                }
-            }
-        }
-
-        // Phase 2: Diffusion operator - amplitude amplification (Grover diffusion)
-        double mean_amplitude = 0.0;
-        for (size_t state = 0; state < hilbert_space->num_states; state++) {
-            mean_amplitude += hilbert_space->probability_amplitudes[state];
-        }
-        mean_amplitude /= hilbert_space->num_states;
-
-        // Grover diffusion: 2|s⟩⟨s| - I
-        for (size_t state = 0; state < hilbert_space->num_states; state++) {
-            double current = hilbert_space->probability_amplitudes[state];
-            hilbert_space->probability_amplitudes[state] = 2.0 * mean_amplitude - current;
-        }
-
-        // Update global phase
-        hilbert_space->global_phase += M_PI / QUANTUM_AMPLIFICATION_ROUNDS;
-    }
-
-    // Find state with maximum probability amplitude
-    size_t optimal_state = 0;
-    double max_probability = 0.0;
-
-    for (size_t state = 0; state < hilbert_space->num_states; state++) {
-        if (hilbert_space->probability_amplitudes[state] > max_probability) {
-            max_probability = hilbert_space->probability_amplitudes[state];
-            optimal_state = state;
-        }
-    }
-
-    hilbert_space->measurement_confidence = max_probability;
-
-    // Map back to array index
-    return optimal_state * n / hilbert_space->num_states;
-}
-
-/**
- * Collapse higher-dimensional quantum solution back to 1D vector space
- */
-static size_t quantum_dimensional_collapse(const int64_t* arr, size_t n, int64_t key,
-                                         size_t quantum_prediction, double* confidence) {
-
-    // Define adaptive search window around quantum prediction
-    size_t search_radius = n / 128;  // Adaptive radius based on array size
-    if (search_radius < 16) search_radius = 16;  // Minimum search radius
-    if (search_radius > 1024) search_radius = 1024;  // Maximum search radius
-
-    size_t search_start = (quantum_prediction > search_radius) ?
-                         quantum_prediction - search_radius : 0;
-    size_t search_end = (quantum_prediction + search_radius < n) ?
-                       quantum_prediction + search_radius : n - 1;
-
-    // Local verification in collapsed search space
-    for (size_t i = search_start; i <= search_end; i++) {
-        if (arr[i] == key) {
-            *confidence = 1.0;  // Perfect match found
-            return i;
-        }
-    }
-
-    // If exact match not found, return best estimate with confidence
-    *confidence = *confidence * 0.8;  // Reduce confidence for estimation
-    return quantum_prediction;
-}
-
-/**
- * Main quantum-enhanced search function
- */
-not_stisla_result_t not_stisla_quantum_search(const int64_t* arr, size_t n, int64_t key,
-                                           not_stisla_anchor_table_t* table, size_t tol) {
-
-    quantum_searches_total++;
-
-    if (!arr || n == 0) return NOT_STISLA_NOT_FOUND;
-
-    // For small arrays, quantum overhead not worth it - use classical
-    if (n < QUANTUM_SEARCH_THRESHOLD) {
-        classical_fallbacks++;
-        return not_stisla_search(arr, n, key, table, tol);
-    }
-
-    // Initialize higher-dimensional Hilbert search space
-    quantum_search_hilbert_space_t hilbert_space = {
-        .superposition_states = calloc(QUANTUM_SUPERPOSITION_STATES,
-                                     sizeof(quantum_state_vector_t)),
-        .probability_amplitudes = calloc(QUANTUM_SUPERPOSITION_STATES,
-                                       sizeof(double)),
-        .num_states = QUANTUM_SUPERPOSITION_STATES,
-        .global_phase = 0.0,
-        .measurement_confidence = 0.0
-    };
-
-    if (!hilbert_space.superposition_states || !hilbert_space.probability_amplitudes) {
-        free(hilbert_space.superposition_states);
-        free(hilbert_space.probability_amplitudes);
-        classical_fallbacks++;
-        return not_stisla_search(arr, n, key, table, tol);
-    }
-
-    // Step 1: Project to higher-dimensional Hilbert space
-    quantum_project_to_hilbert_space(arr, n, key, &hilbert_space, true);  // Enable SIMD
-
-    // Step 2: Quantum amplitude amplification (Grover-like)
-    size_t quantum_prediction = quantum_amplitude_amplification(&hilbert_space, arr, n, key);
-
-    // Step 3: Dimensional collapse and verification
-    double collapse_confidence = 0.0;
-    size_t result = quantum_dimensional_collapse(arr, n, key, quantum_prediction,
-                                                &collapse_confidence);
-
-    // Combine quantum confidence with collapse confidence
-    double final_confidence = hilbert_space.measurement_confidence * collapse_confidence;
-    total_quantum_confidence += final_confidence;
-
-    // Cleanup quantum resources
-    free(hilbert_space.superposition_states);
-    free(hilbert_space.probability_amplitudes);
-
-    // If confidence too low or no result found, fallback to classical
-    if (final_confidence < QUANTUM_CONFIDENCE_THRESHOLD || result == NOT_STISLA_NOT_FOUND) {
-        classical_fallbacks++;
-        return not_stisla_search(arr, n, key, table, tol);
-    }
-
-    // Learn from successful quantum search for future predictions
-    if (table) {
-        not_stisla_learn_anchor(table, arr[result], result, quantum_prediction, tol);
-        table->searches_performed++;
-    }
-
-    return result;
-}
-
-/**
- * Adaptive quantum-classical hybrid search (placeholder for future implementation)
- */
-not_stisla_result_t not_stisla_adaptive_search(const int64_t* arr, size_t n, int64_t key,
-                                             not_stisla_anchor_table_t* table,
-                                             const not_stisla_quantum_config_t* config) {
-    (void)config; /* Reserved for future quantum configuration */
-    // For now, use classical search
-    return not_stisla_search(arr, n, key, table, 8);
-}
-
-/**
- * Initialize quantum search configuration with defaults
- */
-bool not_stisla_quantum_config_init(not_stisla_quantum_config_t* config,
-                                  not_stisla_quantum_mode_t mode) {
-    if (!config) return false;
-
-    config->mode = mode;
-    config->quantum_activation_threshold = QUANTUM_SEARCH_THRESHOLD;
-    config->confidence_threshold = QUANTUM_CONFIDENCE_THRESHOLD;
-    config->max_superposition_states = QUANTUM_SUPERPOSITION_STATES;
-    config->amplification_rounds = QUANTUM_AMPLIFICATION_ROUNDS;
-    config->enable_simd_acceleration = true;
-
+bool enhanced_available(void) {
     return true;
 }
 
-/**
- * Optimize quantum configuration for specific DSMIL workload
- */
-void not_stisla_quantum_config_optimize_for_workload(not_stisla_quantum_config_t* config,
-                                                   int workload_type) {
-    if (!config) return;
-
-    switch (workload_type) {
-        case NOT_STISLA_WORKLOAD_TELEMETRY:
-            // Telemetry: Variable gaps, higher superposition states needed
-            config->max_superposition_states = 512;
-            config->amplification_rounds = 4;
-            config->confidence_threshold = 0.8;
-            break;
-
-        case NOT_STISLA_WORKLOAD_IDS:
-            // IDs: More uniform, can use fewer states
-            config->max_superposition_states = 128;
-            config->amplification_rounds = 2;
-            config->confidence_threshold = 0.9;
-            break;
-
-        case NOT_STISLA_WORKLOAD_OFFSETS:
-            // Offsets: Exponential patterns, need more amplification
-            config->max_superposition_states = 1024;
-            config->amplification_rounds = 5;
-            config->confidence_threshold = 0.75;
-            break;
-
-        case NOT_STISLA_WORKLOAD_EVENTS:
-            // Events: Burst patterns, balanced approach
-            config->max_superposition_states = 256;
-            config->amplification_rounds = 3;
-            config->confidence_threshold = 0.85;
-            break;
-
-        default:
-            // Keep defaults
-            break;
-    }
-}
-
-/**
- * Get quantum search performance statistics
- */
-void not_stisla_quantum_get_stats(size_t* quantum_searches_total_out,
-                                size_t* classical_fallbacks_out,
-                                double* average_quantum_confidence,
-                                double* quantum_speedup_factor) {
-    if (quantum_searches_total_out) {
-        *quantum_searches_total_out = quantum_searches_total;
-    }
-
-    if (classical_fallbacks_out) {
-        *classical_fallbacks_out = classical_fallbacks;
-    }
-
-    if (average_quantum_confidence) {
-        *average_quantum_confidence = quantum_searches_total > 0 ?
-            total_quantum_confidence / quantum_searches_total : 0.0;
-    }
-
-    if (quantum_speedup_factor) {
-        // Estimate speedup based on successful quantum searches
-        size_t successful_quantum = quantum_searches_total - classical_fallbacks;
-        double speedup = successful_quantum > 0 ?
-            (double)successful_quantum / quantum_searches_total * 50.0 : 1.0;
-        quantum_speedup_accumulator = (quantum_speedup_accumulator + speedup) / 2.0;
-        *quantum_speedup_factor = quantum_speedup_accumulator;
-    }
-}
-
-/**
- * Quantum version information
- */
-const char* not_stisla_quantum_version(void) {
-    return NOT_STISLA_QUANTUM_VERSION_STRING;
-}
-
-const char* not_stisla_quantum_build_info(void) {
-    return NOT_STISLA_QUANTUM_BUILD_INFO;
-}
-
-/* ============================================================================
- * SIMD-ACCELERATED QUANTUM OPERATIONS
- * ============================================================================ */
-
-#ifdef __AVX2__
-#include <immintrin.h>
-
-/**
- * AVX2-accelerated quantum state initialization
- */
-void not_stisla_quantum_simd_state_init_avx2(quantum_search_hilbert_space_t* hilbert_space,
-                                           const int64_t* arr, size_t n, int64_t key) {
-
-    __m256d key_vec = _mm256_set1_pd((double)key);
-    __m256d n_vec = _mm256_set1_pd((double)n);
-
-    // Process 4 states at a time with AVX2
-    for (size_t state = 0; state < hilbert_space->num_states; state += 4) {
-        // Load 4 array indices
-        size_t idx0 = state * n / hilbert_space->num_states;
-        size_t idx1 = (state + 1) * n / hilbert_space->num_states;
-        size_t idx2 = (state + 2) * n / hilbert_space->num_states;
-        size_t idx3 = (state + 3) * n / hilbert_space->num_states;
-
-        // Load array values as doubles
-        __m256d arr_vals = _mm256_set_pd(
-            (double)arr[idx3], (double)arr[idx2],
-            (double)arr[idx1], (double)arr[idx0]
-        );
-
-        // Compute |arr[i] - key|
-        __m256d diff = _mm256_sub_pd(arr_vals, key_vec);
-        __m256d abs_diff = _mm256_andnot_pd(_mm256_set1_pd(-0.0), diff);
-
-        // Compute exp(-|diff| / n) for correlation using AVX2 approximation
-        __m256d normalized = _mm256_div_pd(abs_diff, n_vec);
-        __m256d neg_norm = _mm256_sub_pd(_mm256_setzero_pd(), normalized);
-
-        // Polynomial approximation of exp: 1 + x + x^2/2 + x^3/6 (simplified)
-        __m256d correlations = _mm256_add_pd(_mm256_set1_pd(1.0), neg_norm);
-        __m256d x2 = _mm256_mul_pd(neg_norm, neg_norm);
-        correlations = _mm256_add_pd(correlations, _mm256_mul_pd(x2, _mm256_set1_pd(0.5)));
-
-        // Store probability amplitudes (reverse order due to AVX2)
-        double probs[4];
-        _mm256_storeu_pd(probs, correlations);
-        for (int i = 0; i < 4 && state + i < hilbert_space->num_states; i++) {
-            hilbert_space->probability_amplitudes[state + i] = probs[3-i];
-        }
-
-        // Phase encoding for quantum states (simplified AVX2 version)
-        for (size_t dim = 0; dim < QUANTUM_HILBERT_DIMENSIONS; dim++) {
-            double phase = 2.0 * M_PI * dim / QUANTUM_HILBERT_DIMENSIONS;
-
-            for (size_t s = 0; s < 4 && state + s < hilbert_space->num_states; s++) {
-                size_t st = state + s;
-                double phase_offset = 2.0 * M_PI * (double)st / hilbert_space->num_states;
-                double correlation = hilbert_space->probability_amplitudes[st];
-
-                hilbert_space->superposition_states[st].real[dim] =
-                    correlation * cos(phase + phase_offset);
-                hilbert_space->superposition_states[st].imag[dim] =
-                    correlation * sin(phase + phase_offset);
-            }
-        }
-    }
-}
-
-#endif /* __AVX2__ */
-
-#ifdef __AVX512F__
-#include <immintrin.h>
-
-/**
- * AVX512-accelerated quantum operations for maximum parallelism
- */
-void not_stisla_quantum_simd_state_init_avx512(quantum_search_hilbert_space_t* hilbert_space,
-                                             const int64_t* arr, size_t n, int64_t key) {
-
-    __m512d key_vec = _mm512_set1_pd((double)key);
-    __m512d n_vec = _mm512_set1_pd((double)n);
-
-    // Process 8 states at a time with AVX512
-    for (size_t state = 0; state < hilbert_space->num_states; state += 8) {
-        // Load 8 array indices
-        __m512i indices = _mm512_set_epi64(
-            state * n / hilbert_space->num_states + 7,
-            state * n / hilbert_space->num_states + 6,
-            state * n / hilbert_space->num_states + 5,
-            state * n / hilbert_space->num_states + 4,
-            state * n / hilbert_space->num_states + 3,
-            state * n / hilbert_space->num_states + 2,
-            state * n / hilbert_space->num_states + 1,
-            state * n / hilbert_space->num_states
-        );
-
-        // Gather array values (Note: AVX512 gather for 64-bit integers)
-        __m512i arr_vals_i64 = _mm512_i64gather_epi64(indices, arr, 8);
-        __m512d arr_vals = _mm512_cvtepi64_pd(arr_vals_i64);
-
-        // Compute |arr[i] - key|
-        __m512d diff = _mm512_sub_pd(arr_vals, key_vec);
-        __m512d abs_diff = _mm512_abs_pd(diff);
-
-        // Compute exp(-|diff| / n) using AVX512
-        __m512d normalized = _mm512_div_pd(abs_diff, n_vec);
-        __m512d neg_norm = _mm512_sub_pd(_mm512_setzero_pd(), normalized);
-
-        // Better polynomial approximation with AVX512
-        __m512d correlations = _mm512_add_pd(_mm512_set1_pd(1.0), neg_norm);
-        __m512d x2 = _mm512_mul_pd(neg_norm, neg_norm);
-        __m512d x3 = _mm512_mul_pd(x2, neg_norm);
-
-        correlations = _mm512_add_pd(correlations, _mm512_mul_pd(x2, _mm512_set1_pd(0.5)));
-        correlations = _mm512_add_pd(correlations, _mm512_mul_pd(x3, _mm512_set1_pd(0.16666666666666666)));
-
-        // Store probability amplitudes
-        _mm512_storeu_pd(&hilbert_space->probability_amplitudes[state], correlations);
-
-        // Phase encoding for quantum states (scalar fallback for trig functions)
-        // AVX512 doesn't have built-in sin/cos, so we compute them scalar
-        for (size_t dim = 0; dim < QUANTUM_HILBERT_DIMENSIONS; dim++) {
-            double base_phase = 2.0 * M_PI * dim / QUANTUM_HILBERT_DIMENSIONS;
-
-            for (size_t s = 0; s < 8 && state + s < hilbert_space->num_states; s++) {
-                size_t st = state + s;
-                double phase_offset = 2.0 * M_PI * (double)st / hilbert_space->num_states;
-                double total_phase = base_phase + phase_offset;
-                double correlation = hilbert_space->probability_amplitudes[st];
-
-                hilbert_space->superposition_states[st].real[dim] =
-                    correlation * cos(total_phase);
-                hilbert_space->superposition_states[st].imag[dim] =
-                    correlation * sin(total_phase);
-            }
-        }
-    }
-}
-
-#endif /* __AVX512F__ */
-
-/* ============================================================================
- * DSMIL QUANTUM DEVICE INTEGRATION
- * ============================================================================ */
-
-static enum dsmil_quantum_provider current_dsmil_provider = DSMIL_QP_AUTO;
-
-/* DSMIL quantum acceleration statistics */
-static size_t quantum_jobs_submitted = 0;
-static size_t quantum_jobs_completed = 0;
-static double total_quantum_speedup = 0.0;
-static size_t quantum_qubits_used = 0;
-
-/**
- * @brief Check if DSMIL quantum device is available
- */
-bool not_stisla_quantum_device_available(void) {
-    /* Check for DSMIL device availability */
-    /* This would typically check /dev/dsmil or similar */
-    /* For now, assume available if we can access quantum libraries */
-    return true; /* Placeholder - implement actual device detection */
-}
-
-/**
- * @brief Configure quantum search to use specific DSMIL provider
- * NOTE: Only DSMIL_QP_SIMULATOR is allowed for LOCAL operation
- */
-void not_stisla_quantum_set_provider(enum dsmil_quantum_provider provider) {
-    /* FORCE LOCAL SIMULATION ONLY - BLOCK ALL CLOUD PROVIDERS */
-    if (provider == DSMIL_QP_DWAVE || provider == DSMIL_QP_IBM || provider == DSMIL_QP_XANADU) {
-        /* Use local quantum simulation for offline operation */
-        current_dsmil_provider = DSMIL_QP_SIMULATOR;
-    } else {
-        current_dsmil_provider = provider;
-    }
-}
-
-/**
- * @brief Submit search problem to local quantum-inspired simulator
- * Uses local quantum-inspired simulation - completely offline, no cloud access
- */
-not_stisla_result_t not_stisla_dsmil_quantum_search(
-    const int64_t* arr, size_t n, int64_t key,
-    not_stisla_anchor_table_t* table, size_t tol
-) {
-    /* Check if local quantum-inspired simulator is available */
-    if (!not_stisla_quantum_device_available()) {
-        /* Fall back to algorithmic quantum search */
-        return not_stisla_quantum_search(arr, n, key, table, tol);
-    }
-
-    /* Use local quantum-inspired simulation for arrays >= threshold */
-    if (n >= QUANTUM_SEARCH_THRESHOLD) {
-        /* Local quantum-inspired simulation using DSMIL algorithms */
-        /* Runs entirely on local hardware - zero cloud dependency */
-
-        /* Use local simulator only - no cloud providers allowed */
-        current_dsmil_provider = DSMIL_QP_SIMULATOR; /* Local simulation only */
-
-        /* Submit to local quantum-inspired simulator */
-        /* Uses ioctl() to /dev/dsmil Device 46 with DSMIL_QP_SIMULATOR */
-            /* High-fidelity local simulation with optimized algorithms */
-
-        /* Update statistics */
-        quantum_jobs_submitted++;
-
-        /* Run local quantum-inspired simulation */
-        /* Implementation uses local quantum-inspired algorithms */
-        not_stisla_result_t result = not_stisla_quantum_search(arr, n, key, table, tol);
-
-        if (result != NOT_STISLA_NOT_FOUND) {
-            quantum_jobs_completed++;
-            /* Calculate speedup from local quantum-inspired simulation */
-            /* Grover algorithm provides theoretical O(sqrt(n)) speedup */
-            double speedup = sqrt((double)n);
-            total_quantum_speedup += speedup;
-            /* Local simulator limited to 30 qubits max (per hardware probe specification) */
-            quantum_qubits_used += (QUANTUM_HILBERT_DIMENSIONS > 30) ? 30 : QUANTUM_HILBERT_DIMENSIONS;
-        }
-
-        return result;
-    } else {
-        /* For smaller arrays, use algorithmic quantum search */
-        return not_stisla_quantum_search(arr, n, key, table, tol);
-    }
-}
-
-/**
- * @brief Get quantum acceleration statistics from DSMIL device
- */
-void not_stisla_quantum_get_acceleration_stats(
-    size_t* jobs_submitted,
-    size_t* jobs_completed,
-    double* average_speedup,
-    size_t* qubits_used
-) {
-    if (jobs_submitted) *jobs_submitted = quantum_jobs_submitted;
-    if (jobs_completed) *jobs_completed = quantum_jobs_completed;
-    if (average_speedup) {
-        *average_speedup = quantum_jobs_completed > 0 ?
-            total_quantum_speedup / quantum_jobs_completed : 0.0;
-    }
-    if (qubits_used) *qubits_used = quantum_qubits_used;
+const char* enhanced_build_info(void) {
+    return NOT_STISLA_BUILD_INFO;
 }

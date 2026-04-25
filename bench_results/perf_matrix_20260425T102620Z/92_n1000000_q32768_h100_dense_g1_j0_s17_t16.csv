@@ -1,0 +1,14 @@
+#profile=n1000000_q32768_h100_dense_g1_j0_s17_t16
+#n=1000000,queries=32768,runs=7
+#workload=hit_rate_pct=100,data_gap=1,data_gap_jitter=0,query_stride=17,query_effective_stride=17,query_cycle=1000000,expected_hits=32768,expected_misses=0
+#workload_pattern=data[0]=0,data[i]=data[i-1]+data_gap+jitter(i),jitter=0..data_gap_jitter,hit_when=i%100<hit_rate_pct,hit_index_stride=query_stride%n,miss_key=-1-(i%1000000)
+#env=NOT_STISLA_PROFILE,NOT_STISLA_N,NOT_STISLA_QUERIES,NOT_STISLA_RUNS,NOT_STISLA_HIT_RATE_PCT,NOT_STISLA_DATA_GAP,NOT_STISLA_DATA_GAP_JITTER,NOT_STISLA_QUERY_STRIDE
+#auto_backend_bench=1
+#run,binary_ns,not_stisla_ns,batch_parallel_ns,fortran_batch_ns,auto_batch_ns,fortran_available,auto_backend_bench,auto_decision_available,auto_backend,auto_cpu_features,auto_array_bucket,auto_query_bucket,auto_thread_count,auto_estimated_ns_per_key,auto_p95_ns_per_key
+1,48.01,10.10,21.20,0.00,4.36,0,1,1,c_openmp,9,1048576,32768,16,3.44,3.44
+2,43.03,7.45,3.89,0.00,3.88,0,1,1,c_openmp,9,1048576,32768,16,2.95,2.95
+3,42.50,7.49,3.97,0.00,3.73,0,1,1,c_openmp,9,1048576,32768,16,2.84,2.84
+4,42.71,7.36,5.68,0.00,3.65,0,1,1,c_openmp,9,1048576,32768,16,2.78,2.78
+5,43.05,7.12,5.50,0.00,3.71,0,1,1,c_openmp,9,1048576,32768,16,2.83,2.83
+6,42.52,7.37,4.83,0.00,3.70,0,1,1,c_openmp,9,1048576,32768,16,2.70,2.70
+7,42.67,7.12,5.45,0.00,3.87,0,1,1,c_openmp,9,1048576,32768,16,2.88,2.88

@@ -21,8 +21,69 @@ typedef struct dsmil_telemetry_processor {
     size_t event_count;
     dsmil_telemetry_event_t *events;
     int64_t *timestamps;  // For NOT_STISLA search
+    bool timestamps_sorted;
     bool initialized;
 } dsmil_telemetry_processor_t;
+
+static size_t telemetry_lower_bound_timestamp(
+    const int64_t *timestamps,
+    size_t count,
+    dsmil_timestamp_t target
+) {
+    size_t low = 0;
+    size_t high = count;
+
+    while (low < high) {
+        size_t mid = low + (high - low) / 2;
+
+        if ((dsmil_timestamp_t)timestamps[mid] < target) {
+            low = mid + 1;
+        } else {
+            high = mid;
+        }
+    }
+
+    return low;
+}
+
+static size_t telemetry_upper_bound_timestamp(
+    const int64_t *timestamps,
+    size_t count,
+    dsmil_timestamp_t target
+) {
+    size_t low = 0;
+    size_t high = count;
+
+    while (low < high) {
+        size_t mid = low + (high - low) / 2;
+
+        if ((dsmil_timestamp_t)timestamps[mid] <= target) {
+            low = mid + 1;
+        } else {
+            high = mid;
+        }
+    }
+
+    return low;
+}
+
+static void telemetry_fill_range_result(
+    dsmil_telemetry_result_t *result,
+    const dsmil_telemetry_event_t *event,
+    size_t index
+) {
+    result->event = event;
+    result->index = index;
+    result->exact_match_time = event->timestamp;
+    result->is_exact_match = false; // Range match
+}
+
+static void telemetry_fill_not_found(dsmil_telemetry_result_t *result) {
+    result->event = NULL;
+    result->index = (size_t)-1;
+    result->exact_match_time = 0;
+    result->is_exact_match = false;
+}
 
 /* ============================================================================
  * Telemetry Processor API
@@ -46,6 +107,7 @@ dsmil_telemetry_processor_t* dsmil_telemetry_processor_create(size_t max_events)
     processor->max_events = max_events;
     processor->events = calloc(max_events, sizeof(dsmil_telemetry_event_t));
     processor->timestamps = calloc(max_events, sizeof(int64_t));
+    processor->timestamps_sorted = true;
 
     if (!processor->events || !processor->timestamps) {
         dsmil_search_destroy(processor->search_ctx);
@@ -87,6 +149,11 @@ int dsmil_telemetry_processor_add_event(dsmil_telemetry_processor_t *processor,
         return DSMIL_SEARCH_ERROR_MEMORY;
     }
 
+    if (processor->event_count > 0 &&
+        processor->events[processor->event_count - 1].timestamp > event->timestamp) {
+        processor->timestamps_sorted = false;
+    }
+
     // Copy event
     processor->events[processor->event_count] = *event;
     processor->timestamps[processor->event_count] = (int64_t)event->timestamp;
@@ -107,14 +174,40 @@ int dsmil_telemetry_processor_find_by_timestamp(
         return DSMIL_SEARCH_ERROR_INVALID_PARAM;
     }
 
-    // Use NOT_STISLA for ultra-fast timestamp lookup (22.28× speedup)
-    return dsmil_search_telemetry_events(
-        processor->search_ctx,
-        processor->events,
-        processor->event_count,
-        target_time,
-        result
-    );
+    if (processor->event_count == 0) {
+        telemetry_fill_not_found(result);
+        return DSMIL_SEARCH_ERROR_NOT_FOUND;
+    }
+
+    if (processor->timestamps_sorted) {
+        dsmil_search_index_t index = {
+            .keys = processor->timestamps,
+            .num_elements = processor->event_count
+        };
+
+        return dsmil_search_telemetry_events_indexed(
+            processor->search_ctx,
+            &index,
+            processor->events,
+            target_time,
+            result
+        );
+    }
+
+    // NOT_STISLA expects sorted keys; preserve correctness for unsorted append streams.
+    for (size_t i = 0; i < processor->event_count; i++) {
+        const dsmil_telemetry_event_t *event = &processor->events[i];
+        if (event->timestamp == target_time) {
+            result->event = event;
+            result->index = i;
+            result->exact_match_time = event->timestamp;
+            result->is_exact_match = true;
+            return DSMIL_SEARCH_SUCCESS;
+        }
+    }
+
+    telemetry_fill_not_found(result);
+    return DSMIL_SEARCH_ERROR_NOT_FOUND;
 }
 
 /**
@@ -132,17 +225,36 @@ int dsmil_telemetry_processor_find_in_time_range(
         return DSMIL_SEARCH_ERROR_INVALID_PARAM;
     }
 
-    // Filter events by time range (could be further optimized with NOT_STISLA)
     size_t found = 0;
 
+    if (start_time > end_time || max_results == 0 || processor->event_count == 0) {
+        *num_found = 0;
+        return DSMIL_SEARCH_SUCCESS;
+    }
+
+    if (processor->timestamps_sorted) {
+        size_t begin = telemetry_lower_bound_timestamp(processor->timestamps,
+                                                       processor->event_count,
+                                                       start_time);
+        size_t end = telemetry_upper_bound_timestamp(processor->timestamps,
+                                                     processor->event_count,
+                                                     end_time);
+
+        for (size_t i = begin; i < end && found < max_results; i++) {
+            telemetry_fill_range_result(&results[found], &processor->events[i], i);
+            found++;
+        }
+
+        *num_found = found;
+        return DSMIL_SEARCH_SUCCESS;
+    }
+
+    // Preserve existing behavior for conservatively handled unsorted input.
     for (size_t i = 0; i < processor->event_count && found < max_results; i++) {
         const dsmil_telemetry_event_t *event = &processor->events[i];
 
         if (event->timestamp >= start_time && event->timestamp <= end_time) {
-            results[found].event = event;
-            results[found].index = i;
-            results[found].exact_match_time = event->timestamp;
-            results[found].is_exact_match = false; // Range match
+            telemetry_fill_range_result(&results[found], event, i);
             found++;
         }
     }
@@ -167,9 +279,35 @@ int dsmil_telemetry_processor_find_by_device_time_range(
         return DSMIL_SEARCH_ERROR_INVALID_PARAM;
     }
 
-    // Filter by device and time range
     size_t found = 0;
 
+    if (start_time > end_time || max_results == 0 || processor->event_count == 0) {
+        *num_found = 0;
+        return DSMIL_SEARCH_SUCCESS;
+    }
+
+    if (processor->timestamps_sorted) {
+        size_t begin = telemetry_lower_bound_timestamp(processor->timestamps,
+                                                       processor->event_count,
+                                                       start_time);
+        size_t end = telemetry_upper_bound_timestamp(processor->timestamps,
+                                                     processor->event_count,
+                                                     end_time);
+
+        for (size_t i = begin; i < end && found < max_results; i++) {
+            const dsmil_telemetry_event_t *event = &processor->events[i];
+
+            if (event->device_id == device_id) {
+                telemetry_fill_range_result(&results[found], event, i);
+                found++;
+            }
+        }
+
+        *num_found = found;
+        return DSMIL_SEARCH_SUCCESS;
+    }
+
+    // Preserve existing behavior for conservatively handled unsorted input.
     for (size_t i = 0; i < processor->event_count && found < max_results; i++) {
         const dsmil_telemetry_event_t *event = &processor->events[i];
 
@@ -177,10 +315,7 @@ int dsmil_telemetry_processor_find_by_device_time_range(
             event->timestamp >= start_time &&
             event->timestamp <= end_time) {
 
-            results[found].event = event;
-            results[found].index = i;
-            results[found].exact_match_time = event->timestamp;
-            results[found].is_exact_match = false; // Range match
+            telemetry_fill_range_result(&results[found], event, i);
             found++;
         }
     }
@@ -226,6 +361,7 @@ int dsmil_telemetry_processor_clear(dsmil_telemetry_processor_t *processor) {
     }
 
     processor->event_count = 0;
+    processor->timestamps_sorted = true;
 
     // Reset search statistics
     return dsmil_search_reset_stats(processor->search_ctx);
@@ -284,7 +420,7 @@ int dsmil_telemetry_processor_analyze_patterns(
     report_len += snprintf(analysis_report + report_len, max_report_length - report_len,
                           "Events Found: %zu\n", num_events_found);
     report_len += snprintf(analysis_report + report_len, max_report_length - report_len,
-                          "Search Performance: 22.28× faster than binary search\n\n");
+                          "Search Performance: NOT_STISLA accelerated lookup\n\n");
 
     // Count events by device
     uint32_t device_counts[256] = {0}; // Assume max 256 devices

@@ -44,7 +44,7 @@ static double benchmark_search(const char* name, int64_t* arr, size_t n,
     
     for (int i = 0; i < ITERATIONS; i++) {
         uint64_t start = get_time_ns();
-        not_stisla_result_t result = not_stisla_search(arr, n, keys[i % num_keys], table, 8);
+        (void)not_stisla_search(arr, n, keys[i % num_keys], table, 8);
         uint64_t elapsed = get_time_ns() - start;
         
         total += elapsed;

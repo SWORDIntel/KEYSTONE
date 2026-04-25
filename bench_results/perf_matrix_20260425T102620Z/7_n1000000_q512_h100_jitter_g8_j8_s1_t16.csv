@@ -1,0 +1,14 @@
+#profile=n1000000_q512_h100_jitter_g8_j8_s1_t16
+#n=1000000,queries=512,runs=7
+#workload=hit_rate_pct=100,data_gap=8,data_gap_jitter=8,query_stride=1,query_effective_stride=1,query_cycle=1000000,expected_hits=512,expected_misses=0
+#workload_pattern=data[0]=0,data[i]=data[i-1]+data_gap+jitter(i),jitter=0..data_gap_jitter,hit_when=i%100<hit_rate_pct,hit_index_stride=query_stride%n,miss_key=-1-(i%1000000)
+#env=NOT_STISLA_PROFILE,NOT_STISLA_N,NOT_STISLA_QUERIES,NOT_STISLA_RUNS,NOT_STISLA_HIT_RATE_PCT,NOT_STISLA_DATA_GAP,NOT_STISLA_DATA_GAP_JITTER,NOT_STISLA_QUERY_STRIDE
+#auto_backend_bench=1
+#run,binary_ns,not_stisla_ns,batch_parallel_ns,fortran_batch_ns,auto_batch_ns,fortran_available,auto_backend_bench,auto_decision_available,auto_backend,auto_cpu_features,auto_array_bucket,auto_query_bucket,auto_thread_count,auto_estimated_ns_per_key,auto_p95_ns_per_key
+1,31.06,8.43,987.53,0.00,13.37,0,1,1,scalar,9,1048576,512,16,11.76,11.76
+2,30.62,8.47,51.47,0.00,11.14,0,1,1,scalar,9,1048576,512,16,9.62,9.62
+3,24.47,8.14,47.51,0.00,10.80,0,1,1,scalar,9,1048576,512,16,9.54,9.54
+4,21.41,8.10,52.88,0.00,9.52,0,1,1,scalar,9,1048576,512,16,8.11,8.11
+5,20.25,7.85,42.39,0.00,14.48,0,1,1,scalar,9,1048576,512,16,13.13,13.13
+6,19.76,8.24,48.27,0.00,10.21,0,1,1,scalar,9,1048576,512,16,8.81,8.81
+7,18.79,7.85,41.13,0.00,11.53,0,1,1,scalar,9,1048576,512,16,9.85,9.85
