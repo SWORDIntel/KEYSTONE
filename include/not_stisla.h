@@ -223,6 +223,15 @@ size_t not_stisla_search_batch_fortran(
     size_t num_items
 );
 
+size_t not_stisla_search_batch_c_optimized(
+    const int64_t* arr,
+    size_t n,
+    not_stisla_batch_item_t* items,
+    size_t num_items,
+    not_stisla_anchor_table_t* table,
+    size_t tol
+);
+
 void not_stisla_get_stats(
     const not_stisla_anchor_table_t* table,
     size_t* searches_total,
