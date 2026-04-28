@@ -24,9 +24,52 @@ jobs:
           chmod +x scripts/build_native.sh
           ./scripts/build_native.sh
 
+      - name: Prepare CI bundle
+        run: mkdir -p .github/ci-artifacts
+
       - name: Run native tests
         run: |
-          ./test_enhanced
-          ./test_fortran_backend
-          ./test_auto_backend
-          ./test_telemetry_processor_perf
+          set -o pipefail
+          START_TS=$(date -u +%s)
+          ./test_enhanced 2>&1 | tee .github/ci-artifacts/test_enhanced.log
+          STATUS1=${PIPESTATUS[0]}
+          ./test_fortran_backend 2>&1 | tee .github/ci-artifacts/test_fortran_backend.log
+          STATUS2=${PIPESTATUS[0]}
+          ./test_auto_backend 2>&1 | tee .github/ci-artifacts/test_auto_backend.log
+          STATUS3=${PIPESTATUS[0]}
+          ./test_telemetry_processor_perf 2>&1 | tee .github/ci-artifacts/test_telemetry_processor_perf.log
+          STATUS4=${PIPESTATUS[0]}
+          TEST_STATUS=0
+          if [ "$STATUS1" -ne 0 ] || [ "$STATUS2" -ne 0 ] || [ "$STATUS3" -ne 0 ] || [ "$STATUS4" -ne 0 ]; then
+            TEST_STATUS=1
+          fi
+          END_TS=$(date -u +%s)
+          DURATION=$((END_TS - START_TS))
+          {
+            echo "# NOT_STISLA CI Summary"
+            echo "repository: NOT_STISLA"
+            echo "workflow: ${{ github.workflow }}"
+            echo "run_id: ${{ github.run_id }}"
+            echo "job: ${{ github.job }}"
+            echo "status: $([ \"$TEST_STATUS\" = \"0\" ] && echo PASS || echo FAIL)"
+            echo "duration_seconds: $DURATION"
+            echo "test_enhanced_status: $STATUS1"
+            echo "test_fortran_backend_status: $STATUS2"
+            echo "test_auto_backend_status: $STATUS3"
+            echo "test_telemetry_processor_perf_status: $STATUS4"
+            echo "ref: ${{ github.ref }}"
+            echo "sha: ${{ github.sha }}"
+          } > .github/ci-artifacts/ci-summary.md
+          exit "$TEST_STATUS"
+
+      - name: Upload CI artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: not-stisla-ci-artifacts
+          path: .github/ci-artifacts/
+
+      - name: Emit workflow status
+        if: always()
+        run: |
+          echo "::notice file=.github/ci-artifacts/ci-summary.md,title=NOT_STISLA CI Summary::See attached artifact 'not-stisla-ci-artifacts'"
