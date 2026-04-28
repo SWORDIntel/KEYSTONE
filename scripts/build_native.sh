@@ -5,13 +5,29 @@ echo "Building NOT_STISLA for native x86_64 architecture..."
 FORTRAN_CFLAGS=""
 ROOT_FORTRAN_LDFLAGS=""
 BENCHMARK_FORTRAN_LDFLAGS=""
-NATIVE_CFLAGS="-O3 -march=native -mavx2"
 OPENMP_CFLAGS=""
 OPENMP_LDFLAGS=""
+BASE_CFLAGS="${NOT_STISLA_BASE_CFLAGS:--O3 -march=native}"
+SIMD_CFLAGS=""
 
-if [ "${NOT_STISLA_ENABLE_AVX512:-0}" = "1" ]; then
-    NATIVE_CFLAGS="$NATIVE_CFLAGS -mavx512f -mavx512dq"
+cpu_has() {
+    grep -m1 '^flags' /proc/cpuinfo | grep -qw "$1"
+}
+
+if [ "${NOT_STISLA_FORCE_SCALAR:-0}" = "1" ]; then
+    echo "Forcing scalar/SSE-safe build."
+else
+    if [ "${NOT_STISLA_ENABLE_AVX2:-auto}" != "0" ] && cpu_has avx2; then
+        SIMD_CFLAGS="$SIMD_CFLAGS -mavx2"
+    fi
+
+    if [ "${NOT_STISLA_ENABLE_AVX512:-0}" = "1" ] && cpu_has avx512f && cpu_has avx512dq; then
+        SIMD_CFLAGS="$SIMD_CFLAGS -mavx512f -mavx512dq"
+    fi
 fi
+
+NATIVE_CFLAGS="${NOT_STISLA_NATIVE_CFLAGS:-$BASE_CFLAGS$SIMD_CFLAGS}"
+echo "Using native CFLAGS: $NATIVE_CFLAGS"
 
 if [ "${NOT_STISLA_ENABLE_OPENMP:-1}" = "1" ]; then
     OPENMP_CFLAGS="-fopenmp"
@@ -42,22 +58,22 @@ echo "Compiling src/not_stisla.c..."
 gcc $NATIVE_CFLAGS $OPENMP_CFLAGS -Wall -Wextra -Werror=implicit-function-declaration -I./include $FORTRAN_CFLAGS -c src/not_stisla.c || { echo "not_stisla.c compilation failed"; exit 1; }
 
 echo "Compiling src/dsmil_not_stisla_wrapper.c..."
-gcc -O3 -march=native -mavx2 -Wall -Wextra -I./include -c src/dsmil_not_stisla_wrapper.c || { echo "dsmil_not_stisla_wrapper.c compilation failed"; exit 1; }
+gcc $NATIVE_CFLAGS -Wall -Wextra -I./include -c src/dsmil_not_stisla_wrapper.c || { echo "dsmil_not_stisla_wrapper.c compilation failed"; exit 1; }
 
 echo "Compiling src/dsmil_telemetry_processor.c..."
-gcc -O3 -march=native -mavx2 -Wall -Wextra -I./include -c src/dsmil_telemetry_processor.c || { echo "dsmil_telemetry_processor.c compilation failed"; exit 1; }
+gcc $NATIVE_CFLAGS -Wall -Wextra -I./include -c src/dsmil_telemetry_processor.c || { echo "dsmil_telemetry_processor.c compilation failed"; exit 1; }
 
 echo "Compiling tests/dsmil_integration_test.c..."
-gcc -O3 -march=native -mavx2 -Wall -Wextra -I./include -c tests/dsmil_integration_test.c || { echo "dsmil_integration_test.c compilation failed"; exit 1; }
+gcc $NATIVE_CFLAGS -Wall -Wextra -I./include -c tests/dsmil_integration_test.c || { echo "dsmil_integration_test.c compilation failed"; exit 1; }
 
 echo "Compiling tests/test_fortran_backend.c..."
-gcc -O3 -march=native -Wall -Wextra -I./include $FORTRAN_CFLAGS -c tests/test_fortran_backend.c || { echo "test_fortran_backend.c compilation failed"; exit 1; }
+gcc $NATIVE_CFLAGS -Wall -Wextra -I./include $FORTRAN_CFLAGS -c tests/test_fortran_backend.c || { echo "test_fortran_backend.c compilation failed"; exit 1; }
 
 echo "Compiling tests/test_auto_backend.c..."
-gcc -O3 -march=native $OPENMP_CFLAGS -Wall -Wextra -I./include $FORTRAN_CFLAGS -c tests/test_auto_backend.c || { echo "test_auto_backend.c compilation failed"; exit 1; }
+gcc $NATIVE_CFLAGS $OPENMP_CFLAGS -Wall -Wextra -I./include $FORTRAN_CFLAGS -c tests/test_auto_backend.c || { echo "test_auto_backend.c compilation failed"; exit 1; }
 
 echo "Compiling tests/test_telemetry_processor_perf.c..."
-gcc -O3 -march=native -mavx2 -Wall -Wextra -I./include -c tests/test_telemetry_processor_perf.c || { echo "test_telemetry_processor_perf.c compilation failed"; exit 1; }
+gcc $NATIVE_CFLAGS -Wall -Wextra -I./include -c tests/test_telemetry_processor_perf.c || { echo "test_telemetry_processor_perf.c compilation failed"; exit 1; }
 
 # Link test_enhanced
 echo "Linking test_enhanced..."
@@ -74,10 +90,10 @@ gcc -o test_telemetry_processor_perf not_stisla.o dsmil_not_stisla_wrapper.o dsm
 
 # Compile source files for benchmarks
 echo "Compiling benchmarks/dsmil_benchmark.c..."
-gcc -O3 -march=native -mavx2 -Wall -Wextra -I./include -c benchmarks/dsmil_benchmark.c || { echo "dsmil_benchmark.c compilation failed"; exit 1; }
+gcc $NATIVE_CFLAGS -Wall -Wextra -I./include -c benchmarks/dsmil_benchmark.c || { echo "dsmil_benchmark.c compilation failed"; exit 1; }
 
 echo "Compiling benchmarks/performance_proof.c..."
-gcc -O3 -march=native -mavx2 -Wall -Wextra -I./include -c benchmarks/performance_proof.c || { echo "performance_proof.c compilation failed"; exit 1; }
+gcc $NATIVE_CFLAGS -Wall -Wextra -I./include -c benchmarks/performance_proof.c || { echo "performance_proof.c compilation failed"; exit 1; }
 
 # Link benchmarks
 echo "Linking benchmarks/dsmil_benchmark..."
