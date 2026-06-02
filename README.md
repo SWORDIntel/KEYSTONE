@@ -1,6 +1,6 @@
 <div align="center">
 
-# BLACKLEDGER
+# KEYSTONE
 
 ### Precision indexing and high-speed lookup infrastructure for sorted `int64_t` datasets.
 
@@ -13,7 +13,7 @@
 [![Platform](https://img.shields.io/badge/Platform-Linux-success.svg)](https://www.kernel.org/)
 [![License](https://img.shields.io/badge/License-AGPL--3.0-red.svg)](LICENSE)
 
-**BLACKLEDGER** is a high-performance database indexing and lookup engine built for precise, repeatable retrieval over sorted 64-bit integer datasets.
+**KEYSTONE** is a high-performance database indexing and lookup engine built for precise, repeatable retrieval over sorted 64-bit integer datasets.
 
 It combines anchor-guided interpolation search, adaptive backend selection, SIMD acceleration, OpenMP parallelism, an optional Fortran batch engine, and compressed archive ingestion into a single practical system for serious data infrastructure.
 
@@ -25,15 +25,15 @@ It combines anchor-guided interpolation search, adaptive backend selection, SIMD
 
 Modern databases rarely fail because storage is unavailable. They fail because lookup paths drift, records fragment, indexes become inconsistent, and high-volume datasets become expensive to search reliably.
 
-BLACKLEDGER addresses that layer directly.
+KEYSTONE addresses that layer directly.
 
-It is designed for systems where record identity, index stability, and lookup speed matter at the same time. Instead of treating indexing as a side effect of storage, BLACKLEDGER treats precise indexed retrieval as the core primitive.
+It is designed for systems where record identity, index stability, and lookup speed matter at the same time. Instead of treating indexing as a side effect of storage, KEYSTONE treats precise indexed retrieval as the core primitive.
 
 ---
 
-## What BLACKLEDGER Is
+## What KEYSTONE Is
 
-BLACKLEDGER is a functional indexing and lookup engine for sorted `int64_t` datasets. It sits close to the data layer, supporting fast search, batch lookup, telemetry processing, archive-aware ingestion, and performance validation.
+KEYSTONE is a functional indexing and lookup engine for sorted `int64_t` datasets. It sits close to the data layer, supporting fast search, batch lookup, telemetry processing, archive-aware ingestion, and performance validation.
 
 It is not a decorative wrapper around a database. It is a low-level search component designed for practical integration into larger systems that need predictable record access.
 
@@ -56,7 +56,7 @@ It is not a decorative wrapper around a database. It is a low-level search compo
 
 High-speed lookup is easy to claim and difficult to prove. Real systems need more than a fast happy path.
 
-BLACKLEDGER is built around the problems that appear when datasets become large, query volume increases, and records must remain stable across repeated processing runs.
+KEYSTONE is built around the problems that appear when datasets become large, query volume increases, and records must remain stable across repeated processing runs.
 
 It is useful where the cost of bad indexing is operationally significant:
 
@@ -68,7 +68,7 @@ It is useful where the cost of bad indexing is operationally significant:
 - weak testability around search behavior;
 - performance claims without reproducible benchmarks.
 
-BLACKLEDGER provides a focused answer: a compact, benchmarkable, database-adjacent indexing engine with multiple execution backends and a clear performance model.
+KEYSTONE provides a focused answer: a compact, benchmarkable, database-adjacent indexing engine with multiple execution backends and a clear performance model.
 
 ---
 
@@ -189,19 +189,19 @@ flowchart LR
 
 ### Database Index Acceleration
 
-BLACKLEDGER is suitable for systems that need fast lookup across large sorted integer keyspaces, especially where keys map into record offsets, entity identifiers, telemetry IDs, event IDs, or compressed member indexes.
+KEYSTONE is suitable for systems that need fast lookup across large sorted integer keyspaces, especially where keys map into record offsets, entity identifiers, telemetry IDs, event IDs, or compressed member indexes.
 
 ### Canonical Record Retrieval
 
-When records are normalized into stable integer identifiers, BLACKLEDGER can act as the lookup layer that keeps retrieval fast and repeatable.
+When records are normalized into stable integer identifiers, KEYSTONE can act as the lookup layer that keeps retrieval fast and repeatable.
 
 ### Telemetry and Event Search
 
-Telemetry systems often generate large ordered datasets that must be searched repeatedly. BLACKLEDGER is designed for that access pattern: high-volume lookup, repeatable index resolution, and measurable backend performance.
+Telemetry systems often generate large ordered datasets that must be searched repeatedly. KEYSTONE is designed for that access pattern: high-volume lookup, repeatable index resolution, and measurable backend performance.
 
 ### Archive-Aware Data Processing
 
-Compressed archive workflows are common in telemetry, exports, backups, and evidence packages. BLACKLEDGER includes `.tar.zst` ingestion support so archive processing can remain close to the indexed lookup model.
+Compressed archive workflows are common in telemetry, exports, backups, and evidence packages. KEYSTONE includes `.tar.zst` ingestion support so archive processing can remain close to the indexed lookup model.
 
 ### Benchmark-Driven Optimization
 
@@ -209,17 +209,17 @@ The project includes performance tooling intended to compare backend behavior ac
 
 ### Systems Programming Demonstration
 
-BLACKLEDGER demonstrates practical low-level engineering across C11, optional Fortran, Python-based benchmark visualization, SIMD-aware execution, OpenMP parallelism, compressed archive ingestion, and structured validation.
+KEYSTONE demonstrates practical low-level engineering across C11, optional Fortran, Python-based benchmark visualization, SIMD-aware execution, OpenMP parallelism, compressed archive ingestion, and structured validation.
 
 ---
 
 ## Performance Orientation
 
-BLACKLEDGER is designed around a simple premise: search performance should be measurable, backend-aware, and reproducible.
+KEYSTONE is designed around a simple premise: search performance should be measurable, backend-aware, and reproducible.
 
 The benchmark suite is intended to produce concrete latency and speedup comparisons across workload profiles, including dense datasets, larger million-scale datasets, jittered distributions, and backend-specific behavior.
 
-| Performance Concern | BLACKLEDGER Response |
+| Performance Concern | KEYSTONE Response |
 |---|---|
 | **Small lookup overhead** | Scalar interpolation remains available where vector or parallel overhead would be wasteful. |
 | **Large batch volume** | SIMD, OpenMP, and Fortran paths provide acceleration options for heavier workloads. |
@@ -233,7 +233,7 @@ The benchmark suite is intended to produce concrete latency and speedup comparis
 
 ```mermaid
 flowchart LR
-    Root["BLACKLEDGER Root"] --> SRC["src/"]
+    Root["KEYSTONE Root"] --> SRC["src/"]
     Root --> INC["include/"]
     Root --> TEST["tests/"]
     Root --> BENCH["benchmarks/"]
@@ -266,7 +266,7 @@ flowchart LR
 
 ## Technical Showcase Value
 
-BLACKLEDGER is intended to be read as serious software, not a throwaway benchmark experiment.
+KEYSTONE is intended to be read as serious software, not a throwaway benchmark experiment.
 
 It showcases:
 
@@ -288,7 +288,7 @@ This makes it suitable for portfolio review, technical demonstration, internal t
 
 ## Intended Users
 
-BLACKLEDGER is intended for technical users who care about lookup correctness, runtime behavior, and database-adjacent performance.
+KEYSTONE is intended for technical users who care about lookup correctness, runtime behavior, and database-adjacent performance.
 
 | User Type | Why It Fits |
 |---|---|
@@ -331,7 +331,7 @@ BLACKLEDGER is intended for technical users who care about lookup correctness, r
 
 ## Security and Data Handling
 
-BLACKLEDGER is designed for datasets that may be operationally sensitive. Treat inputs, benchmark outputs, generated indexes, and archive contents according to the sensitivity of the source material.
+KEYSTONE is designed for datasets that may be operationally sensitive. Treat inputs, benchmark outputs, generated indexes, and archive contents according to the sensitivity of the source material.
 
 Recommended handling posture:
 
@@ -344,9 +344,9 @@ Recommended handling posture:
 
 ---
 
-## What BLACKLEDGER Is Not
+## What KEYSTONE Is Not
 
-BLACKLEDGER is not a general spreadsheet sorter, dashboard framework, ORM, database replacement, or broad ETL platform.
+KEYSTONE is not a general spreadsheet sorter, dashboard framework, ORM, database replacement, or broad ETL platform.
 
 It is a focused indexing and lookup component for sorted integer datasets. Its strength is precision, backend-aware performance, and suitability for integration into larger database and telemetry systems.
 
@@ -385,7 +385,7 @@ For commercial or proprietary licensing discussions, contact the repository owne
 
 <div align="center">
 
-**BLACKLEDGER**  
+**KEYSTONE**  
 Precision indexing. Adaptive lookup. Database discipline.
 
 </div>
