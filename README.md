@@ -1,6 +1,6 @@
-<div align="center">
-
-# KEYSTONE
+<p align="center">
+  <img src="docs/Logo.png" alt="KEYSTONE logo" width="720">
+</p>
 
 ### KEYSTONE helps large databases find the right record fast — using adaptive search, CPU acceleration, and repeatable indexing logic.
 
