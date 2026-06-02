@@ -2,7 +2,7 @@
 
 # KEYSTONE
 
-### Precision indexing and high-speed lookup infrastructure for sorted `int64_t` datasets.
+### KEYSTONE helps large databases find the right record fast — using adaptive search, CPU acceleration, and repeatable indexing logic.
 
 [![C](https://img.shields.io/badge/C-11-blue.svg)](https://en.wikipedia.org/wiki/C11_(C_standard_revision))
 [![Fortran](https://img.shields.io/badge/Fortran-90%2B-purple.svg)](https://en.wikipedia.org/wiki/Fortran)
