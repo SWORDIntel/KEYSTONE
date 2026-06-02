@@ -82,35 +82,38 @@ int main() {
     for (int s = 0; s < num_sizes; s++) {
         size_t n = test_sizes[s];
         int64_t* arr = malloc(n * sizeof(int64_t));
+        int64_t* arr_opt = malloc(n * sizeof(int64_t));
         generate_array(arr, n);
-        
+        memcpy(arr_opt, arr, n * sizeof(int64_t));
+
         int64_t* keys = malloc(100 * sizeof(int64_t));
         for (int i = 0; i < 100; i++) {
             keys[i] = arr[(i * 7) % n];
         }
-        
+
         not_stisla_anchor_table_t* table1 = not_stisla_anchor_table_create();
         not_stisla_anchor_table_t* table2 = not_stisla_anchor_table_create();
-        
+
         /* Without huge pages */
         double avg1 = benchmark_search("Without optimizations", arr, n, keys, 100, table1);
-        
-        /* With huge pages (if applicable) */
+
+        /* With huge pages (if applicable) - separate array so both start cold */
         if (n * sizeof(int64_t) >= 1024 * 1024) {
-            not_stisla_optimize_array_memory(arr, n);
+            not_stisla_optimize_array_memory(arr_opt, n);
         }
-        double avg2 = benchmark_search("With optimizations", arr, n, keys, 100, table2);
-        
+        double avg2 = benchmark_search("With optimizations", arr_opt, n, keys, 100, table2);
+
         double speedup = avg1 / avg2;
         double throughput = 1000.0 / avg2;
-        
+
         printf("%10zu | %10.2f | %10.2f | %7.2fx | %8.1f M/sec\n",
                n, avg1, avg2, speedup, throughput);
-        
+
         free(keys);
         not_stisla_anchor_table_destroy(table1);
         not_stisla_anchor_table_destroy(table2);
         free(arr);
+        free(arr_opt);
     }
     
     printf("\n");

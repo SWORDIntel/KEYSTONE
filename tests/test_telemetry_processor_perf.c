@@ -119,7 +119,10 @@ static void test_sorted_range_lookup(void) {
         assert(results[i].index == 100 + i);
         assert(results[i].event->timestamp == 50000 + (100 + i) * 5);
         assert(results[i].exact_match_time == results[i].event->timestamp);
-        assert(!results[i].is_exact_match);
+        /* Boundary hits (first and last) are exact matches; interior are range matches. */
+        int is_boundary = (results[i].event->timestamp == 50000 + 100 * 5) ||
+                          (results[i].event->timestamp == 50000 + 105 * 5);
+        assert(results[i].is_exact_match == is_boundary);
     }
 
     num_found = 123;

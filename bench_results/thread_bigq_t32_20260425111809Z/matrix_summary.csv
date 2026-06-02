@@ -1,3 +1,0 @@
-case_id,profile,n,queries,runs,hit_rate_pct,data_gap,data_gap_jitter,query_stride,threads,csv_path,status
-1,n1000000_q1000000_h100_dense_g1_j0_s17_t32,1000000,1000000,3,100,1,0,17,32,bench_results/thread_bigq_t32_20260425111809Z/1_n1000000_q1000000_h100_dense_g1_j0_s17_t32.csv,ok
-2,n1000000_q4000000_h100_dense_g1_j0_s17_t32,1000000,4000000,3,100,1,0,17,32,bench_results/thread_bigq_t32_20260425111809Z/2_n1000000_q4000000_h100_dense_g1_j0_s17_t32.csv,ok

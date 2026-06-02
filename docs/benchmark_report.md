@@ -1,6 +1,6 @@
-## NOT_STISLA Benchmark Comparison
+## StiSorter Benchmark Comparison
 
-| Metric | Binary Search | NOT_STISLA Search | NOT_STISLA Batch Parallel |
+| Metric | Binary Search | StiSorter Search | StiSorter Batch Parallel |
 | --- | --- | --- | --- |
 | Mean latency (ns/op) | 44.97 | 7.98 | 6.48 |
 | Speedup vs binary | 1.0× | 5.6× | 6.9× |

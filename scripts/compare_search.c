@@ -168,6 +168,12 @@ static int run_warmup_pass(const int64_t* data,
         return -1;
     }
 
+    not_stisla_config_t enhanced_config;
+    not_stisla_config_init(&enhanced_config, NOT_STISLA_WORKLOAD_TELEMETRY);
+    for (size_t i = 0; i < num_queries; ++i) {
+        not_stisla_search_enhanced(data, n, queries[i].key, table, &enhanced_config);
+    }
+
     fill_batch(batch, queries, num_queries);
     found = not_stisla_search_parallel(data, n, batch, num_queries, table, 8, config);
     if (found != expected_found) {
@@ -343,7 +349,7 @@ int main(void) {
            total_buffer_gib);
     printf("#effective_data_gib_s=dataset_gib/(backend_ns_per_key*queries);proxy_not_raw_dram_bandwidth\n");
     printf("#auto_backend_bench=%d\n", NOT_STISLA_BENCH_AUTO ? 1 : 0);
-    printf("#run,binary_ns,not_stisla_ns,batch_parallel_ns,fortran_batch_ns,auto_batch_ns,fortran_available,auto_backend_bench,auto_decision_available,auto_backend,auto_cpu_features,auto_array_bucket,auto_query_bucket,auto_thread_count,auto_estimated_ns_per_key,auto_p95_ns_per_key,data_alloc_ms,data_init_ms,query_alloc_ms,query_init_ms,setup_total_ms,data_bytes,query_bytes,batch_bytes,total_buffer_bytes,data_gib,total_buffer_gib,binary_effective_gib_s,not_stisla_effective_gib_s,batch_parallel_effective_gib_s,fortran_effective_gib_s,auto_effective_gib_s,bench_mode,warmup_runs\n");
+    printf("#run,binary_ns,not_stisla_ns,enhanced_ns,batch_parallel_ns,fortran_batch_ns,auto_batch_ns,fortran_available,auto_backend_bench,auto_decision_available,auto_backend,auto_cpu_features,auto_array_bucket,auto_query_bucket,auto_thread_count,auto_estimated_ns_per_key,auto_p95_ns_per_key,data_alloc_ms,data_init_ms,query_alloc_ms,query_init_ms,setup_total_ms,data_bytes,query_bytes,batch_bytes,total_buffer_bytes,data_gib,total_buffer_gib,binary_effective_gib_s,not_stisla_effective_gib_s,enhanced_effective_gib_s,batch_parallel_effective_gib_s,fortran_effective_gib_s,auto_effective_gib_s,bench_mode,warmup_runs\n");
     for (size_t run = 1; run <= runs; ++run) {
         uint64_t start, end;
         start = now_ns();
@@ -373,6 +379,22 @@ int main(void) {
             return 1;
         }
         double classic_avg = (double)(end - start) / num_queries;
+
+        not_stisla_config_t enhanced_config;
+        not_stisla_config_init(&enhanced_config, NOT_STISLA_WORKLOAD_TELEMETRY);
+        start = now_ns();
+        size_t enhanced_found = 0;
+        for (size_t i = 0; i < num_queries; ++i) {
+            if (not_stisla_search_enhanced(data, n, queries[i].key, table, &enhanced_config) != NOT_STISLA_NOT_FOUND) {
+                enhanced_found++;
+            }
+        }
+        end = now_ns();
+        if (enhanced_found != expected_found) {
+            fprintf(stderr, "enhanced NOT_STISLA found %zu queries; expected %zu\n", enhanced_found, expected_found);
+            return 1;
+        }
+        double enhanced_avg = (double)(end - start) / num_queries;
 
         start = now_ns();
         fill_batch(batch, queries, num_queries);
@@ -436,6 +458,8 @@ int main(void) {
             effective_data_gib_s(binary_avg, num_queries, data_bytes);
         const double classic_effective_gib_s =
             effective_data_gib_s(classic_avg, num_queries, data_bytes);
+        const double enhanced_effective_gib_s =
+            effective_data_gib_s(enhanced_avg, num_queries, data_bytes);
         const double parallel_effective_gib_s =
             effective_data_gib_s(parallel_avg, num_queries, data_bytes);
         const double fortran_effective_gib_s =
@@ -443,10 +467,11 @@ int main(void) {
         const double auto_effective_gib_s =
             effective_data_gib_s(auto_avg, num_queries, data_bytes);
 
-        printf("%zu,%.2f,%.2f,%.2f,%.2f,%.2f,%d,%d,%d,%s,%u,%zu,%zu,%d,%.2f,%.2f,%.3f,%.3f,%.3f,%.3f,%.3f,%zu,%zu,%zu,%zu,%.6f,%.6f,%.3f,%.3f,%.3f,%.3f,%.3f,%s,%zu\n",
+        printf("%zu,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%d,%d,%d,%s,%u,%zu,%zu,%d,%.2f,%.2f,%.3f,%.3f,%.3f,%.3f,%.3f,%zu,%zu,%zu,%zu,%.6f,%.6f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%s,%zu\n",
                run,
                binary_avg,
                classic_avg,
+               enhanced_avg,
                parallel_avg,
                fortran_avg,
                auto_avg,
@@ -473,6 +498,7 @@ int main(void) {
                total_buffer_gib,
                binary_effective_gib_s,
                classic_effective_gib_s,
+               enhanced_effective_gib_s,
                parallel_effective_gib_s,
                fortran_effective_gib_s,
                auto_effective_gib_s,

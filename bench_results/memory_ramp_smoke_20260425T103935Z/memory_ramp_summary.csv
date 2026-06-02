@@ -1,2 +1,0 @@
-case_id,profile,n,queries,runs,hit_rate_pct,data_gap,data_gap_jitter,query_stride,threads,estimated_bytes,estimated_gib,ram_cap_pct,cap_bytes,mem_available_bytes,benchmark_csv,time_metrics_path,max_rss_kb,major_faults,minor_faults,elapsed,status
-1,mem_n4096_q1024_h100_dense_g1_j0_s17_t16,4096,1024,1,100,1,0,17,16,99123,0.000,40,10010889420,25027223552,bench_results/memory_ramp_smoke_20260425T103935Z/1_mem_n4096_q1024_h100_dense_g1_j0_s17_t16.csv,bench_results/memory_ramp_smoke_20260425T103935Z/1_mem_n4096_q1024_h100_dense_g1_j0_s17_t16.time.txt,2692,0,186,0:00.00,ok

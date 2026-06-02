@@ -82,18 +82,30 @@ contains
     integer(c_size_t) :: i
     integer(c_size_t) :: ai
     integer(c_size_t) :: first_pos
+    logical :: has_duplicate
 
     ai = lower_bound_i64(arr, n, keys(1))
 
     do i = 1_c_size_t, key_count
-      do while (ai <= n .and. arr(ai) < keys(i))
+      do while (ai <= n)
+        if (arr(ai) >= keys(i)) exit
         ai = ai + 1_c_size_t
       end do
 
       if (ai <= n .and. arr(ai) == keys(i)) then
         first_pos = ai
-        if ((first_pos > 1_c_size_t .and. arr(first_pos - 1_c_size_t) == keys(i)) .or. &
-            (first_pos < n .and. arr(first_pos + 1_c_size_t) == keys(i))) then
+        has_duplicate = .false.
+        if (first_pos > 1_c_size_t) then
+          if (arr(first_pos - 1_c_size_t) == keys(i)) then
+            has_duplicate = .true.
+          end if
+        end if
+        if (.not. has_duplicate .and. first_pos < n) then
+          if (arr(first_pos + 1_c_size_t) == keys(i)) then
+            has_duplicate = .true.
+          end if
+        end if
+        if (has_duplicate) then
           out(i) = binary_search_i64(arr, n, keys(i))
         else
           out(i) = int(first_pos - 1_c_size_t, c_int64_t)

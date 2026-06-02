@@ -1,8 +1,0 @@
-[2026-04-25T10:54:02Z] case=1 profile=n1000000_q8192_h100_dense_g1_j0_s1_t16
-  csv=bench_results/fortran_auto_route_matrix_setup_20260425T105402Z/1_n1000000_q8192_h100_dense_g1_j0_s1_t16.csv
-[2026-04-25T10:54:02Z] case=2 profile=n1000000_q8192_h100_dense_g1_j0_s17_t16
-  csv=bench_results/fortran_auto_route_matrix_setup_20260425T105402Z/2_n1000000_q8192_h100_dense_g1_j0_s17_t16.csv
-[2026-04-25T10:54:02Z] case=3 profile=n1000000_q32768_h100_dense_g1_j0_s1_t16
-  csv=bench_results/fortran_auto_route_matrix_setup_20260425T105402Z/3_n1000000_q32768_h100_dense_g1_j0_s1_t16.csv
-[2026-04-25T10:54:02Z] case=4 profile=n1000000_q32768_h100_dense_g1_j0_s17_t16
-  csv=bench_results/fortran_auto_route_matrix_setup_20260425T105402Z/4_n1000000_q32768_h100_dense_g1_j0_s17_t16.csv

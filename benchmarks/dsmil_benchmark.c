@@ -16,12 +16,14 @@
 /* Global optimization flags */
 static int g_optimize_graviton4 = 0;
 static char* g_dataset_path = NULL;
+static char* g_tar_zst_path = NULL;
+static char* g_tar_zst_member = NULL;
 
 /* Timing utilities */
 static inline uint64_t ns_now(void) {
-    struct timeval tv;
-    gettimeofday(&tv, NULL);
-    return (uint64_t)tv.tv_sec * 1000000000ULL + (uint64_t)tv.tv_usec * 1000ULL;
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (uint64_t)ts.tv_sec * 1000000000ULL + (uint64_t)ts.tv_nsec;
 }
 
 /* Load dataset from file */
@@ -206,6 +208,63 @@ static void benchmark_comprehensive(const int64_t* data, size_t data_size,
     not_stisla_anchor_table_destroy(table);
 }
 
+#ifdef NOT_STISLA_ENABLE_TAR_ZST
+/* Benchmark tar.zst streaming search */
+static void benchmark_tar_zst_search(const char* archive_path,
+                                      const char* member_name,
+                                      const int64_t* queries,
+                                      size_t num_queries) {
+    printf("\n.tar.zst Streaming Search Benchmark\n");
+    printf("=====================================\n");
+    printf("Archive: %s\n", archive_path);
+    printf("Member:  %s\n", member_name);
+
+    not_stisla_config_t config;
+    not_stisla_config_init(&config, NOT_STISLA_WORKLOAD_TELEMETRY);
+    not_stisla_set_performance_tracking(1);
+    not_stisla_reset_performance_stats();
+
+    not_stisla_anchor_table_t* table = not_stisla_anchor_table_create();
+    assert(table && "Failed to create anchor table");
+
+    uint64_t tz_start = ns_now();
+    size_t tz_found = 0;
+    for (size_t i = 0; i < num_queries; ++i) {
+        not_stisla_tar_zst_options_t opts = {
+            .format = NOT_STISLA_TAR_ZST_FORMAT_AUTO,
+            .chunk_size = 256 * 1024,
+            .arena_slab_size = 1u << 20,
+            .zstd_workers = 0,
+            .enable_pipeline = 0,
+            .skip_header = 0
+        };
+        not_stisla_tar_zst_t* tz = not_stisla_tar_zst_open(archive_path, &opts);
+        if (!tz) {
+            fprintf(stderr, "Failed to open archive\n");
+            break;
+        }
+        not_stisla_result_t result = not_stisla_tar_zst_search_member(
+            tz, member_name, queries[i], table, &config
+        );
+        if (result != NOT_STISLA_NOT_FOUND) {
+            tz_found++;
+        }
+        not_stisla_tar_zst_close(tz);
+    }
+    uint64_t tz_time = ns_now() - tz_start;
+
+    double tz_ns_per_op = (double)tz_time / num_queries;
+    printf("tar.zst Search:    %.2f ns/op (%zu/%zu found)\n",
+           tz_ns_per_op, tz_found, num_queries);
+
+    not_stisla_tar_zst_stats_t tz_stats;
+    /* stats would need to be accumulated across opens; simplified here */
+    (void)tz_stats;
+
+    not_stisla_anchor_table_destroy(table);
+}
+#endif /* NOT_STISLA_ENABLE_TAR_ZST */
+
 /* Generate uniform test data */
 static void generate_test_data(int64_t* arr, size_t n) {
     for (size_t i = 0; i < n; ++i) {
@@ -220,6 +279,10 @@ int main(int argc, char** argv) {
             g_optimize_graviton4 = 1;
         } else if (strcmp(argv[i], "--dataset") == 0 && i + 1 < argc) {
             g_dataset_path = argv[++i];
+        } else if (strcmp(argv[i], "--tar-zst") == 0 && i + 1 < argc) {
+            g_tar_zst_path = argv[++i];
+        } else if (strcmp(argv[i], "--tar-zst-member") == 0 && i + 1 < argc) {
+            g_tar_zst_member = argv[++i];
         }
     }
 
@@ -278,6 +341,14 @@ int main(int argc, char** argv) {
 
     /* Additional tuned/enhanced benchmark */
     benchmark_tuned_search(data, DATA_SIZE, queries, NUM_QUERIES);
+
+#ifdef NOT_STISLA_ENABLE_TAR_ZST
+    /* tar.zst streaming benchmark */
+    if (g_tar_zst_path && g_tar_zst_member) {
+        benchmark_tar_zst_search(g_tar_zst_path, g_tar_zst_member,
+                                  queries, NUM_QUERIES);
+    }
+#endif
 
     printf("\nNOT_STISLA Search Technology\n");
     printf("============================\n");

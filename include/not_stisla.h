@@ -123,6 +123,10 @@ typedef struct not_stisla_performance_stats {
     uint32_t cpu_features_used;
     double vectorization_efficiency;
     uint64_t memory_allocation_failures;
+    uint64_t archive_bytes_read;
+    uint64_t archive_decompress_time_ns;
+    uint64_t archive_parse_time_ns;
+    uint64_t archive_members_searched;
 } not_stisla_performance_stats_t;
 
 typedef enum not_stisla_error {
@@ -131,7 +135,11 @@ typedef enum not_stisla_error {
     NOT_STISLA_ERROR_MEMORY = -2,
     NOT_STISLA_ERROR_NOT_FOUND = -3,
     NOT_STISLA_ERROR_CONFIG = -7,
-    NOT_STISLA_ERROR_CPU_FEATURE = -8
+    NOT_STISLA_ERROR_CPU_FEATURE = -8,
+    NOT_STISLA_ERROR_ARCHIVE_OPEN = -20,
+    NOT_STISLA_ERROR_ARCHIVE_READ = -21,
+    NOT_STISLA_ERROR_ARCHIVE_FORMAT = -22,
+    NOT_STISLA_ERROR_PARSE = -23
 } not_stisla_error_t;
 
 typedef struct not_stisla_config {
@@ -268,10 +276,14 @@ not_stisla_result_t not_stisla_search_events(
 );
 
 bool not_stisla_init_for_dsmil(not_stisla_anchor_table_t* table, int workload_type);
-int not_stisla_optimize_array_memory(const int64_t* arr, size_t n);
+int not_stisla_optimize_array_memory(int64_t* arr, size_t n);
+
+#ifdef NOT_STISLA_ENABLE_TAR_ZST
+#include "not_stisla_tar_zst.h"
+#endif
 
 #define NOT_STISLA_VERSION_MAJOR 1
-#define NOT_STISLA_VERSION_MINOR 0
+#define NOT_STISLA_VERSION_MINOR 1
 #define NOT_STISLA_VERSION_PATCH 0
 
 const char* not_stisla_version(void);

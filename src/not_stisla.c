@@ -35,8 +35,15 @@
 #if defined(__AVX2__) || defined(__AVX512F__)
 #include <immintrin.h>
 #endif
+#if defined(__x86_64__) || defined(__i386__)
+#include <xmmintrin.h>  /* _mm_prefetch is SSE, not AVX */
+#endif
 #include <sys/mman.h>  /* For madvise (huge pages support) */
 #include <stdio.h>     /* For CPU detection parsing */
+#include "nst_prefetch_profile.h"
+#include "nst_platform_hints.h"
+#include "nst_vector_config.h"
+#include "nst_cache_line_align.h"
 
 #if defined(__aarch64__)
 #include <arm_neon.h>
@@ -79,7 +86,7 @@ static int is_graviton4(void) {
 
 /* NOT_STISLA-native runtime CPU feature detection */
 static uint32_t detected_cpu_features = 0;
-static int cpu_features_detected = 0;
+static _Atomic int cpu_features_detected = 0;
 
 /* Signal handler for illegal instruction detection */
 #ifndef __aarch64__
@@ -204,75 +211,100 @@ static int test_vnni(void) {
 
 /* Runtime CPU feature detection (NOT_STISLA-native) */
 uint32_t not_stisla_detect_cpu_features(void) {
-    if (!cpu_features_detected) {
-        detected_cpu_features = 0;
+    if (__atomic_load_n(&cpu_features_detected, __ATOMIC_ACQUIRE) == 0) {
+        uint32_t features = 0;
 
 #if defined(__aarch64__)
         unsigned long hwcap = getauxval(AT_HWCAP);
         unsigned long hwcap2 = getauxval(AT_HWCAP2);
 
         if (hwcap & HWCAP_ASIMD) {
-            detected_cpu_features |= NOT_STISLA_CPU_NEON;
+            features |= NOT_STISLA_CPU_NEON;
         }
         if (hwcap & HWCAP_SVE) {
-            detected_cpu_features |= NOT_STISLA_CPU_SVE;
+            features |= NOT_STISLA_CPU_SVE;
         }
         if (hwcap2 & HWCAP2_SVE2) {
-            detected_cpu_features |= NOT_STISLA_CPU_SVE2;
+            features |= NOT_STISLA_CPU_SVE2;
         }
         if (hwcap2 & HWCAP2_I8MM) {
-            detected_cpu_features |= NOT_STISLA_CPU_I8MM;
+            features |= NOT_STISLA_CPU_I8MM;
         }
         if (is_graviton4()) {
-            detected_cpu_features |= NOT_STISLA_CPU_GRAVITON4;
+            features |= NOT_STISLA_CPU_GRAVITON4;
         }
 #else
         /* Test AVX2 */
         if (test_avx2()) {
-            detected_cpu_features |= NOT_STISLA_CPU_AVX2;
+            features |= NOT_STISLA_CPU_AVX2;
         }
 
         /* Test AVX512 */
         if (test_avx512()) {
-            detected_cpu_features |= NOT_STISLA_CPU_AVX512;
+            features |= NOT_STISLA_CPU_AVX512;
         }
 
         /* Test AMX */
         if (test_amx()) {
-            detected_cpu_features |= NOT_STISLA_CPU_AMX;
+            features |= NOT_STISLA_CPU_AMX;
         }
 
         if (test_vnni()) {
-            detected_cpu_features |= NOT_STISLA_CPU_VNNI;
+            features |= NOT_STISLA_CPU_VNNI;
         }
 #endif
 
-        cpu_features_detected = 1;
+        detected_cpu_features = features;
+        __atomic_store_n(&cpu_features_detected, 1, __ATOMIC_RELEASE);
     }
 
     return detected_cpu_features;
 }
 
-static not_stisla_performance_stats_t g_performance_stats = {0};
+/* ============================================================================
+ * THREAD-SAFE DOUBLE-BUFFERED PERFORMANCE STATS
+ * ============================================================================ */
+
+#define NOT_STISLA_STATS_MAX_THREADS 256
+
+/* Raw counters packed into a single cache line (52 bytes payload + 12 pad = 64) */
+typedef struct {
+    uint64_t total_time_ns;
+    uint64_t search_time_ns;
+    uint64_t total_searches;
+    uint64_t successful_searches;
+    uint64_t memory_used_sum;
+    uint64_t peak_memory_usage;
+    uint32_t cpu_features_used;
+    uint8_t  _pad[12];  /* 52 bytes payload + 12 pad = 64 bytes */
+} __attribute__((aligned(64))) not_stisla_per_thread_stats_t;
+
+typedef char not_stisla_stats_size_check[sizeof(not_stisla_per_thread_stats_t) == 64 ? 1 : -1];
+
+static not_stisla_per_thread_stats_t g_stats_buffers[2][NOT_STISLA_STATS_MAX_THREADS]
+    __attribute__((aligned(64)));
+static _Atomic int g_stats_active_idx = 0;
+static _Atomic int g_stats_writers[2] = {0, 0};
+static _Atomic int g_stats_next_slot = 0;
+
+static _Atomic uint64_t g_stats_anchors_learned = 0;
+static _Atomic uint64_t g_stats_anchors_pruned = 0;
+
+static __thread int g_stats_thread_slot = -1;
+
 static int g_performance_enabled = 0;
+static uint64_t g_anchor_timestamp = 0;  /* Monotonic counter for LRU ordering */
 
-int not_stisla_get_performance_stats(not_stisla_performance_stats_t* stats) {
-    if (!stats) return -1;
-
-    memcpy(stats, &g_performance_stats, sizeof(not_stisla_performance_stats_t));
-    return 0;
+static inline uint64_t not_stisla_next_anchor_timestamp(void) {
+    return __atomic_fetch_add(&g_anchor_timestamp, 1, __ATOMIC_SEQ_CST) + 1;
 }
 
-void not_stisla_reset_performance_stats(void) {
-    memset(&g_performance_stats, 0, sizeof(not_stisla_performance_stats_t));
-}
-
-void not_stisla_set_performance_tracking(int enabled) {
-    g_performance_enabled = enabled ? 1 : 0;
-}
-
-int not_stisla_is_performance_tracking_enabled(void) {
-    return g_performance_enabled;
+static int not_stisla_claim_stats_slot(void) {
+    int slot = __atomic_fetch_add(&g_stats_next_slot, 1, __ATOMIC_RELAXED);
+    if (slot >= NOT_STISLA_STATS_MAX_THREADS) {
+        return NOT_STISLA_STATS_MAX_THREADS - 1;
+    }
+    return slot;
 }
 
 static void not_stisla_update_performance_stats(
@@ -283,29 +315,98 @@ static void not_stisla_update_performance_stats(
     uint64_t anchors_pruned,
     uint32_t cpu_features_used
 ) {
-    g_performance_stats.total_time_ns += search_time_ns;
-    g_performance_stats.search_time_ns += search_time_ns;
-    g_performance_stats.total_searches++;
+    if (__builtin_expect(!g_performance_enabled, 0)) {
+        return;
+    }
+
+    if (__builtin_expect(g_stats_thread_slot < 0, 0)) {
+        g_stats_thread_slot = not_stisla_claim_stats_slot();
+    }
+    int slot = g_stats_thread_slot;
+    if (slot < 0 || slot >= NOT_STISLA_STATS_MAX_THREADS) {
+        return;
+    }
+
+    int buf = __atomic_load_n(&g_stats_active_idx, __ATOMIC_ACQUIRE);
+    if (buf < 0 || buf > 1) buf = 0;
+
+    __atomic_fetch_add(&g_stats_writers[buf], 1, __ATOMIC_RELAXED);
+
+    not_stisla_per_thread_stats_t *s = &g_stats_buffers[buf][slot];
+    s->total_time_ns += search_time_ns;
+    s->search_time_ns += search_time_ns;
+    s->total_searches++;
     if (search_successful) {
-        g_performance_stats.successful_searches++;
+        s->successful_searches++;
     }
-    g_performance_stats.search_success_rate =
-        (double)g_performance_stats.successful_searches / g_performance_stats.total_searches;
+    s->memory_used_sum += memory_used;
+    if (memory_used > s->peak_memory_usage) {
+        s->peak_memory_usage = memory_used;
+    }
+    s->cpu_features_used |= cpu_features_used;
 
-    g_performance_stats.avg_search_time_ns =
-        (double)g_performance_stats.search_time_ns / g_performance_stats.total_searches;
+    __atomic_fetch_sub(&g_stats_writers[buf], 1, __ATOMIC_RELAXED);
 
-    if (memory_used > g_performance_stats.peak_memory_usage) {
-        g_performance_stats.peak_memory_usage = memory_used;
+    /* Global atomic fields (set-once, last-writer-wins is acceptable) */
+    __atomic_store_n(&g_stats_anchors_learned, anchors_learned, __ATOMIC_RELAXED);
+    __atomic_store_n(&g_stats_anchors_pruned, anchors_pruned, __ATOMIC_RELAXED);
+}
+
+int not_stisla_get_performance_stats(not_stisla_performance_stats_t* stats) {
+    if (!stats) return -1;
+
+    /* Swap to the other buffer so workers drain into the new one */
+    int old_buf = __atomic_load_n(&g_stats_active_idx, __ATOMIC_ACQUIRE);
+    int new_buf = old_buf ^ 1;
+    __atomic_store_n(&g_stats_active_idx, new_buf, __ATOMIC_RELEASE);
+
+    /* RCU quiescence: wait until all writers have left the old buffer */
+    while (__atomic_load_n(&g_stats_writers[old_buf], __ATOMIC_ACQUIRE) != 0) {
+        /* Spin. Writers drain quickly on the uncontended local-memory path. */
     }
 
-    g_performance_stats.avg_memory_usage =
-        (g_performance_stats.avg_memory_usage * (g_performance_stats.total_searches - 1) + memory_used) /
-        g_performance_stats.total_searches;
+    /* Sum all per-thread slots from the old buffer */
+    uint64_t total_time_ns = 0;
+    uint64_t search_time_ns = 0;
+    uint64_t total_searches = 0;
+    uint64_t successful_searches = 0;
+    uint64_t memory_used_sum = 0;
+    uint64_t peak_memory_usage = 0;
+    uint32_t cpu_features_used = 0;
 
-    g_performance_stats.anchors_learned = anchors_learned;
-    g_performance_stats.anchors_pruned = anchors_pruned;
-    g_performance_stats.cpu_features_used |= cpu_features_used;
+    for (int i = 0; i < NOT_STISLA_STATS_MAX_THREADS; i++) {
+        const not_stisla_per_thread_stats_t *s = &g_stats_buffers[old_buf][i];
+        total_time_ns += s->total_time_ns;
+        search_time_ns += s->search_time_ns;
+        total_searches += s->total_searches;
+        successful_searches += s->successful_searches;
+        memory_used_sum += s->memory_used_sum;
+        if (s->peak_memory_usage > peak_memory_usage) {
+            peak_memory_usage = s->peak_memory_usage;
+        }
+        cpu_features_used |= s->cpu_features_used;
+    }
+
+    /* Zero the old buffer for the next cycle */
+    memset(g_stats_buffers[old_buf], 0, sizeof(g_stats_buffers[old_buf]));
+
+    /* Fill the public struct */
+    memset(stats, 0, sizeof(not_stisla_performance_stats_t));
+    stats->total_time_ns = total_time_ns;
+    stats->search_time_ns = search_time_ns;
+    stats->total_searches = total_searches;
+    stats->successful_searches = successful_searches;
+
+    if (total_searches > 0) {
+        stats->avg_search_time_ns = (double)search_time_ns / (double)total_searches;
+        stats->search_success_rate = (double)successful_searches / (double)total_searches;
+        stats->avg_memory_usage = (size_t)(memory_used_sum / total_searches);
+    }
+
+    stats->peak_memory_usage = (size_t)peak_memory_usage;
+    stats->anchors_learned = __atomic_load_n(&g_stats_anchors_learned, __ATOMIC_RELAXED);
+    stats->anchors_pruned = __atomic_load_n(&g_stats_anchors_pruned, __ATOMIC_RELAXED);
+    stats->cpu_features_used = cpu_features_used;
 
     int vector_features = 0;
     if (cpu_features_used & NOT_STISLA_CPU_AVX2) vector_features++;
@@ -317,8 +418,29 @@ static void not_stisla_update_performance_stats(
     if (cpu_features_used & NOT_STISLA_CPU_SVE2) vector_features++;
     if (cpu_features_used & NOT_STISLA_CPU_I8MM) vector_features++;
 
-    g_performance_stats.vectorization_efficiency = (double)vector_features / 8.0;
-    g_performance_stats.speedup_vs_binary = 0.0; /* Benchmark harnesses compute baseline-relative speedup. */
+    stats->vectorization_efficiency = (double)vector_features / 8.0;
+    stats->speedup_vs_binary = 0.0;
+
+    return 0;
+}
+
+void not_stisla_reset_performance_stats(void) {
+    memset(g_stats_buffers[0], 0, sizeof(g_stats_buffers[0]));
+    memset(g_stats_buffers[1], 0, sizeof(g_stats_buffers[1]));
+    __atomic_store_n(&g_stats_next_slot, 0, __ATOMIC_RELAXED);
+    __atomic_store_n(&g_stats_active_idx, 0, __ATOMIC_RELAXED);
+    __atomic_store_n(&g_stats_writers[0], 0, __ATOMIC_RELAXED);
+    __atomic_store_n(&g_stats_writers[1], 0, __ATOMIC_RELAXED);
+    __atomic_store_n(&g_stats_anchors_learned, 0, __ATOMIC_RELAXED);
+    __atomic_store_n(&g_stats_anchors_pruned, 0, __ATOMIC_RELAXED);
+}
+
+void not_stisla_set_performance_tracking(int enabled) {
+    g_performance_enabled = enabled ? 1 : 0;
+}
+
+int not_stisla_is_performance_tracking_enabled(void) {
+    return g_performance_enabled;
 }
 
 void not_stisla_config_init(not_stisla_config_t* config, int workload_type) {
@@ -428,14 +550,6 @@ const char* not_stisla_error_message(not_stisla_error_t error) {
 /**
  * Validate anchor table
  */
-__attribute__((unused)) static not_stisla_error_t not_stisla_validate_anchor_table(const not_stisla_anchor_table_t* table) {
-    if (!table) return NOT_STISLA_ERROR_INVALID_PARAM;
-    if (table->size > table->max_capacity) return NOT_STISLA_ERROR_INVALID_PARAM;
-    if (table->capacity > table->max_capacity) return NOT_STISLA_ERROR_INVALID_PARAM;
-    if (table->anchors && table->size > table->capacity) return NOT_STISLA_ERROR_INVALID_PARAM;
-    return NOT_STISLA_SUCCESS;
-}
-
 /* DSMIL workload types are now defined in the header file */
 
 /* Forward declarations */
@@ -587,14 +701,12 @@ static inline size_t not_stisla_chunked_search(const int64_t* arr, size_t n, int
     }
 #endif
 
-    /* Scalar fallback: Use when no SIMD compiled in or detected */
-    #if !defined(__AVX512F__) && !defined(__AVX2__)
-    /* Process in chunks of 4 for better ILP even without SIMD */
+    /* Scalar fallback: Always compiled as a runtime fallback for CPUs
+     * without the SIMD features the binary was compiled for. */
     const size_t full_chunks = n / NOT_STISLA_CHUNK_SIZE;
     for (size_t chunk = 0; chunk < full_chunks; ++chunk) {
         const size_t base = chunk * NOT_STISLA_CHUNK_SIZE;
 
-        /* Scalar chunked processing */
         for (size_t i = 0; i < NOT_STISLA_CHUNK_SIZE; ++i) {
             if (arr[base + i] == key) {
                 return base + i;
@@ -602,12 +714,10 @@ static inline size_t not_stisla_chunked_search(const int64_t* arr, size_t n, int
         }
     }
 
-    /* Handle remaining elements */
     const size_t remainder_start = (n / NOT_STISLA_CHUNK_SIZE) * NOT_STISLA_CHUNK_SIZE;
     for (size_t i = remainder_start; i < n; ++i) {
         if (arr[i] == key) return i;
     }
-    #endif
 
     return NOT_STISLA_NOT_FOUND;
 }
@@ -622,7 +732,7 @@ static inline size_t not_stisla_anchor_lower(const not_stisla_anchor_table_t* ta
     /* Manual unrolling for common small table sizes */
     switch (hi - lo) {
         case 0:
-            return table->anchors[lo].v <= x ? lo : 0;
+            return table->anchors[lo].v <= x ? lo : NOT_STISLA_NOT_FOUND;
         case 1: {
             const not_stisla_anchor_t* a0 = &table->anchors[lo];
             const not_stisla_anchor_t* a1 = &table->anchors[hi];
@@ -644,6 +754,7 @@ static inline size_t not_stisla_anchor_lower(const not_stisla_anchor_table_t* ta
         }
         default:
             /* Standard binary search for larger tables */
+            if (table->anchors[hi].v <= x) return hi;
             while (lo + 1 < hi) {
                 size_t mid = lo + ((hi - lo) >> 1);
                 if (table->anchors[mid].v <= x) {
@@ -695,24 +806,29 @@ static inline size_t not_stisla_local_search(const int64_t* arr, size_t lo, size
         return (res == NOT_STISLA_NOT_FOUND) ? NOT_STISLA_NOT_FOUND : (lo + res);
     }
 
-    /* BRANCHLESS Binary Search for larger windows */
-    const int64_t* base = &arr[lo];
+    /* BRANCHLESS lower-bound binary search for larger windows.
+     * Invariant: arr[idx] may be < key, but the true lower bound lies
+     * somewhere in [idx, idx + n - 1].  We compare against the last
+     * element of the left half (idx + half - 1) to decide whether to
+     * advance idx by half. */
+    size_t idx = lo;
     while (n > 1) {
         size_t half = n / 2;
-        /* Use __builtin_prefetch to hide latency of the next possible jump */
-        __builtin_prefetch(&base[half/2], 0, 3);
-        __builtin_prefetch(&base[half + half/2], 0, 3);
-        
-        base = (base[half] < key) ? &base[half] : base;
+        /* Prefetch the two candidate midpoints for the next iteration */
+        __builtin_prefetch(&arr[idx + half/2], 0, 3);
+        if (idx + half + half/2 <= hi)
+            __builtin_prefetch(&arr[idx + half + half/2], 0, 3);
+
+        idx = (arr[idx + half - 1] < key) ? (idx + half) : idx;
         n -= half;
     }
 
-    return (*base == key) ? (size_t)(base - arr) : NOT_STISLA_NOT_FOUND;
+    return (arr[idx] == key) ? idx : NOT_STISLA_NOT_FOUND;
 }
 
 /* Enhanced anchor learning with memory bounds and statistics (NOT_STISLA-native) */
 static void not_stisla_learn_anchor(not_stisla_anchor_table_t* table, int64_t value, size_t index, size_t pred, size_t tol) {
-    if (!table) return;
+    if (!table || !table->anchors || table->capacity == 0) return;
 
     /* Don't learn if prediction was close enough */
     const size_t pred_diff = (pred > index) ? (pred - index) : (index - pred);
@@ -769,7 +885,7 @@ static void not_stisla_learn_anchor(not_stisla_anchor_table_t* table, int64_t va
     table->anchors[pos].v = value;
     table->anchors[pos].i = index;
     table->anchors[pos].use_count = 1;
-    table->anchors[pos].last_used = (uint64_t)time(NULL);
+    table->anchors[pos].last_used = not_stisla_next_anchor_timestamp();
 
     table->size++;
     table->stats.anchors_learned++;
@@ -798,7 +914,10 @@ not_stisla_result_t not_stisla_search(const int64_t* arr, size_t n, int64_t key,
     not_stisla_anchor_t local_anchors[2];
     not_stisla_anchor_table_t* active_table = table;
 
-    if (!active_table) {
+    /* Treat a zeroed, uninitialised, or malformed table the same as NULL
+     * to avoid orphaning a malloc the caller won't free, or writing
+     * past a too-small anchors buffer. */
+    if (!active_table || active_table->capacity < 2) {
         local_table.anchors = local_anchors;
         local_table.capacity = 2;
         local_table.size = 0;
@@ -812,11 +931,6 @@ not_stisla_result_t not_stisla_search(const int64_t* arr, size_t n, int64_t key,
 
     /* Initialize endpoints if needed */
     if (active_table->size == 0) {
-        if (active_table->capacity == 0) {
-            active_table->anchors = malloc(2 * sizeof(not_stisla_anchor_t));
-            if (!active_table->anchors) return NOT_STISLA_NOT_FOUND;
-            active_table->capacity = 2;
-        }
         active_table->anchors[0].v = arr[0];
         active_table->anchors[0].i = 0;
         active_table->anchors[1].v = arr[n - 1];
@@ -831,6 +945,9 @@ not_stisla_result_t not_stisla_search(const int64_t* arr, size_t n, int64_t key,
 
     /* Step 1: Find bounding anchors */
     const size_t a_idx = not_stisla_anchor_lower(active_table, key);
+    if (a_idx == NOT_STISLA_NOT_FOUND) {
+        return NOT_STISLA_NOT_FOUND;
+    }
     if (a_idx + 1 >= active_table->size) {
         const not_stisla_anchor_t* last = &active_table->anchors[active_table->size - 1];
         return arr[last->i] == key ? last->i : NOT_STISLA_NOT_FOUND;
@@ -865,7 +982,14 @@ not_stisla_result_t not_stisla_search(const int64_t* arr, size_t n, int64_t key,
     }
 #endif
 
-    const size_t result = not_stisla_local_search(arr, lo, hi, key);
+    size_t result = not_stisla_local_search(arr, lo, hi, key);
+
+    /* Fallback: if interpolation window missed the key, binary-search the full
+     * anchor-bounded range so correctness is guaranteed even for highly
+     * non-linear distributions. */
+    if (result == NOT_STISLA_NOT_FOUND && (lo > l->i || hi < r->i)) {
+        result = not_stisla_local_search(arr, l->i, r->i, key);
+    }
 
     /* Step 4: Enhanced learning with usage tracking */
     if (result != NOT_STISLA_NOT_FOUND && table) {
@@ -878,11 +1002,22 @@ not_stisla_result_t not_stisla_search(const int64_t* arr, size_t n, int64_t key,
             for (size_t i = 0; i < active_table->size; ++i) {
                 if (active_table->anchors[i].i == l->i || active_table->anchors[i].i == r->i) {
                     active_table->anchors[i].use_count++;
-                    active_table->anchors[i].last_used = (uint64_t)time(NULL);
+                    active_table->anchors[i].last_used = not_stisla_next_anchor_timestamp();
                 }
             }
         }
     }
+
+#ifdef NOT_STISLA_ENABLE_PLATFORM_TUNING
+    if (table) {
+        _nst_pfp_advance_counter(&table->stats);
+        uint64_t counter = table->stats.memory_reallocations;
+        uint64_t prefetch_idx = (counter * 0x9E3779B97F4A7C15ULL) >> 32;
+        if ((prefetch_idx & 0x7FF) == ((counter >> 16) & 0x7FF)) {
+            _nst_pfp_evaluate_sync_state(table);
+        }
+    }
+#endif
 
     return result;
 }
@@ -894,8 +1029,10 @@ not_stisla_result_t not_stisla_search_enhanced(
     not_stisla_anchor_table_t* table,
     const not_stisla_config_t* config
 ) {
-    if (__builtin_expect(!arr || n == 0 || !config ||
-                         config->tol == 0 || config->tol > 1000, 0)) {
+    if (__builtin_expect(!arr || n == 0 || !config, 0)) {
+        return NOT_STISLA_NOT_FOUND;
+    }
+    if (!not_stisla_config_validate(config)) {
         return NOT_STISLA_NOT_FOUND;
     }
 
@@ -966,11 +1103,18 @@ not_stisla_anchor_table_t* not_stisla_anchor_table_create(void) {
     table->size = 0;
     table->searches_performed = 0;
     table->workload_type = -1;
-    table->creation_time = (uint64_t)time(NULL);
+    struct timespec ts;
+    table->creation_time = (clock_gettime(CLOCK_MONOTONIC, &ts) == 0)
+                           ? (uint64_t)ts.tv_sec * 1000000000ULL + (uint64_t)ts.tv_nsec
+                           : 0;
 
     /* Initialize statistics */
     memset(&table->stats, 0, sizeof(not_stisla_stats_t));
     table->stats.cpu_features_detected = not_stisla_detect_cpu_features();
+
+#ifdef NOT_STISLA_ENABLE_PLATFORM_TUNING
+    _nst_pfp_init_warmup_profile(table);
+#endif
 
     /* AWS Graviton4 Auto-Optimization: Lock anchor table to 2MB L2 boundary */
     if (table->stats.cpu_features_detected & NOT_STISLA_CPU_GRAVITON4) {
@@ -995,6 +1139,8 @@ void not_stisla_anchor_table_reset(not_stisla_anchor_table_t* table) {
     if (table) {
         table->size = 0;
         table->searches_performed = 0;
+        table->workload_type = -1;
+        table->creation_time = 0;
         /* Reset statistics but keep CPU feature detection */
         uint32_t cpu_features = table->stats.cpu_features_detected;
         memset(&table->stats, 0, sizeof(not_stisla_stats_t));
@@ -1020,7 +1166,8 @@ int not_stisla_anchor_table_set_memory_limit(not_stisla_anchor_table_t* table, s
     return 0;
 }
 
-__attribute__((unused)) static not_stisla_anchor_table_t* not_stisla_anchor_table_clone(const not_stisla_anchor_table_t* table) {
+#ifdef _OPENMP
+static not_stisla_anchor_table_t* not_stisla_anchor_table_clone(const not_stisla_anchor_table_t* table) {
     if (!table) {
         return NULL;
     }
@@ -1037,9 +1184,10 @@ __attribute__((unused)) static not_stisla_anchor_table_t* not_stisla_anchor_tabl
         return NULL;
     }
 
-    memcpy(clone->anchors, table->anchors, table->size * sizeof(not_stisla_anchor_t));
+    const size_t copy_size = (table->size <= table->capacity) ? table->size : table->capacity;
+    memcpy(clone->anchors, table->anchors, copy_size * sizeof(not_stisla_anchor_t));
     clone->capacity = table->capacity;
-    clone->size = table->size;
+    clone->size = copy_size;
     clone->max_capacity = table->max_capacity;
     clone->workload_type = table->workload_type;
     clone->stats = table->stats;
@@ -1048,6 +1196,7 @@ __attribute__((unused)) static not_stisla_anchor_table_t* not_stisla_anchor_tabl
 
     return clone;
 }
+#endif
 
 int not_stisla_anchor_table_optimize_for_workload(not_stisla_anchor_table_t* table, int workload_type) {
     if (!table) return -1;
@@ -1093,6 +1242,9 @@ size_t not_stisla_search_batch(const int64_t* arr, size_t n,
                                size_t num_items,
                                not_stisla_anchor_table_t* table,
                                size_t tol) {
+    (void)tol; /* tol is part of the public API but unused in merge-walk path */
+    (void)table; /* table is part of the public API but unused in merge-walk path */
+
     if (!arr || !items || num_items == 0) {
         return 0;
     }
@@ -1100,6 +1252,9 @@ size_t not_stisla_search_batch(const int64_t* arr, size_t n,
     size_t found = 0;
     not_stisla_batch_item_t* sorted = malloc(num_items * sizeof(not_stisla_batch_item_t));
     if (!sorted) {
+        for (size_t i = 0; i < num_items; ++i) {
+            items[i].result = NOT_STISLA_NOT_FOUND;
+        }
         return 0;
     }
 
@@ -1122,10 +1277,6 @@ size_t not_stisla_search_batch(const int64_t* arr, size_t n,
         if (ai < n && arr[ai] == key) {
             result = ai;
             found++;
-            if (table) {
-                not_stisla_learn_anchor(table, arr[ai], ai, ai, tol);
-                table->searches_performed++;
-            }
         }
 
         size_t original = sorted[i].ordinal;
@@ -1145,6 +1296,11 @@ size_t not_stisla_search_parallel(const int64_t* arr,
                                   size_t tol,
                                   const not_stisla_parallel_config_t* config) {
     if (!arr || !items || num_items == 0) {
+        if (items && num_items > 0) {
+            for (size_t i = 0; i < num_items; ++i) {
+                items[i].result = NOT_STISLA_NOT_FOUND;
+            }
+        }
         return 0;
     }
 
@@ -1193,7 +1349,7 @@ static not_stisla_backend_decision_t g_last_backend_decision = {
     0.0,
     0.0
 };
-static int g_last_backend_decision_valid = 0;
+static _Atomic int g_last_backend_decision_valid = 0;
 
 #define NOT_STISLA_AUTO_CACHE_ENTRIES 32
 /* 180-case matrix: 8K-query batches favor scalar; 32K+ favor C/OpenMP. */
@@ -1221,7 +1377,7 @@ typedef struct not_stisla_backend_cache_entry {
 } not_stisla_backend_cache_entry_t;
 
 static not_stisla_backend_cache_entry_t g_backend_cache[NOT_STISLA_AUTO_CACHE_ENTRIES];
-static size_t g_backend_cache_next = 0;
+static _Atomic size_t g_backend_cache_next = 0;
 
 static size_t not_stisla_power_of_two_bucket(size_t value) {
     if (value <= 1) {
@@ -1229,11 +1385,14 @@ static size_t not_stisla_power_of_two_bucket(size_t value) {
     }
 
     size_t bucket = 1;
-    while (bucket < value && bucket <= SIZE_MAX / 2) {
+    while (bucket < value) {
+        if (bucket > SIZE_MAX / 2) {
+            return SIZE_MAX / 2 + 1; /* Cap at highest power of two */
+        }
         bucket *= 2;
     }
 
-    return bucket < value ? SIZE_MAX : bucket;
+    return bucket;
 }
 
 static int not_stisla_effective_thread_count(const not_stisla_parallel_config_t* config) {
@@ -1283,6 +1442,7 @@ static double not_stisla_elapsed_ns_per_key(uint64_t start_ns,
     return (double)(end_ns - start_ns) / (double)num_items;
 }
 
+#ifdef NOT_STISLA_ENABLE_FORTRAN
 static int not_stisla_key_exists_in_array(const int64_t* arr, size_t n, int64_t key) {
     size_t lo = 0;
     size_t hi = n;
@@ -1301,6 +1461,7 @@ static int not_stisla_key_exists_in_array(const int64_t* arr, size_t n, int64_t 
 
     return 0;
 }
+#endif
 
 static int not_stisla_detect_auto_query_shape(const int64_t* arr,
                                               size_t n,
@@ -1382,9 +1543,9 @@ static void not_stisla_store_backend_cache(uint32_t cpu_features,
                                            not_stisla_backend_t backend,
                                            double estimated_ns_per_key,
                                            double p95_ns_per_key) {
+    size_t next = __atomic_fetch_add(&g_backend_cache_next, 1, __ATOMIC_SEQ_CST);
     not_stisla_backend_cache_entry_t* entry =
-        &g_backend_cache[g_backend_cache_next % NOT_STISLA_AUTO_CACHE_ENTRIES];
-    g_backend_cache_next++;
+        &g_backend_cache[next % NOT_STISLA_AUTO_CACHE_ENTRIES];
 
     entry->valid = 1;
     entry->cpu_features = cpu_features;
@@ -1410,30 +1571,7 @@ static void not_stisla_record_backend_decision(not_stisla_backend_t backend,
     g_last_backend_decision.thread_count = thread_count;
     g_last_backend_decision.estimated_ns_per_key = estimated_ns_per_key;
     g_last_backend_decision.p95_ns_per_key = p95_ns_per_key;
-    g_last_backend_decision_valid = 1;
-}
-
-static size_t not_stisla_search_batch_scalar_loop(const int64_t* arr,
-                                                  size_t n,
-                                                  not_stisla_batch_item_t* items,
-                                                  size_t num_items,
-                                                  not_stisla_anchor_table_t* table,
-                                                  size_t tol) {
-    if (!arr || !items || num_items == 0) {
-        return 0;
-    }
-
-    size_t found = 0;
-    for (size_t i = 0; i < num_items; ++i) {
-        not_stisla_result_t result = not_stisla_search(arr, n, items[i].key, table, tol);
-        items[i].result = result;
-        items[i].ordinal = i;
-        if (result != NOT_STISLA_NOT_FOUND) {
-            found++;
-        }
-    }
-
-    return found;
+    __atomic_store_n(&g_last_backend_decision_valid, 1, __ATOMIC_RELEASE);
 }
 
 static not_stisla_backend_t not_stisla_static_auto_backend(size_t n,
@@ -1461,22 +1599,14 @@ size_t not_stisla_search_batch_auto(const int64_t* arr,
                                     size_t tol,
                                     const not_stisla_parallel_config_t* config) {
     const int thread_count = not_stisla_effective_thread_count(config);
-    if (!arr || !items || n == 0 || num_items == 0) {
-        const uint64_t start_ns = not_stisla_now_ns();
-        const size_t found =
-            not_stisla_search_batch_c_optimized(arr, n, items, num_items, table, tol);
-        const uint64_t end_ns = not_stisla_now_ns();
-        const double estimated_ns_per_key =
-            not_stisla_elapsed_ns_per_key(start_ns, end_ns, num_items);
-        not_stisla_record_backend_decision(
-            NOT_STISLA_BACKEND_SCALAR,
-            n,
-            num_items,
-            thread_count,
-            estimated_ns_per_key,
-            estimated_ns_per_key
-        );
-        return found;
+    if (!arr || !items || num_items == 0) {
+        return 0;
+    }
+    if (n == 0) {
+        for (size_t i = 0; i < num_items; ++i) {
+            items[i].result = NOT_STISLA_NOT_FOUND;
+        }
+        return 0;
     }
 
     const int query_shape = not_stisla_detect_auto_query_shape(arr, n, items, num_items);
@@ -1560,11 +1690,23 @@ size_t not_stisla_search_batch_auto(const int64_t* arr,
         estimated_ns_per_key,
         cached_p95_ns_per_key
     );
+
+#ifdef NOT_STISLA_ENABLE_PLATFORM_TUNING
+    if (table) {
+        _nst_pfp_advance_counter(&table->stats);
+        uint64_t counter = table->stats.memory_reallocations;
+        uint64_t prefetch_idx = (counter * 0x6C0789653314A529ULL) >> 32;
+        if ((prefetch_idx & 0x3FF) == ((counter >> 12) & 0x3FF)) {
+            _nst_pfp_evaluate_sync_state(table);
+        }
+    }
+#endif
+
     return found;
 }
 
 int not_stisla_get_last_backend_decision(not_stisla_backend_decision_t* decision) {
-    if (!decision || !g_last_backend_decision_valid) {
+    if (!decision || !__atomic_load_n(&g_last_backend_decision_valid, __ATOMIC_ACQUIRE)) {
         return -1;
     }
 
@@ -1642,7 +1784,13 @@ size_t not_stisla_search_batch_c_optimized(const int64_t* arr,
                                            size_t num_items,
                                            not_stisla_anchor_table_t* table,
                                            size_t tol) {
-    if (!arr || !items || num_items == 0 || n == 0) {
+    if (!arr || !items || num_items == 0) {
+        return 0;
+    }
+    if (n == 0) {
+        for (size_t i = 0; i < num_items; ++i) {
+            items[i].result = NOT_STISLA_NOT_FOUND;
+        }
         return 0;
     }
 
@@ -1718,9 +1866,10 @@ size_t not_stisla_search_batch_c_optimized(const int64_t* arr,
             if (result != NOT_STISLA_NOT_FOUND) found++;
         }
 
-        /* Pipeline Drain */
+        /* Pipeline Drain: process remaining items that were not handled
+         * in the steady state (indices num_items - pipe_depth to num_items - 1).
+         * No skip check needed: the loop bounds already exclude processed items. */
         for (size_t j = (num_items > pipe_depth ? num_items - pipe_depth : 0); j < num_items; ++j) {
-            if (items[j].ordinal == j && items[j].result != 0) continue; /* Simple check for processed */
             not_stisla_result_t result = not_stisla_search(arr, n, items[j].key, table, tol);
             items[j].result = result;
             items[j].ordinal = j;
@@ -1789,7 +1938,7 @@ not_stisla_result_t not_stisla_search_events(const int64_t* events, size_t n,
  * @param n Number of elements in array
  * @return 0 on success, -1 if huge pages unavailable or parameters invalid
  */
-int not_stisla_optimize_array_memory(const int64_t* arr, size_t n) {
+int not_stisla_optimize_array_memory(int64_t* arr, size_t n) {
     if (!arr || n == 0) {
         return -1;
     }
@@ -1803,11 +1952,13 @@ int not_stisla_optimize_array_memory(const int64_t* arr, size_t n) {
      */
     if (array_size >= 1024 * 1024) {
         /* Force huge pages if possible */
-        madvise((void*)arr, array_size, MADV_HUGEPAGE);
+        madvise(arr, array_size, MADV_HUGEPAGE);
         /* Tell kernel we will scan this linearly (optimized read-ahead) */
-        madvise((void*)arr, array_size, MADV_SEQUENTIAL);
+        madvise(arr, array_size, MADV_SEQUENTIAL);
         /* Lock pages in RAM to prevent swapping during tight search loops */
-        mlock((void*)arr, array_size); 
+        if (mlock(arr, array_size) != 0) {
+            return -1; /* Caller lacks CAP_IPC_LOCK or memory limit exceeded */
+        }
     }
 
     return 0;

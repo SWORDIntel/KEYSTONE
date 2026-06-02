@@ -1,3 +1,0 @@
-[2026-04-25T10:39:35Z] case=1 profile=mem_n4096_q1024_h100_dense_g1_j0_s17_t16 estimated_gib=0.000
-  benchmark_csv=bench_results/memory_ramp_smoke_20260425T103935Z/1_mem_n4096_q1024_h100_dense_g1_j0_s17_t16.csv
-  time_metrics=bench_results/memory_ramp_smoke_20260425T103935Z/1_mem_n4096_q1024_h100_dense_g1_j0_s17_t16.time.txt

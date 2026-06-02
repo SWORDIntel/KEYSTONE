@@ -1,0 +1,161 @@
+# StisSorter Makefile
+# Standard make / make test workflow
+
+CC      := gcc
+CFLAGS  := -O3 -march=native -Wall -Wextra -Werror=implicit-function-declaration -I./include -DNOT_STISLA_ENABLE_PLATFORM_TUNING
+LDFLAGS := -lm
+
+# Optional OpenMP
+ifeq ($(NOT_STISLA_ENABLE_OPENMP),1)
+    CFLAGS  += -fopenmp
+    LDFLAGS += -fopenmp
+endif
+
+# Optional tar.zst streaming support (default: enabled if libarchive + libzstd are available)
+ifeq ($(NOT_STISLA_ENABLE_TAR_ZST),1)
+    TAR_ZST_CFLAGS := -DNOT_STISLA_ENABLE_TAR_ZST
+    TAR_ZST_LDFLAGS := -larchive -lzstd
+    CFLAGS  += $(TAR_ZST_CFLAGS)
+    LDFLAGS += $(TAR_ZST_LDFLAGS)
+else ifneq ($(NOT_STISLA_ENABLE_TAR_ZST),0)
+    ifeq ($(shell pkg-config --exists libarchive libzstd 2>/dev/null && echo yes),yes)
+        NOT_STISLA_ENABLE_TAR_ZST := 1
+        TAR_ZST_CFLAGS := -DNOT_STISLA_ENABLE_TAR_ZST
+        TAR_ZST_LDFLAGS := $(shell pkg-config --libs libarchive libzstd)
+        CFLAGS  += $(TAR_ZST_CFLAGS)
+        LDFLAGS += $(TAR_ZST_LDFLAGS)
+    endif
+endif
+
+# Optional Fortran backend (default: enabled if gfortran is available)
+ifeq ($(NOT_STISLA_ENABLE_FORTRAN),1)
+    ifeq ($(shell command -v gfortran >/dev/null 2>&1 && echo yes),yes)
+        FORTRAN_CFLAGS := -DNOT_STISLA_ENABLE_FORTRAN
+        FORTRAN_LDFLAGS := -L./fortran -lnot_stisla_batch -Wl,-rpath,'$$ORIGIN/fortran'
+        CFLAGS  += $(FORTRAN_CFLAGS)
+        LDFLAGS += $(FORTRAN_LDFLAGS)
+    else
+        $(error NOT_STISLA_ENABLE_FORTRAN=1 requires gfortran)
+    endif
+else ifneq ($(NOT_STISLA_ENABLE_FORTRAN),0)
+    ifeq ($(shell command -v gfortran >/dev/null 2>&1 && echo yes),yes)
+        FORTRAN_CFLAGS := -DNOT_STISLA_ENABLE_FORTRAN
+        FORTRAN_LDFLAGS := -L./fortran -lnot_stisla_batch -Wl,-rpath,'$$ORIGIN/fortran'
+        CFLAGS  += $(FORTRAN_CFLAGS)
+        LDFLAGS += $(FORTRAN_LDFLAGS)
+    endif
+endif
+
+# SIMD detection
+ifeq ($(NOT_STISLA_FORCE_SCALAR),1)
+    CFLAGS += -mno-avx2
+else
+    ifneq ($(NOT_STISLA_ENABLE_AVX2),0)
+        CFLAGS += -mavx2
+    endif
+    ifeq ($(NOT_STISLA_ENABLE_AVX512),1)
+        CFLAGS += -mavx512f -mavx512dq
+    endif
+endif
+
+SRC     := src/not_stisla.c src/dsmil_not_stisla_wrapper.c src/dsmil_telemetry_processor.c \
+           src/nst_prefetch_profile.c src/nst_platform_hints.c src/nst_memory_topology.c \
+           src/nst_vector_config.c src/nst_batch_scheduler.c src/nst_cache_line_align.c \
+           src/nst_branch_predict.c src/nst_dram_locality.c
+OBJS    := $(SRC:.c=.o)
+
+TEST_SRC := tests/test_core_native.c tests/test_auto_backend.c \
+            tests/test_fortran_backend.c tests/test_telemetry_processor_perf.c \
+            tests/dsmil_integration_test.c tests/test_performance_fix.c
+TEST_BIN := bin/test_enhanced bin/test_auto_backend bin/test_fortran_backend \
+            bin/test_telemetry_processor_perf bin/test_performance_fix \
+            bin/test_core_native
+
+ifeq ($(NOT_STISLA_ENABLE_TAR_ZST),1)
+SRC     += src/not_stisla_tar_zst.c
+TEST_SRC += tests/test_tar_zst.c
+TEST_BIN += bin/test_tar_zst
+endif
+
+OBJS    := $(SRC:.c=.o)
+
+BENCH_SRC := benchmarks/dsmil_benchmark.c benchmarks/performance_proof.c
+BENCH_BIN := benchmarks/dsmil_benchmark benchmarks/performance_proof
+
+.PHONY: all tests benchmarks clean
+
+all: tests benchmarks
+
+tests: $(TEST_BIN)
+
+benchmarks: $(BENCH_BIN)
+
+bin:
+	mkdir -p bin
+
+# Pattern rules
+%.o: %.c
+	$(CC) $(CFLAGS) -c $< -o $@
+
+src/%.o: src/%.c
+	$(CC) $(CFLAGS) -c $< -o $@
+
+tests/%.o: tests/%.c
+	$(CC) $(CFLAGS) -c $< -o $@
+
+benchmarks/%.o: benchmarks/%.c
+	$(CC) $(CFLAGS) -c $< -o $@
+
+# Test binaries
+bin/test_enhanced: $(OBJS) tests/dsmil_integration_test.o | bin
+	$(CC) -o $@ $^ $(LDFLAGS)
+
+bin/test_core_native: $(OBJS) tests/test_core_native.o | bin
+	$(CC) -o $@ $^ $(LDFLAGS)
+
+bin/test_fortran_backend: $(OBJS) tests/test_fortran_backend.o | bin
+	$(CC) -o $@ $^ $(LDFLAGS)
+
+bin/test_auto_backend: $(OBJS) tests/test_auto_backend.o | bin
+	$(CC) -o $@ $^ $(LDFLAGS)
+
+bin/test_telemetry_processor_perf: $(OBJS) tests/test_telemetry_processor_perf.o | bin
+	$(CC) -o $@ $^ $(LDFLAGS)
+
+bin/test_performance_fix: $(OBJS) tests/test_performance_fix.o | bin
+	$(CC) -o $@ $^ $(LDFLAGS)
+
+bin/test_tar_zst: $(OBJS) tests/test_tar_zst.o | bin
+	$(CC) -o $@ $^ $(LDFLAGS)
+
+# Benchmark binaries
+benchmarks/dsmil_benchmark: $(OBJS) benchmarks/dsmil_benchmark.o
+	$(CC) -o $@ $^ $(LDFLAGS)
+
+benchmarks/performance_proof: $(OBJS) benchmarks/performance_proof.o
+	$(CC) -o $@ $^ $(LDFLAGS)
+
+# Fortran backend (optional)
+fortran/libnot_stisla_batch.so: fortran/not_stisla_batch.f90
+	mkdir -p fortran
+	gfortran -O3 -shared -fPIC -fopenmp -Jfortran $< -o $@
+
+FORTRAN_ENABLED := no
+ifeq ($(NOT_STISLA_ENABLE_FORTRAN),1)
+FORTRAN_ENABLED := yes
+else ifneq ($(NOT_STISLA_ENABLE_FORTRAN),0)
+ifeq ($(shell command -v gfortran >/dev/null 2>&1 && echo yes),yes)
+FORTRAN_ENABLED := yes
+endif
+endif
+
+ifeq ($(FORTRAN_ENABLED),yes)
+all: fortran/libnot_stisla_batch.so
+$(TEST_BIN) $(BENCH_BIN): fortran/libnot_stisla_batch.so | bin
+endif
+
+clean:
+	rm -f $(OBJS) tests/*.o benchmarks/*.o
+	rm -rf bin
+	rm -f scripts/compare_search_auto
+	rm -f fortran/libnot_stisla_batch.so fortran/*.mod

@@ -1,4 +1,4 @@
-# NOT_STISLA AVX-512 Optimization Benchmark Results
+# StiSorter AVX-512 Optimization Benchmark Results
 
 ## Optimizations Implemented
 

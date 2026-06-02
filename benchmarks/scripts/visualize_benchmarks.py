@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """
-NOT_STISLA Benchmark Visualization Script
+StiSorter Benchmark Visualization Script
 
-Generates comprehensive charts and graphs from tuned/enhanced NOT_STISLA benchmark results.
+Generates comprehensive charts and graphs from tuned/enhanced StiSorter benchmark results.
 Supports multiple output formats and interactive visualizations.
 """
 
@@ -78,8 +78,8 @@ class NotStislaBenchmarkVisualizer:
                 enhanced_speedups.append(row['enhanced_vs_binary'])
                 core_speedups.append(row['classical_vs_binary'])
 
-        ax1.scatter(sizes, enhanced_speedups, alpha=0.7, s=50, label='Tuned/Enhanced NOT_STISLA Search', color='#1f77b4')
-        ax1.scatter(sizes, core_speedups, alpha=0.7, s=50, label='NOT_STISLA Core Search', color='#ff7f0e')
+        ax1.scatter(sizes, enhanced_speedups, alpha=0.7, s=50, label='Tuned/Enhanced StiSorter Search', color='#1f77b4')
+        ax1.scatter(sizes, core_speedups, alpha=0.7, s=50, label='StiSorter Core Search', color='#ff7f0e')
         ax1.set_xscale('log')
         ax1.set_xlabel('Array Size (log scale)')
         ax1.set_ylabel('Speedup Factor')
@@ -105,9 +105,9 @@ class NotStislaBenchmarkVisualizer:
         if len(df) > 0:
             df_sorted = df.sort_values('array_size')
             ax3.plot(df_sorted['array_size'], df_sorted['enhanced_time_ns'],
-                    'o-', label='Tuned/Enhanced NOT_STISLA Search', color='#1f77b4', linewidth=2)
+                    'o-', label='Tuned/Enhanced StiSorter Search', color='#1f77b4', linewidth=2)
             ax3.plot(df_sorted['array_size'], df_sorted['classical_time_ns'],
-                    's-', label='NOT_STISLA Core Search', color='#ff7f0e', linewidth=2)
+                    's-', label='StiSorter Core Search', color='#ff7f0e', linewidth=2)
             ax3.plot(df_sorted['array_size'], df_sorted['binary_time_ns'],
                     '^-', label='Baseline Binary Search', color='#2ca02c', linewidth=2)
             ax3.set_xscale('log')
@@ -197,9 +197,9 @@ class NotStislaBenchmarkVisualizer:
             binary_fit = np.polyfit(x, y_binary, 1)
 
             ax3.plot(df_sorted['array_size'], df_sorted['enhanced_time_ns'], 'o',
-                    label=f'Tuned/Enhanced NOT_STISLA Search (slope: {enhanced_fit[0]:.2f})', color='#1f77b4')
+                    label=f'Tuned/Enhanced StiSorter Search (slope: {enhanced_fit[0]:.2f})', color='#1f77b4')
             ax3.plot(df_sorted['array_size'], df_sorted['classical_time_ns'], 's',
-                    label=f'NOT_STISLA Core Search (slope: {core_fit[0]:.2f})', color='#ff7f0e')
+                    label=f'StiSorter Core Search (slope: {core_fit[0]:.2f})', color='#ff7f0e')
             ax3.plot(df_sorted['array_size'], df_sorted['binary_time_ns'], '^',
                     label=f'Baseline Binary Search (slope: {binary_fit[0]:.2f})', color='#2ca02c')
 
@@ -249,7 +249,7 @@ class NotStislaBenchmarkVisualizer:
 
         # Add metadata
         if self.data:
-            fig.suptitle(f'NOT_STISLA Benchmark Results - {self.data.get("not_stisla_version", "Unknown Version")}\n'
+            fig.suptitle(f'StiSorter Benchmark Results - {self.data.get("not_stisla_version", "Unknown Version")}\n'
                         f'Generated: {datetime.fromtimestamp(self.data.get("timestamp", 0)).strftime("%Y-%m-%d %H:%M:%S")}\n'
                         f'Total Benchmarks: {len(df)}', fontsize=12, y=0.98)
 
@@ -272,23 +272,23 @@ class NotStislaBenchmarkVisualizer:
             return
 
         print("\n" + "="*80)
-        print("NOT_STISLA BENCHMARK SUMMARY STATISTICS")
+        print("STISORTER BENCHMARK SUMMARY STATISTICS")
         print("="*80)
 
         print(f"Total benchmarks run: {len(df)}")
-        print(f"NOT_STISLA version: {self.data.get('not_stisla_version', 'Unknown')}")
+        print(f"StiSorter version: {self.data.get('not_stisla_version', 'Unknown')}")
         print(f"Timestamp: {datetime.fromtimestamp(self.data.get('timestamp', 0))}")
 
         # Performance statistics
         print(f"\nPERFORMANCE STATISTICS:")
-        print(f"Average tuned/enhanced NOT_STISLA speedup vs baseline: {df['enhanced_vs_binary'].mean():.1f}x")
-        print(f"Average tuned/enhanced NOT_STISLA speedup vs core search: {df['enhanced_vs_classical'].mean():.1f}x")
+        print(f"Average tuned/enhanced StiSorter speedup vs baseline: {df['enhanced_vs_binary'].mean():.1f}x")
+        print(f"Average tuned/enhanced StiSorter speedup vs core search: {df['enhanced_vs_classical'].mean():.1f}x")
         print(f"Average accuracy: {df['accuracy_rate'].mean()*100:.2f}%")
 
         # Timing statistics
         print(f"\nTIMING STATISTICS (nanoseconds per operation):")
-        print(f"Tuned/enhanced NOT_STISLA average: {df['enhanced_time_ns'].mean():.0f} ns")
-        print(f"NOT_STISLA core search average: {df['classical_time_ns'].mean():.0f} ns")
+        print(f"Tuned/enhanced StiSorter average: {df['enhanced_time_ns'].mean():.0f} ns")
+        print(f"StiSorter core search average: {df['classical_time_ns'].mean():.0f} ns")
         print(f"Baseline binary search average: {df['binary_time_ns'].mean():.0f} ns")
 
         # Hardware statistics
@@ -314,7 +314,7 @@ class NotStislaBenchmarkVisualizer:
         print("="*80)
 
 def main():
-    parser = argparse.ArgumentParser(description='NOT_STISLA Benchmark Visualization')
+    parser = argparse.ArgumentParser(description='StiSorter Benchmark Visualization')
     parser.add_argument('input_file', help='Benchmark results file (.json or .csv)')
     parser.add_argument('--output-dir', default='charts', help='Output directory for charts')
     parser.add_argument('--format', choices=['png', 'pdf', 'svg'], default='png',
@@ -341,11 +341,11 @@ def main():
         viz.generate_summary_stats()
 
         # Generate speedup comparison chart
-        speedup_file = output_dir / f'not_stisla_speedup_comparison.{args.format}'
+        speedup_file = output_dir / f'stisorter_speedup_comparison.{args.format}'
         viz.generate_speedup_comparison(str(speedup_file))
 
         # Generate detailed report
-        report_file = output_dir / f'not_stisla_detailed_report.{args.format}'
+        report_file = output_dir / f'stisorter_detailed_report.{args.format}'
         viz.generate_detailed_report(str(report_file))
 
         print(f"\nCharts saved to: {output_dir}/")

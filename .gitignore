@@ -1,0 +1,37 @@
+# Compiled objects and binaries
+*.o
+*.so
+*.a
+*.out
+*.exe
+bin/
+.build_lib/
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+
+# Benchmark results & generated artifacts
+benchmark_comparison.png
+benchmark_results.csv
+bench_results/
+charts/
+
+# CI artifacts
+.github/ci-artifacts/
+
+# Editor / OS metadata
+*.swp
+*.swo
+*~
+.DS_Store
+.vscode/
+.idea/
+
+# Fortran module files
+*.mod
+
+# Core dumps
+*.core
+core

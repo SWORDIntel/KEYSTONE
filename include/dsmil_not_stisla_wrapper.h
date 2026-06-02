@@ -139,13 +139,15 @@ typedef struct dsmil_search_context {
     void *not_stisla_table;           // NOT_STISLA anchor table
     bool avx2_available;              // AVX2 capability detected
     bool initialized;                 // Context properly initialized
-    uint32_t search_operations;       // Statistics: total searches performed
-    uint32_t cache_hits;              // Statistics: anchor table hits
-    uint32_t memory_usage;            // Statistics: memory usage in bytes
+    uint64_t search_operations;       // Statistics: total searches performed
+    uint64_t cache_hits;              // Statistics: anchor table hits
+    uint64_t memory_usage;            // Statistics: memory usage in bytes
     char last_error[256];             // Last error message for debugging
 
     // Internal cache for per-call key extraction optimization
     const void *last_data_ptr;        // Pointer to last used data array
+    int64_t cached_first_key;         // First key of cached data (guards stale pointer reuse)
+    int64_t cached_last_key;          // Last key of cached data
     int64_t *cached_keys;             // Cached extracted keys
     size_t cached_count;              // Number of keys in cache
     size_t cached_capacity;           // Capacity of cached_keys array
@@ -438,6 +440,69 @@ int dsmil_search_logs_by_facility_time_range(
     size_t max_results,
     size_t *num_found
 );
+
+/* ============================================================================
+ * tar.zst Streaming Search Functions
+ * ============================================================================ */
+
+#ifdef NOT_STISLA_ENABLE_TAR_ZST
+
+/**
+ * @brief Search telemetry events from a .tar.zst archive member
+ *
+ * Streams the named member, parses timestamps, and searches.
+ *
+ * @param ctx Search context
+ * @param archive_path Path to .tar.zst file
+ * @param member_name Name of tar entry to stream and search
+ * @param target_time Target timestamp
+ * @param result Pointer to store search result
+ * @return DSMIL_SEARCH_SUCCESS on success, error code otherwise
+ */
+int dsmil_search_telemetry_events_from_tar_zst(
+    dsmil_search_context_t *ctx,
+    const char *archive_path,
+    const char *member_name,
+    dsmil_timestamp_t target_time,
+    dsmil_telemetry_result_t *result
+);
+
+/**
+ * @brief Search security events from a .tar.zst archive member
+ */
+int dsmil_search_security_events_from_tar_zst(
+    dsmil_search_context_t *ctx,
+    const char *archive_path,
+    const char *member_name,
+    dsmil_security_id_t target_id,
+    dsmil_security_result_t *result
+);
+
+/**
+ * @brief Search log entries from a .tar.zst archive member
+ */
+int dsmil_search_log_entries_from_tar_zst(
+    dsmil_search_context_t *ctx,
+    const char *archive_path,
+    const char *member_name,
+    dsmil_log_id_t target_id,
+    dsmil_log_result_t *result
+);
+
+/**
+ * @brief Batch search multiple members from a .tar.zst archive
+ */
+int dsmil_search_batch_tar_zst(
+    dsmil_search_context_t *ctx,
+    const char *archive_path,
+    const char **member_names,
+    size_t num_members,
+    int64_t *keys,
+    size_t num_keys,
+    dsmil_telemetry_result_t *results
+);
+
+#endif /* NOT_STISLA_ENABLE_TAR_ZST */
 
 /* ============================================================================
  * Utility Functions

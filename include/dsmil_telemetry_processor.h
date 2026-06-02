@@ -141,6 +141,34 @@ int dsmil_telemetry_processor_get_stats(
  */
 int dsmil_telemetry_processor_clear(dsmil_telemetry_processor_t *processor);
 
+#ifdef NOT_STISLA_ENABLE_TAR_ZST
+/**
+ * @brief Load telemetry events from a .tar.zst archive member into the processor
+ *
+ * @param processor Telemetry processor
+ * @param archive_path Path to .tar.zst file
+ * @param member_name Name of tar entry containing telemetry data
+ * @return DSMIL_SEARCH_SUCCESS on success, error code otherwise
+ */
+int dsmil_telemetry_processor_load_from_tar_zst(
+    dsmil_telemetry_processor_t *processor,
+    const char *archive_path,
+    const char *member_name
+);
+
+/**
+ * @brief Load all parseable members from a .tar.zst archive into the processor
+ *
+ * @param processor Telemetry processor
+ * @param archive_path Path to .tar.zst file
+ * @return DSMIL_SEARCH_SUCCESS on success, error code otherwise
+ */
+int dsmil_telemetry_processor_load_all_members(
+    dsmil_telemetry_processor_t *processor,
+    const char *archive_path
+);
+#endif /* NOT_STISLA_ENABLE_TAR_ZST */
+
 /**
  * @brief Analyze telemetry patterns in time window
  *

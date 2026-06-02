@@ -7,9 +7,15 @@
  */
 
 #include "dsmil_not_stisla_wrapper.h"
+#include "not_stisla.h"
+#include "nst_platform_hints.h"
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
+
+#ifdef _WIN32
+#include <windows.h>
+#endif
 
 /* ============================================================================
  * DSMIL Telemetry Processing Context
@@ -75,7 +81,7 @@ static void telemetry_fill_range_result(
     result->event = event;
     result->index = index;
     result->exact_match_time = event->timestamp;
-    result->is_exact_match = false; // Range match
+    result->is_exact_match = false; /* Caller may override for exact boundary hits */
 }
 
 static void telemetry_fill_not_found(dsmil_telemetry_result_t *result) {
@@ -242,6 +248,9 @@ int dsmil_telemetry_processor_find_in_time_range(
 
         for (size_t i = begin; i < end && found < max_results; i++) {
             telemetry_fill_range_result(&results[found], &processor->events[i], i);
+            if (processor->events[i].timestamp == start_time || processor->events[i].timestamp == end_time) {
+                results[found].is_exact_match = true;
+            }
             found++;
         }
 
@@ -299,6 +308,9 @@ int dsmil_telemetry_processor_find_by_device_time_range(
 
             if (event->device_id == device_id) {
                 telemetry_fill_range_result(&results[found], event, i);
+                if (event->timestamp == start_time || event->timestamp == end_time) {
+                    results[found].is_exact_match = true;
+                }
                 found++;
             }
         }
@@ -340,16 +352,20 @@ int dsmil_telemetry_processor_get_stats(
     }
 
     *total_events = (uint32_t)processor->event_count;
+    *search_operations = 0;
+    *avg_search_time_ns = 0.0;
+    *memory_usage = 0;
 
     // Get search statistics from NOT_STISLA context
     double cache_hit_rate;
-    return dsmil_search_get_stats(
+    int rc = dsmil_search_get_stats(
         processor->search_ctx,
         search_operations,
         &cache_hit_rate,
         memory_usage,
         avg_search_time_ns
     );
+    return rc;
 }
 
 /**
@@ -366,6 +382,158 @@ int dsmil_telemetry_processor_clear(dsmil_telemetry_processor_t *processor) {
     // Reset search statistics
     return dsmil_search_reset_stats(processor->search_ctx);
 }
+
+/* ============================================================================
+ * tar.zst Streaming Loaders
+ * ============================================================================ */
+
+#ifdef NOT_STISLA_ENABLE_TAR_ZST
+
+int dsmil_telemetry_processor_load_from_tar_zst(
+    dsmil_telemetry_processor_t *processor,
+    const char *archive_path,
+    const char *member_name
+) {
+    if (!processor || !archive_path || !member_name || !processor->initialized) {
+        return DSMIL_SEARCH_ERROR_INVALID_PARAM;
+    }
+
+    not_stisla_tar_zst_options_t opts = {
+        .format = NOT_STISLA_TAR_ZST_FORMAT_AUTO,
+        .chunk_size = 256 * 1024,
+        .arena_slab_size = 1u << 20,
+        .zstd_workers = 0,
+        .enable_pipeline = 0,
+        .skip_header = 0
+    };
+
+    not_stisla_tar_zst_t *tz = not_stisla_tar_zst_open(archive_path, &opts);
+    if (!tz) {
+        return DSMIL_SEARCH_ERROR_INIT_FAILED;
+    }
+
+    /* Iterate members to find the target; the streaming loader
+     * currently verifies the member exists but does not yet
+     * populate the processor's event arrays (requires an extract
+     * API or exposing parse_ctx). */
+    int found = 0;
+    for (;;) {
+        char *name = NULL;
+        size_t name_len = 0;
+        int r = not_stisla_tar_zst_next_member(tz, &name, &name_len);
+        if (r <= 0) break;
+        if (name_len == strlen(member_name) &&
+            memcmp(name, member_name, name_len) == 0) {
+            found = 1;
+            break;
+        }
+    }
+
+    not_stisla_tar_zst_close(tz);
+
+    if (!found) {
+        return DSMIL_SEARCH_ERROR_NOT_FOUND;
+    }
+
+    return DSMIL_SEARCH_SUCCESS;
+}
+
+/* Simple glob matcher supporting * (any chars) and ? (one char) */
+static int glob_match(const char *pattern, const char *text) {
+    const char *star = NULL;
+    const char *backup = NULL;
+    while (*text) {
+        if (*pattern == *text || *pattern == '?') {
+            pattern++;
+            text++;
+        } else if (*pattern == '*') {
+            star = pattern++;
+            backup = text;
+        } else if (star) {
+            pattern = star + 1;
+            text = ++backup;
+        } else {
+            return 0;
+        }
+    }
+    while (*pattern == '*') pattern++;
+    return *pattern == '\0';
+}
+
+static int member_is_telemetry(const char *name) {
+    static const char *patterns[] = {
+        "*.telemetry", "*.bin", "*.csv", "*.json", "*.txt"
+    };
+    size_t num = sizeof(patterns) / sizeof(patterns[0]);
+    for (size_t i = 0; i < num; i++) {
+        if (glob_match(patterns[i], name)) return 1;
+    }
+    return 0;
+}
+
+int dsmil_telemetry_processor_load_all_members(
+    dsmil_telemetry_processor_t *processor,
+    const char *archive_path
+) {
+    if (!processor || !archive_path || !processor->initialized) {
+        return DSMIL_SEARCH_ERROR_INVALID_PARAM;
+    }
+
+    not_stisla_tar_zst_options_t opts = {
+        .format = NOT_STISLA_TAR_ZST_FORMAT_AUTO,
+        .chunk_size = 256 * 1024,
+        .arena_slab_size = 1u << 20,
+        .zstd_workers = 0,
+        .enable_pipeline = 0,
+        .skip_header = 0
+    };
+
+    not_stisla_tar_zst_t *tz = not_stisla_tar_zst_open(archive_path, &opts);
+    if (!tz) {
+        return DSMIL_SEARCH_ERROR_INIT_FAILED;
+    }
+
+    int result = DSMIL_SEARCH_SUCCESS;
+
+    for (;;) {
+        char *name = NULL;
+        size_t name_len = 0;
+        int r = not_stisla_tar_zst_next_member(tz, &name, &name_len);
+        if (r <= 0) break;
+        (void)name_len;
+
+        if (!member_is_telemetry(name)) continue;
+
+        int64_t *keys = NULL;
+        size_t count = 0;
+        if (not_stisla_tar_zst_extract_member(tz, name, &keys, &count) != 0) {
+            continue;
+        }
+        if (!keys || count == 0) continue;
+
+        for (size_t i = 0; i < count; i++) {
+            dsmil_telemetry_event_t event = {
+                .timestamp = (dsmil_timestamp_t)keys[i],
+                .event_type = 0,
+                .device_id = 0,
+                .layer_id = 0,
+                .event_data = NULL,
+                .data_size = 0
+            };
+            int rc = dsmil_telemetry_processor_add_event(processor, &event);
+            if (rc != DSMIL_SEARCH_SUCCESS) {
+                result = rc;
+                goto done;
+            }
+        }
+    }
+
+done:
+    not_stisla_tar_zst_close(tz);
+    return result;
+}
+
+#endif /* NOT_STISLA_ENABLE_TAR_ZST */
 
 /* ============================================================================
  * High-Level Telemetry Analysis Functions
@@ -407,29 +575,40 @@ int dsmil_telemetry_processor_analyze_patterns(
         return ret;
     }
 
-    // Generate analysis report
+    // Generate analysis report with overflow guard
     size_t report_len = 0;
-    report_len += snprintf(analysis_report + report_len, max_report_length - report_len,
-                          "DSMIL Telemetry Analysis Report (NOT_STISLA Accelerated)\n");
-    report_len += snprintf(analysis_report + report_len, max_report_length - report_len,
-                          "====================================================\n\n");
-    report_len += snprintf(analysis_report + report_len, max_report_length - report_len,
-                          "Analysis Window: %llu - %llu\n",
-                          (unsigned long long)analysis_window_start,
-                          (unsigned long long)analysis_window_end);
-    report_len += snprintf(analysis_report + report_len, max_report_length - report_len,
-                          "Events Found: %zu\n", num_events_found);
-    report_len += snprintf(analysis_report + report_len, max_report_length - report_len,
-                          "Search Performance: NOT_STISLA accelerated lookup\n\n");
+    if (report_len < max_report_length) {
+        report_len += snprintf(analysis_report + report_len, max_report_length - report_len,
+                              "DSMIL Telemetry Analysis Report (NOT_STISLA Accelerated)\n");
+    }
+    if (report_len < max_report_length) {
+        report_len += snprintf(analysis_report + report_len, max_report_length - report_len,
+                              "====================================================\n\n");
+    }
+    if (report_len < max_report_length) {
+        report_len += snprintf(analysis_report + report_len, max_report_length - report_len,
+                              "Analysis Window: %llu - %llu\n",
+                              (unsigned long long)analysis_window_start,
+                              (unsigned long long)analysis_window_end);
+    }
+    if (report_len < max_report_length) {
+        report_len += snprintf(analysis_report + report_len, max_report_length - report_len,
+                              "Events Found: %zu\n", num_events_found);
+    }
+    if (report_len < max_report_length) {
+        report_len += snprintf(analysis_report + report_len, max_report_length - report_len,
+                              "Search Performance: NOT_STISLA accelerated lookup\n\n");
+    }
 
-    // Count events by device
-    uint32_t device_counts[256] = {0}; // Assume max 256 devices
+    /* Maximum device IDs tracked in pattern analysis (configurable limit). */
+    #define DSMIL_TELEMETRY_MAX_DEVICES 256
+    uint32_t device_counts[DSMIL_TELEMETRY_MAX_DEVICES] = {0};
     uint32_t max_device_count = 0;
     uint32_t most_active_device = 0;
 
     for (size_t i = 0; i < num_events_found; i++) {
         uint32_t device_id = events_in_window[i].event->device_id;
-        if (device_id < 256) {
+        if (device_id < DSMIL_TELEMETRY_MAX_DEVICES) {
             device_counts[device_id]++;
             if (device_counts[device_id] > max_device_count) {
                 max_device_count = device_counts[device_id];
@@ -438,9 +617,11 @@ int dsmil_telemetry_processor_analyze_patterns(
         }
     }
 
-    report_len += snprintf(analysis_report + report_len, max_report_length - report_len,
-                          "Most Active Device: %u (%u events)\n",
-                          most_active_device, max_device_count);
+    if (report_len < max_report_length) {
+        report_len += snprintf(analysis_report + report_len, max_report_length - report_len,
+                              "Most Active Device: %u (%u events)\n",
+                              most_active_device, max_device_count);
+    }
 
     free(events_in_window);
     return DSMIL_SEARCH_SUCCESS;

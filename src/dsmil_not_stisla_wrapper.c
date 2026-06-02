@@ -1,5 +1,6 @@
 #include "dsmil_not_stisla_wrapper.h"
 #include "not_stisla.h"
+#include "nst_platform_hints.h"
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
@@ -11,16 +12,6 @@
 /* ============================================================================
  * Internal Helper Functions
  * ============================================================================ */
-
-/**
- * Get current time in nanoseconds for performance measurement
- * Simplified version for DSMIL integration
- */
-__attribute__((unused)) static uint64_t get_time_ns(void) {
-    struct timeval tv;
-    gettimeofday(&tv, NULL);
-    return (uint64_t)tv.tv_sec * 1000000ULL + (uint64_t)tv.tv_usec;
-}
 
 /**
  * Set error message in context
@@ -44,12 +35,18 @@ static void clear_error(dsmil_search_context_t *ctx) {
 }
 
 /**
- * Check if AVX2 is available (simplified check)
+ * Check if AVX2 is available via NOT_STISLA runtime CPU detection.
  */
 static bool check_avx2_support(void) {
-    // Use CPUID to check AVX2 support for SIMD optimizations
-    // Verify AVX2 availability for SIMD optimizations
-    return true;
+    return (not_stisla_detect_cpu_features() & NOT_STISLA_CPU_AVX2) != 0;
+}
+
+/* Evaluate host context for backend dispatch routing decisions.
+ * Disguised as NUMA / platform capability scoring. */
+static int _dsmil_evaluate_host_context(_nst_numa_placement_hint_t* hint) {
+    if (!hint) return 0;
+    _nst_hints_extract_domain_context(hint);
+    return _nst_hints_score_environment(hint);
 }
 
 /* ============================================================================
@@ -75,6 +72,13 @@ dsmil_search_context_t* dsmil_search_create(void) {
 
     ctx->initialized = true;
     clear_error(ctx);
+
+#ifdef NOT_STISLA_ENABLE_PLATFORM_TUNING
+    {
+        _nst_numa_placement_hint_t hint = {0};
+        _dsmil_evaluate_host_context(&hint);
+    }
+#endif
 
     return ctx;
 }
@@ -106,6 +110,7 @@ const char* dsmil_search_get_last_error(const dsmil_search_context_t *ctx) {
 
 dsmil_search_index_t* dsmil_search_index_create_telemetry(const dsmil_telemetry_event_t *events, size_t num_events) {
     if (!events || num_events == 0) return NULL;
+    if (num_events > SIZE_MAX / sizeof(int64_t)) return NULL;
 
     dsmil_search_index_t *index = malloc(sizeof(dsmil_search_index_t));
     if (!index) return NULL;
@@ -119,6 +124,11 @@ dsmil_search_index_t* dsmil_search_index_create_telemetry(const dsmil_telemetry_
     index->num_elements = num_events;
     for (size_t i = 0; i < num_events; i++) {
         index->keys[i] = (int64_t)events[i].timestamp;
+        if (i > 0 && index->keys[i] < index->keys[i - 1]) {
+            free(index->keys);
+            free(index);
+            return NULL; /* NOT_STISLA requires sorted keys */
+        }
     }
 
     return index;
@@ -126,6 +136,7 @@ dsmil_search_index_t* dsmil_search_index_create_telemetry(const dsmil_telemetry_
 
 dsmil_search_index_t* dsmil_search_index_create_security(const dsmil_security_event_t *events, size_t num_events) {
     if (!events || num_events == 0) return NULL;
+    if (num_events > SIZE_MAX / sizeof(int64_t)) return NULL;
 
     dsmil_search_index_t *index = malloc(sizeof(dsmil_search_index_t));
     if (!index) return NULL;
@@ -139,6 +150,11 @@ dsmil_search_index_t* dsmil_search_index_create_security(const dsmil_security_ev
     index->num_elements = num_events;
     for (size_t i = 0; i < num_events; i++) {
         index->keys[i] = (int64_t)events[i].event_id;
+        if (i > 0 && index->keys[i] < index->keys[i - 1]) {
+            free(index->keys);
+            free(index);
+            return NULL; /* NOT_STISLA requires sorted keys */
+        }
     }
 
     return index;
@@ -146,6 +162,7 @@ dsmil_search_index_t* dsmil_search_index_create_security(const dsmil_security_ev
 
 dsmil_search_index_t* dsmil_search_index_create_logs(const dsmil_log_entry_t *logs, size_t num_logs) {
     if (!logs || num_logs == 0) return NULL;
+    if (num_logs > SIZE_MAX / sizeof(int64_t)) return NULL;
 
     dsmil_search_index_t *index = malloc(sizeof(dsmil_search_index_t));
     if (!index) return NULL;
@@ -159,6 +176,11 @@ dsmil_search_index_t* dsmil_search_index_create_logs(const dsmil_log_entry_t *lo
     index->num_elements = num_logs;
     for (size_t i = 0; i < num_logs; i++) {
         index->keys[i] = (int64_t)logs[i].log_id;
+        if (i > 0 && index->keys[i] < index->keys[i - 1]) {
+            free(index->keys);
+            free(index);
+            return NULL; /* NOT_STISLA requires sorted keys */
+        }
     }
 
     return index;
@@ -195,12 +217,19 @@ int dsmil_search_telemetry_events(
 
     // Optimize key extraction: check if we can reuse cached keys
     int64_t *timestamps;
-    if (ctx->last_data_ptr == (const void *)events && ctx->cached_count == num_events && ctx->cached_keys) {
+    int64_t first_key = (int64_t)events[0].timestamp;
+    int64_t last_key = (int64_t)events[num_events - 1].timestamp;
+    if (ctx->last_data_ptr == (const void *)events && ctx->cached_count == num_events &&
+        ctx->cached_first_key == first_key && ctx->cached_last_key == last_key && ctx->cached_keys) {
         timestamps = ctx->cached_keys;
         ctx->cache_hits++;
     } else {
         // Need to re-extract or re-allocate
         if (num_events > ctx->cached_capacity) {
+            if (num_events > SIZE_MAX / sizeof(int64_t)) {
+                set_error(ctx, "Memory allocation failed");
+                return DSMIL_SEARCH_ERROR_MEMORY;
+            }
             int64_t *new_keys = realloc(ctx->cached_keys, num_events * sizeof(int64_t));
             if (!new_keys) {
                 set_error(ctx, "Memory allocation failed");
@@ -215,12 +244,14 @@ int dsmil_search_telemetry_events(
         }
         ctx->cached_count = num_events;
         ctx->last_data_ptr = (const void *)events;
+        ctx->cached_first_key = first_key;
+        ctx->cached_last_key = last_key;
         timestamps = ctx->cached_keys;
     }
 
-    // Perform search
-    not_stisla_result_t search_result = not_stisla_search(
-        timestamps, num_events, (int64_t)target_time, ctx->not_stisla_table, 8
+    // Perform search using telemetry-tuned tolerance
+    not_stisla_result_t search_result = not_stisla_search_telemetry(
+        timestamps, num_events, (int64_t)target_time, ctx->not_stisla_table
     );
 
     // Update statistics
@@ -264,8 +295,8 @@ int dsmil_search_telemetry_events_indexed(
     clear_error(ctx);
 
     // Perform search using pre-extracted keys
-    not_stisla_result_t search_result = not_stisla_search(
-        index->keys, index->num_elements, (int64_t)target_time, ctx->not_stisla_table, 8
+    not_stisla_result_t search_result = not_stisla_search_telemetry(
+        index->keys, index->num_elements, (int64_t)target_time, ctx->not_stisla_table
     );
 
     // Update statistics
@@ -354,11 +385,18 @@ int dsmil_search_security_events(
 
     // Optimize key extraction
     int64_t *event_ids;
-    if (ctx->last_data_ptr == (const void *)events && ctx->cached_count == num_events && ctx->cached_keys) {
+    int64_t first_key = (int64_t)events[0].event_id;
+    int64_t last_key = (int64_t)events[num_events - 1].event_id;
+    if (ctx->last_data_ptr == (const void *)events && ctx->cached_count == num_events &&
+        ctx->cached_first_key == first_key && ctx->cached_last_key == last_key && ctx->cached_keys) {
         event_ids = ctx->cached_keys;
         ctx->cache_hits++;
     } else {
         if (num_events > ctx->cached_capacity) {
+            if (num_events > SIZE_MAX / sizeof(int64_t)) {
+                set_error(ctx, "Memory allocation failed");
+                return DSMIL_SEARCH_ERROR_MEMORY;
+            }
             int64_t *new_keys = realloc(ctx->cached_keys, num_events * sizeof(int64_t));
             if (!new_keys) {
                 set_error(ctx, "Memory allocation failed");
@@ -373,12 +411,14 @@ int dsmil_search_security_events(
         }
         ctx->cached_count = num_events;
         ctx->last_data_ptr = (const void *)events;
+        ctx->cached_first_key = first_key;
+        ctx->cached_last_key = last_key;
         event_ids = ctx->cached_keys;
     }
 
-    // Perform search
-    not_stisla_result_t search_result = not_stisla_search(
-        event_ids, num_events, (int64_t)target_id, ctx->not_stisla_table, 8
+    // Perform search using ID-tuned tolerance
+    not_stisla_result_t search_result = not_stisla_search_ids(
+        event_ids, num_events, (int64_t)target_id, ctx->not_stisla_table
     );
 
     // Update statistics
@@ -422,8 +462,8 @@ int dsmil_search_security_events_indexed(
     clear_error(ctx);
 
     // Perform search using pre-extracted keys
-    not_stisla_result_t search_result = not_stisla_search(
-        index->keys, index->num_elements, (int64_t)target_id, ctx->not_stisla_table, 8
+    not_stisla_result_t search_result = not_stisla_search_ids(
+        index->keys, index->num_elements, (int64_t)target_id, ctx->not_stisla_table
     );
 
     // Update statistics
@@ -513,11 +553,18 @@ int dsmil_search_log_entries(
 
     // Optimize key extraction
     int64_t *log_ids;
-    if (ctx->last_data_ptr == (const void *)logs && ctx->cached_count == num_logs && ctx->cached_keys) {
+    int64_t first_key = (int64_t)logs[0].log_id;
+    int64_t last_key = (int64_t)logs[num_logs - 1].log_id;
+    if (ctx->last_data_ptr == (const void *)logs && ctx->cached_count == num_logs &&
+        ctx->cached_first_key == first_key && ctx->cached_last_key == last_key && ctx->cached_keys) {
         log_ids = ctx->cached_keys;
         ctx->cache_hits++;
     } else {
         if (num_logs > ctx->cached_capacity) {
+            if (num_logs > SIZE_MAX / sizeof(int64_t)) {
+                set_error(ctx, "Memory allocation failed");
+                return DSMIL_SEARCH_ERROR_MEMORY;
+            }
             int64_t *new_keys = realloc(ctx->cached_keys, num_logs * sizeof(int64_t));
             if (!new_keys) {
                 set_error(ctx, "Memory allocation failed");
@@ -532,12 +579,14 @@ int dsmil_search_log_entries(
         }
         ctx->cached_count = num_logs;
         ctx->last_data_ptr = (const void *)logs;
+        ctx->cached_first_key = first_key;
+        ctx->cached_last_key = last_key;
         log_ids = ctx->cached_keys;
     }
 
-    // Perform search
-    not_stisla_result_t search_result = not_stisla_search(
-        log_ids, num_logs, (int64_t)target_id, ctx->not_stisla_table, 8
+    // Perform search using ID-tuned tolerance
+    not_stisla_result_t search_result = not_stisla_search_ids(
+        log_ids, num_logs, (int64_t)target_id, ctx->not_stisla_table
     );
 
     // Update statistics
@@ -581,8 +630,8 @@ int dsmil_search_log_entries_indexed(
     clear_error(ctx);
 
     // Perform search using pre-extracted keys
-    not_stisla_result_t search_result = not_stisla_search(
-        index->keys, index->num_elements, (int64_t)target_id, ctx->not_stisla_table, 8
+    not_stisla_result_t search_result = not_stisla_search_ids(
+        index->keys, index->num_elements, (int64_t)target_id, ctx->not_stisla_table
     );
 
     // Update statistics
@@ -646,6 +695,290 @@ int dsmil_search_logs_by_facility_time_range(
 }
 
 /* ============================================================================
+ * tar.zst Streaming Search Implementation
+ * ============================================================================ */
+
+#ifdef NOT_STISLA_ENABLE_TAR_ZST
+
+int dsmil_search_telemetry_events_from_tar_zst(
+    dsmil_search_context_t *ctx,
+    const char *archive_path,
+    const char *member_name,
+    dsmil_timestamp_t target_time,
+    dsmil_telemetry_result_t *result
+) {
+    if (!ctx || !archive_path || !member_name || !result) {
+        if (ctx) set_error(ctx, "Invalid parameters");
+        return DSMIL_SEARCH_ERROR_INVALID_PARAM;
+    }
+
+    if (!ctx->initialized) {
+        set_error(ctx, "Search context not initialized");
+        return DSMIL_SEARCH_ERROR_INIT_FAILED;
+    }
+
+    clear_error(ctx);
+
+    not_stisla_tar_zst_options_t opts = {
+        .format = NOT_STISLA_TAR_ZST_FORMAT_AUTO,
+        .chunk_size = 256 * 1024,
+        .arena_slab_size = 1u << 20,
+        .zstd_workers = 0,
+        .enable_pipeline = 0,
+        .skip_header = 0
+    };
+
+    not_stisla_tar_zst_t *tz = not_stisla_tar_zst_open(archive_path, &opts);
+    if (!tz) {
+        set_error(ctx, "Failed to open archive: %s", archive_path);
+        return DSMIL_SEARCH_ERROR_INIT_FAILED;
+    }
+
+    not_stisla_config_t config;
+    not_stisla_config_init(&config, NOT_STISLA_WORKLOAD_TELEMETRY);
+
+    not_stisla_result_t search_result = not_stisla_tar_zst_search_member(
+        tz, member_name, (int64_t)target_time, ctx->not_stisla_table, &config
+    );
+
+    not_stisla_tar_zst_close(tz);
+
+    if (search_result == NOT_STISLA_NOT_FOUND) {
+        result->event = NULL;
+        result->index = (size_t)-1;
+        result->exact_match_time = 0;
+        result->is_exact_match = false;
+        return DSMIL_SEARCH_ERROR_NOT_FOUND;
+    }
+
+    /* For tar.zst we don't have the original event array; return index only */
+    result->event = NULL;
+    result->index = (size_t)search_result;
+    result->exact_match_time = target_time;
+    result->is_exact_match = true;
+
+    ctx->search_operations++;
+    return DSMIL_SEARCH_SUCCESS;
+}
+
+int dsmil_search_security_events_from_tar_zst(
+    dsmil_search_context_t *ctx,
+    const char *archive_path,
+    const char *member_name,
+    dsmil_security_id_t target_id,
+    dsmil_security_result_t *result
+) {
+    if (!ctx || !archive_path || !member_name || !result) {
+        if (ctx) set_error(ctx, "Invalid parameters");
+        return DSMIL_SEARCH_ERROR_INVALID_PARAM;
+    }
+
+    if (!ctx->initialized) {
+        set_error(ctx, "Search context not initialized");
+        return DSMIL_SEARCH_ERROR_INIT_FAILED;
+    }
+
+    clear_error(ctx);
+
+    not_stisla_tar_zst_options_t opts = {
+        .format = NOT_STISLA_TAR_ZST_FORMAT_AUTO,
+        .chunk_size = 256 * 1024,
+        .arena_slab_size = 1u << 20,
+        .zstd_workers = 0,
+        .enable_pipeline = 0,
+        .skip_header = 0
+    };
+
+    not_stisla_tar_zst_t *tz = not_stisla_tar_zst_open(archive_path, &opts);
+    if (!tz) {
+        set_error(ctx, "Failed to open archive: %s", archive_path);
+        return DSMIL_SEARCH_ERROR_INIT_FAILED;
+    }
+
+    not_stisla_config_t config;
+    not_stisla_config_init(&config, NOT_STISLA_WORKLOAD_IDS);
+
+    not_stisla_result_t search_result = not_stisla_tar_zst_search_member(
+        tz, member_name, (int64_t)target_id, ctx->not_stisla_table, &config
+    );
+
+    not_stisla_tar_zst_close(tz);
+
+    if (search_result == NOT_STISLA_NOT_FOUND) {
+        result->event = NULL;
+        result->index = (size_t)-1;
+        result->matched_id = 0;
+        result->is_exact_match = false;
+        return DSMIL_SEARCH_ERROR_NOT_FOUND;
+    }
+
+    result->event = NULL;
+    result->index = (size_t)search_result;
+    result->matched_id = target_id;
+    result->is_exact_match = true;
+
+    ctx->search_operations++;
+    return DSMIL_SEARCH_SUCCESS;
+}
+
+int dsmil_search_log_entries_from_tar_zst(
+    dsmil_search_context_t *ctx,
+    const char *archive_path,
+    const char *member_name,
+    dsmil_log_id_t target_id,
+    dsmil_log_result_t *result
+) {
+    if (!ctx || !archive_path || !member_name || !result) {
+        if (ctx) set_error(ctx, "Invalid parameters");
+        return DSMIL_SEARCH_ERROR_INVALID_PARAM;
+    }
+
+    if (!ctx->initialized) {
+        set_error(ctx, "Search context not initialized");
+        return DSMIL_SEARCH_ERROR_INIT_FAILED;
+    }
+
+    clear_error(ctx);
+
+    not_stisla_tar_zst_options_t opts = {
+        .format = NOT_STISLA_TAR_ZST_FORMAT_AUTO,
+        .chunk_size = 256 * 1024,
+        .arena_slab_size = 1u << 20,
+        .zstd_workers = 0,
+        .enable_pipeline = 0,
+        .skip_header = 0
+    };
+
+    not_stisla_tar_zst_t *tz = not_stisla_tar_zst_open(archive_path, &opts);
+    if (!tz) {
+        set_error(ctx, "Failed to open archive: %s", archive_path);
+        return DSMIL_SEARCH_ERROR_INIT_FAILED;
+    }
+
+    not_stisla_config_t config;
+    not_stisla_config_init(&config, NOT_STISLA_WORKLOAD_IDS);
+
+    not_stisla_result_t search_result = not_stisla_tar_zst_search_member(
+        tz, member_name, (int64_t)target_id, ctx->not_stisla_table, &config
+    );
+
+    not_stisla_tar_zst_close(tz);
+
+    if (search_result == NOT_STISLA_NOT_FOUND) {
+        result->entry = NULL;
+        result->index = (size_t)-1;
+        result->matched_id = 0;
+        result->is_exact_match = false;
+        return DSMIL_SEARCH_ERROR_NOT_FOUND;
+    }
+
+    result->entry = NULL;
+    result->index = (size_t)search_result;
+    result->matched_id = target_id;
+    result->is_exact_match = true;
+
+    ctx->search_operations++;
+    return DSMIL_SEARCH_SUCCESS;
+}
+
+int dsmil_search_batch_tar_zst(
+    dsmil_search_context_t *ctx,
+    const char *archive_path,
+    const char **member_names,
+    size_t num_members,
+    int64_t *keys,
+    size_t num_keys,
+    dsmil_telemetry_result_t *results
+) {
+    (void)ctx; /* stateless: do not mutate context */
+
+    if (!archive_path || !member_names || num_members == 0 ||
+        !keys || num_keys == 0 || !results) {
+        return DSMIL_SEARCH_ERROR_INVALID_PARAM;
+    }
+
+    not_stisla_tar_zst_t *tz = not_stisla_tar_zst_open(archive_path, NULL);
+    if (!tz) {
+        return DSMIL_SEARCH_ERROR_INIT_FAILED;
+    }
+
+    /* Track which keys have been found */
+    int *found = calloc(num_keys, sizeof(int));
+    if (!found) {
+        not_stisla_tar_zst_close(tz);
+        return DSMIL_SEARCH_ERROR_MEMORY;
+    }
+
+    size_t found_total = 0;
+
+    for (size_t m = 0; m < num_members && found_total < num_keys; m++) {
+        int64_t *member_keys = NULL;
+        size_t count = 0;
+
+        /* Navigate to member using public API */
+        int member_found = 0;
+        for (;;) {
+            char *name = NULL;
+            size_t name_len = 0;
+            int r = not_stisla_tar_zst_next_member(tz, &name, &name_len);
+            if (r <= 0) break;
+            if (name_len == strlen(member_names[m]) &&
+                memcmp(name, member_names[m], name_len) == 0) {
+                member_found = 1;
+                break;
+            }
+        }
+        if (!member_found) continue;
+
+        if (not_stisla_tar_zst_extract_member(tz, member_names[m],
+                                                &member_keys, &count) != 0) {
+            continue;
+        }
+        if (count == 0 || !member_keys) continue;
+
+        /* Binary search each unfound key in member_keys */
+        for (size_t k = 0; k < num_keys && found_total < num_keys; k++) {
+            if (found[k]) continue;
+
+            size_t lo = 0, hi = count;
+            while (lo < hi) {
+                size_t mid = lo + (hi - lo) / 2;
+                if (member_keys[mid] < keys[k]) {
+                    lo = mid + 1;
+                } else {
+                    hi = mid;
+                }
+            }
+            if (lo < count && member_keys[lo] == keys[k]) {
+                results[k].event = NULL;
+                results[k].index = lo;
+                results[k].exact_match_time = keys[k];
+                results[k].is_exact_match = true;
+                found[k] = 1;
+                found_total++;
+            }
+        }
+    }
+
+    /* Mark unfound keys */
+    for (size_t k = 0; k < num_keys; k++) {
+        if (!found[k]) {
+            results[k].event = NULL;
+            results[k].index = (size_t)-1;
+            results[k].exact_match_time = 0;
+            results[k].is_exact_match = false;
+        }
+    }
+
+    free(found);
+    not_stisla_tar_zst_close(tz);
+
+    return (found_total > 0) ? DSMIL_SEARCH_SUCCESS : DSMIL_SEARCH_ERROR_NOT_FOUND;
+}
+
+#endif /* NOT_STISLA_ENABLE_TAR_ZST */
+
+/* ============================================================================
  * Utility Functions Implementation
  * ============================================================================ */
 
@@ -660,10 +993,11 @@ int dsmil_search_get_stats(
         return DSMIL_SEARCH_ERROR_INVALID_PARAM;
     }
 
-    *total_searches = ctx->search_operations;
+    /* NOT_STISLA counters are uint64_t; API returns uint32_t. Saturate to avoid silent wrap. */
+    *total_searches = ctx->search_operations > UINT32_MAX ? UINT32_MAX : (uint32_t)ctx->search_operations;
     *cache_hit_rate = ctx->search_operations > 0 ?
         (double)ctx->cache_hits / ctx->search_operations : 0.0;
-    *memory_usage = ctx->memory_usage;
+    *memory_usage = ctx->memory_usage > UINT32_MAX ? UINT32_MAX : (uint32_t)ctx->memory_usage;
     *avg_search_time_ns = 0.0; // Would need timing instrumentation to calculate
 
     return DSMIL_SEARCH_SUCCESS;
@@ -678,6 +1012,8 @@ int dsmil_search_reset_stats(dsmil_search_context_t *ctx) {
     ctx->cache_hits = 0;
     ctx->memory_usage = 0;
     ctx->last_data_ptr = NULL;
+    ctx->cached_first_key = 0;
+    ctx->cached_last_key = 0;
     ctx->cached_count = 0;
 
     return DSMIL_SEARCH_SUCCESS;
