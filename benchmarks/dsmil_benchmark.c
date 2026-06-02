@@ -1,10 +1,10 @@
 /**
- * DSMIL NOT_STISLA Benchmark Suite
+ * DSMIL KEYSTONE Benchmark Suite
  *
- * Simple performance verification for NOT_STISLA
+ * Simple performance verification for KEYSTONE
  */
 
-#include "../include/not_stisla.h"
+#include "../include/keystone.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <stdint.h>
@@ -53,13 +53,13 @@ static int64_t* load_dataset(const char* path, size_t* n) {
 }
 
 /* Apply AWS Graviton4 specific optimizations */
-static void apply_graviton4_optimizations(not_stisla_anchor_table_t* table) {
+static void apply_graviton4_optimizations(keystone_anchor_table_t* table) {
     /* Manual override or library-level auto-detection */
-    uint32_t cpu_features = not_stisla_detect_cpu_features();
-    if (g_optimize_graviton4 || (cpu_features & NOT_STISLA_CPU_GRAVITON4)) {
+    uint32_t cpu_features = keystone_detect_cpu_features();
+    if (g_optimize_graviton4 || (cpu_features & KEYSTONE_CPU_GRAVITON4)) {
         if (table) {
             /* Restrict anchor table to 2MB L2 cache per core (approx 65,536 anchors) */
-            not_stisla_anchor_table_set_memory_limit(table, 65536);
+            keystone_anchor_table_set_memory_limit(table, 65536);
         }
     }
 }
@@ -80,20 +80,20 @@ static size_t bin_search(const int64_t* arr, size_t n, int64_t key) {
     return SIZE_MAX;
 }
 
-/* Benchmark tuned/enhanced NOT_STISLA search */
+/* Benchmark tuned/enhanced KEYSTONE search */
 static void benchmark_tuned_search(const int64_t* data, size_t data_size,
                                    const int64_t* queries, size_t num_queries) {
-    printf("\nTuned/Enhanced NOT_STISLA Search Benchmark\n");
+    printf("\nTuned/Enhanced KEYSTONE Search Benchmark\n");
     printf("==========================================\n");
 
     /* Initialize benchmark configuration */
-    not_stisla_config_t config;
-    not_stisla_config_init(&config, NOT_STISLA_WORKLOAD_TELEMETRY);
-    not_stisla_set_performance_tracking(1);
-    not_stisla_reset_performance_stats();
+    keystone_config_t config;
+    keystone_config_init(&config, KEYSTONE_WORKLOAD_TELEMETRY);
+    keystone_set_performance_tracking(1);
+    keystone_reset_performance_stats();
 
     /* Initialize anchor table for learned search hints */
-    not_stisla_anchor_table_t* table = not_stisla_anchor_table_create();
+    keystone_anchor_table_t* table = keystone_anchor_table_create();
     assert(table && "Failed to create tuned anchor table");
 
     /* Benchmark tuned/enhanced search */
@@ -102,10 +102,10 @@ static void benchmark_tuned_search(const int64_t* data, size_t data_size,
     size_t tuned_successful = 0;
 
     for (size_t i = 0; i < num_queries; ++i) {
-        not_stisla_result_t result = not_stisla_search_enhanced(
+        keystone_result_t result = keystone_search_enhanced(
             data, data_size, queries[i], table, &config
         );
-        if (result != NOT_STISLA_NOT_FOUND) {
+        if (result != KEYSTONE_NOT_FOUND) {
             tuned_found++;
             tuned_successful++;
         }
@@ -119,14 +119,14 @@ static void benchmark_tuned_search(const int64_t* data, size_t data_size,
            tuned_ns_per_op, tuned_found, num_queries, tuned_success_rate);
 
     /* Get tuned/enhanced search statistics */
-    not_stisla_performance_stats_t stats;
-    if (not_stisla_get_performance_stats(&stats) == 0) {
+    keystone_performance_stats_t stats;
+    if (keystone_get_performance_stats(&stats) == 0) {
         printf("Tuned Stats:       %llu searches, %.2f ns avg\n",
                (unsigned long long)stats.total_searches,
                stats.avg_search_time_ns);
     }
 
-    not_stisla_anchor_table_destroy(table);
+    keystone_anchor_table_destroy(table);
 }
 
 /* Comprehensive benchmark comparing all algorithms */
@@ -146,8 +146,8 @@ static void benchmark_comprehensive(const int64_t* data, size_t data_size,
     uint64_t bin_time = ns_now() - bin_start;
     double bin_ns_per_op = (double)bin_time / num_queries;
 
-    /* Benchmark NOT_STISLA core search */
-    not_stisla_anchor_table_t* table = not_stisla_anchor_table_create();
+    /* Benchmark KEYSTONE core search */
+    keystone_anchor_table_t* table = keystone_anchor_table_create();
     assert(table && "Failed to create anchor table");
 
     /* Apply Graviton4 optimizations (if not already handled by library defaults) */
@@ -156,18 +156,18 @@ static void benchmark_comprehensive(const int64_t* data, size_t data_size,
     uint64_t core_start = ns_now();
     size_t core_found = 0;
     for (size_t i = 0; i < num_queries; ++i) {
-        if (not_stisla_search(data, data_size, queries[i], table, 8) != NOT_STISLA_NOT_FOUND) {
+        if (keystone_search(data, data_size, queries[i], table, 8) != KEYSTONE_NOT_FOUND) {
             core_found++;
         }
     }
     uint64_t core_time = ns_now() - core_start;
     double core_ns_per_op = (double)core_time / num_queries;
 
-    /* Benchmark tuned/enhanced NOT_STISLA search */
-    not_stisla_config_t config;
-    not_stisla_config_init(&config, NOT_STISLA_WORKLOAD_TELEMETRY);
-    not_stisla_set_performance_tracking(1);
-    not_stisla_reset_performance_stats();
+    /* Benchmark tuned/enhanced KEYSTONE search */
+    keystone_config_t config;
+    keystone_config_init(&config, KEYSTONE_WORKLOAD_TELEMETRY);
+    keystone_set_performance_tracking(1);
+    keystone_reset_performance_stats();
 
     /* Apply Graviton4 optimizations (if not already handled by library defaults) */
     apply_graviton4_optimizations(table);
@@ -175,10 +175,10 @@ static void benchmark_comprehensive(const int64_t* data, size_t data_size,
     uint64_t tuned_start = ns_now();
     size_t tuned_found = 0;
     for (size_t i = 0; i < num_queries; ++i) {
-        not_stisla_result_t result = not_stisla_search_enhanced(
+        keystone_result_t result = keystone_search_enhanced(
             data, data_size, queries[i], table, &config
         );
-        if (result != NOT_STISLA_NOT_FOUND) {
+        if (result != KEYSTONE_NOT_FOUND) {
             tuned_found++;
         }
     }
@@ -190,13 +190,13 @@ static void benchmark_comprehensive(const int64_t* data, size_t data_size,
     printf("------------------------------|---------|-------|--------------------\n");
     printf("Baseline Binary Search        | %6.1f ns| %5zu | 1.00x\n",
            bin_ns_per_op, bin_found);
-    printf("NOT_STISLA Core Search        | %6.1f ns| %5zu | %.2fx\n",
+    printf("KEYSTONE Core Search        | %6.1f ns| %5zu | %.2fx\n",
            core_ns_per_op, core_found, bin_ns_per_op / core_ns_per_op);
-    printf("Tuned/Enhanced NOT_STISLA     | %6.1f ns| %5zu | %.2fx\n",
+    printf("Tuned/Enhanced KEYSTONE     | %6.1f ns| %5zu | %.2fx\n",
            tuned_ns_per_op, tuned_found, bin_ns_per_op / tuned_ns_per_op);
 
-    not_stisla_performance_stats_t stats;
-    if (not_stisla_get_performance_stats(&stats) == 0) {
+    keystone_performance_stats_t stats;
+    if (keystone_get_performance_stats(&stats) == 0) {
         printf("\nTuned/Enhanced Search Details:\n");
         printf("Total searches:       %llu\n", (unsigned long long)stats.total_searches);
         printf("Successful searches:  %llu\n", (unsigned long long)stats.successful_searches);
@@ -205,10 +205,10 @@ static void benchmark_comprehensive(const int64_t* data, size_t data_size,
     }
 
     /* Cleanup */
-    not_stisla_anchor_table_destroy(table);
+    keystone_anchor_table_destroy(table);
 }
 
-#ifdef NOT_STISLA_ENABLE_TAR_ZST
+#ifdef KEYSTONE_ENABLE_TAR_ZST
 /* Benchmark tar.zst streaming search */
 static void benchmark_tar_zst_search(const char* archive_path,
                                       const char* member_name,
@@ -219,37 +219,37 @@ static void benchmark_tar_zst_search(const char* archive_path,
     printf("Archive: %s\n", archive_path);
     printf("Member:  %s\n", member_name);
 
-    not_stisla_config_t config;
-    not_stisla_config_init(&config, NOT_STISLA_WORKLOAD_TELEMETRY);
-    not_stisla_set_performance_tracking(1);
-    not_stisla_reset_performance_stats();
+    keystone_config_t config;
+    keystone_config_init(&config, KEYSTONE_WORKLOAD_TELEMETRY);
+    keystone_set_performance_tracking(1);
+    keystone_reset_performance_stats();
 
-    not_stisla_anchor_table_t* table = not_stisla_anchor_table_create();
+    keystone_anchor_table_t* table = keystone_anchor_table_create();
     assert(table && "Failed to create anchor table");
 
     uint64_t tz_start = ns_now();
     size_t tz_found = 0;
     for (size_t i = 0; i < num_queries; ++i) {
-        not_stisla_tar_zst_options_t opts = {
-            .format = NOT_STISLA_TAR_ZST_FORMAT_AUTO,
+        keystone_tar_zst_options_t opts = {
+            .format = KEYSTONE_TAR_ZST_FORMAT_AUTO,
             .chunk_size = 256 * 1024,
             .arena_slab_size = 1u << 20,
             .zstd_workers = 0,
             .enable_pipeline = 0,
             .skip_header = 0
         };
-        not_stisla_tar_zst_t* tz = not_stisla_tar_zst_open(archive_path, &opts);
+        keystone_tar_zst_t* tz = keystone_tar_zst_open(archive_path, &opts);
         if (!tz) {
             fprintf(stderr, "Failed to open archive\n");
             break;
         }
-        not_stisla_result_t result = not_stisla_tar_zst_search_member(
+        keystone_result_t result = keystone_tar_zst_search_member(
             tz, member_name, queries[i], table, &config
         );
-        if (result != NOT_STISLA_NOT_FOUND) {
+        if (result != KEYSTONE_NOT_FOUND) {
             tz_found++;
         }
-        not_stisla_tar_zst_close(tz);
+        keystone_tar_zst_close(tz);
     }
     uint64_t tz_time = ns_now() - tz_start;
 
@@ -257,13 +257,13 @@ static void benchmark_tar_zst_search(const char* archive_path,
     printf("tar.zst Search:    %.2f ns/op (%zu/%zu found)\n",
            tz_ns_per_op, tz_found, num_queries);
 
-    not_stisla_tar_zst_stats_t tz_stats;
+    keystone_tar_zst_stats_t tz_stats;
     /* stats would need to be accumulated across opens; simplified here */
     (void)tz_stats;
 
-    not_stisla_anchor_table_destroy(table);
+    keystone_anchor_table_destroy(table);
 }
-#endif /* NOT_STISLA_ENABLE_TAR_ZST */
+#endif /* KEYSTONE_ENABLE_TAR_ZST */
 
 /* Generate uniform test data */
 static void generate_test_data(int64_t* arr, size_t n) {
@@ -286,14 +286,14 @@ int main(int argc, char** argv) {
         }
     }
 
-    printf("DSMIL NOT_STISLA Search Benchmark Suite\n");
-    printf("NOT_STISLA Version: %s\n", not_stisla_version());
-    printf("Build: %s\n", not_stisla_build_info());
+    printf("DSMIL KEYSTONE Search Benchmark Suite\n");
+    printf("KEYSTONE Version: %s\n", keystone_version());
+    printf("Build: %s\n", keystone_build_info());
 
-    uint32_t cpu_features = not_stisla_detect_cpu_features();
-    if (g_optimize_graviton4 || (cpu_features & NOT_STISLA_CPU_GRAVITON4)) {
+    uint32_t cpu_features = keystone_detect_cpu_features();
+    if (g_optimize_graviton4 || (cpu_features & KEYSTONE_CPU_GRAVITON4)) {
         printf("\n⚙️  AWS Graviton4 Optimizations ACTIVE (%s):\n", 
-               (cpu_features & NOT_STISLA_CPU_GRAVITON4) ? "Auto-detected" : "Manual override");
+               (cpu_features & KEYSTONE_CPU_GRAVITON4) ? "Auto-detected" : "Manual override");
         printf("   - Architecture: 64-bit ARM (Neoverse V2)\n");
         printf("   - Threads: 48 vCPUs (~2.7 GHz)\n");
         printf("   - Cache: L1 64KB I/D, L2 2MB dedicated per core\n");
@@ -329,12 +329,12 @@ int main(int argc, char** argv) {
 
     /* Warm-up phase */
     printf("Warming up search paths...\n");
-    not_stisla_anchor_table_t* warm_table = not_stisla_anchor_table_create();
+    keystone_anchor_table_t* warm_table = keystone_anchor_table_create();
     apply_graviton4_optimizations(warm_table);
     for (size_t i = 0; i < 1000; ++i) {
-        not_stisla_search(data, DATA_SIZE, queries[i % 1000], warm_table, 8);
+        keystone_search(data, DATA_SIZE, queries[i % 1000], warm_table, 8);
     }
-    not_stisla_anchor_table_destroy(warm_table);
+    keystone_anchor_table_destroy(warm_table);
 
     /* Run comprehensive benchmark */
     benchmark_comprehensive(data, DATA_SIZE, queries, NUM_QUERIES);
@@ -342,7 +342,7 @@ int main(int argc, char** argv) {
     /* Additional tuned/enhanced benchmark */
     benchmark_tuned_search(data, DATA_SIZE, queries, NUM_QUERIES);
 
-#ifdef NOT_STISLA_ENABLE_TAR_ZST
+#ifdef KEYSTONE_ENABLE_TAR_ZST
     /* tar.zst streaming benchmark */
     if (g_tar_zst_path && g_tar_zst_member) {
         benchmark_tar_zst_search(g_tar_zst_path, g_tar_zst_member,
@@ -350,7 +350,7 @@ int main(int argc, char** argv) {
     }
 #endif
 
-    printf("\nNOT_STISLA Search Technology\n");
+    printf("\nKEYSTONE Search Technology\n");
     printf("============================\n");
     printf("✓ Baseline binary search comparison\n");
     printf("✓ Anchor-guided core search\n");
@@ -358,7 +358,7 @@ int main(int argc, char** argv) {
     printf("✓ SIMD-aware CPU feature detection\n");
     printf("✓ Workload-optimized anchor management\n");
 
-    printf("\nNOT_STISLA benchmark suite completed.\n");
+    printf("\nKEYSTONE benchmark suite completed.\n");
     printf("Realistic search paths compared against the binary-search baseline.\n");
 
     /* Cleanup */

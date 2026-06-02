@@ -1,4 +1,4 @@
-# StiSorter AVX-512 Optimization Benchmark Results
+# KEYSTONE AVX-512 Optimization Benchmark Results
 
 ## Optimizations Implemented
 

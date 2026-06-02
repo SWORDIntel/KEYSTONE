@@ -1,5 +1,5 @@
 /**
- * NOT_STISLA Optimization Comparison Benchmark
+ * KEYSTONE Optimization Comparison Benchmark
  * 
  * Compares performance with and without optimizations
  * Shows impact of AVX-512 branchless search, prefetching, and huge pages
@@ -12,7 +12,7 @@
 #include <time.h>
 #include <stdint.h>
 #include <math.h>
-#include "include/not_stisla.h"
+#include "include/keystone.h"
 
 #define ITERATIONS 100000
 #define WARMUP 5000
@@ -31,10 +31,10 @@ static void generate_array(int64_t* arr, size_t n) {
 
 static double benchmark_search(const char* name, int64_t* arr, size_t n, 
                                int64_t* keys, size_t num_keys, 
-                               not_stisla_anchor_table_t* table) {
+                               keystone_anchor_table_t* table) {
     /* Warmup */
     for (int i = 0; i < WARMUP; i++) {
-        not_stisla_search(arr, n, keys[i % num_keys], table, 8);
+        keystone_search(arr, n, keys[i % num_keys], table, 8);
     }
     
     /* Benchmark */
@@ -44,7 +44,7 @@ static double benchmark_search(const char* name, int64_t* arr, size_t n,
     
     for (int i = 0; i < ITERATIONS; i++) {
         uint64_t start = get_time_ns();
-        (void)not_stisla_search(arr, n, keys[i % num_keys], table, 8);
+        (void)keystone_search(arr, n, keys[i % num_keys], table, 8);
         uint64_t elapsed = get_time_ns() - start;
         
         total += elapsed;
@@ -61,16 +61,16 @@ static double benchmark_search(const char* name, int64_t* arr, size_t n,
 int main() {
     printf("\n");
     printf("╔═══════════════════════════════════════════════════════════════╗\n");
-    printf("║  NOT_STISLA Optimization Impact Benchmark                     ║\n");
+    printf("║  KEYSTONE Optimization Impact Benchmark                     ║\n");
     printf("║  AVX-512 Branchless + Prefetching + Huge Pages               ║\n");
     printf("╚═══════════════════════════════════════════════════════════════╝\n\n");
     
     /* Display CPU features */
-    uint32_t features = not_stisla_detect_cpu_features();
+    uint32_t features = keystone_detect_cpu_features();
     printf("CPU Features: ");
-    if (features & NOT_STISLA_CPU_AVX512) printf("AVX-512 ");
-    if (features & NOT_STISLA_CPU_AVX2) printf("AVX2 ");
-    if (features & NOT_STISLA_CPU_AMX) printf("AMX ");
+    if (features & KEYSTONE_CPU_AVX512) printf("AVX-512 ");
+    if (features & KEYSTONE_CPU_AVX2) printf("AVX2 ");
+    if (features & KEYSTONE_CPU_AMX) printf("AMX ");
     printf("\n\n");
     
     size_t test_sizes[] = {16, 32, 100, 1000, 10000, 100000, 1000000};
@@ -91,15 +91,15 @@ int main() {
             keys[i] = arr[(i * 7) % n];
         }
 
-        not_stisla_anchor_table_t* table1 = not_stisla_anchor_table_create();
-        not_stisla_anchor_table_t* table2 = not_stisla_anchor_table_create();
+        keystone_anchor_table_t* table1 = keystone_anchor_table_create();
+        keystone_anchor_table_t* table2 = keystone_anchor_table_create();
 
         /* Without huge pages */
         double avg1 = benchmark_search("Without optimizations", arr, n, keys, 100, table1);
 
         /* With huge pages (if applicable) - separate array so both start cold */
         if (n * sizeof(int64_t) >= 1024 * 1024) {
-            not_stisla_optimize_array_memory(arr_opt, n);
+            keystone_optimize_array_memory(arr_opt, n);
         }
         double avg2 = benchmark_search("With optimizations", arr_opt, n, keys, 100, table2);
 
@@ -110,8 +110,8 @@ int main() {
                n, avg1, avg2, speedup, throughput);
 
         free(keys);
-        not_stisla_anchor_table_destroy(table1);
-        not_stisla_anchor_table_destroy(table2);
+        keystone_anchor_table_destroy(table1);
+        keystone_anchor_table_destroy(table2);
         free(arr);
         free(arr_opt);
     }

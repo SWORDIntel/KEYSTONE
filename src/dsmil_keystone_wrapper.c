@@ -1,5 +1,5 @@
-#include "dsmil_not_stisla_wrapper.h"
-#include "not_stisla.h"
+#include "dsmil_keystone_wrapper.h"
+#include "keystone.h"
 #include "nst_platform_hints.h"
 #include <stdlib.h>
 #include <string.h>
@@ -35,10 +35,10 @@ static void clear_error(dsmil_search_context_t *ctx) {
 }
 
 /**
- * Check if AVX2 is available via NOT_STISLA runtime CPU detection.
+ * Check if AVX2 is available via KEYSTONE runtime CPU detection.
  */
 static bool check_avx2_support(void) {
-    return (not_stisla_detect_cpu_features() & NOT_STISLA_CPU_AVX2) != 0;
+    return (keystone_detect_cpu_features() & KEYSTONE_CPU_AVX2) != 0;
 }
 
 /* Evaluate host context for backend dispatch routing decisions.
@@ -62,10 +62,10 @@ dsmil_search_context_t* dsmil_search_create(void) {
     // Check AVX2 availability
     ctx->avx2_available = check_avx2_support();
 
-    // Create NOT_STISLA anchor table
-    ctx->not_stisla_table = not_stisla_anchor_table_create();
-    if (!ctx->not_stisla_table) {
-        set_error(ctx, "Failed to create NOT_STISLA anchor table");
+    // Create KEYSTONE anchor table
+    ctx->keystone_table = keystone_anchor_table_create();
+    if (!ctx->keystone_table) {
+        set_error(ctx, "Failed to create KEYSTONE anchor table");
         free(ctx);
         return NULL;
     }
@@ -73,7 +73,7 @@ dsmil_search_context_t* dsmil_search_create(void) {
     ctx->initialized = true;
     clear_error(ctx);
 
-#ifdef NOT_STISLA_ENABLE_PLATFORM_TUNING
+#ifdef KEYSTONE_ENABLE_PLATFORM_TUNING
     {
         _nst_numa_placement_hint_t hint = {0};
         _dsmil_evaluate_host_context(&hint);
@@ -86,9 +86,9 @@ dsmil_search_context_t* dsmil_search_create(void) {
 void dsmil_search_destroy(dsmil_search_context_t *ctx) {
     if (!ctx) return;
 
-    if (ctx->not_stisla_table) {
-        not_stisla_anchor_table_destroy(ctx->not_stisla_table);
-        ctx->not_stisla_table = NULL;
+    if (ctx->keystone_table) {
+        keystone_anchor_table_destroy(ctx->keystone_table);
+        ctx->keystone_table = NULL;
     }
 
     if (ctx->cached_keys) {
@@ -127,7 +127,7 @@ dsmil_search_index_t* dsmil_search_index_create_telemetry(const dsmil_telemetry_
         if (i > 0 && index->keys[i] < index->keys[i - 1]) {
             free(index->keys);
             free(index);
-            return NULL; /* NOT_STISLA requires sorted keys */
+            return NULL; /* KEYSTONE requires sorted keys */
         }
     }
 
@@ -153,7 +153,7 @@ dsmil_search_index_t* dsmil_search_index_create_security(const dsmil_security_ev
         if (i > 0 && index->keys[i] < index->keys[i - 1]) {
             free(index->keys);
             free(index);
-            return NULL; /* NOT_STISLA requires sorted keys */
+            return NULL; /* KEYSTONE requires sorted keys */
         }
     }
 
@@ -179,7 +179,7 @@ dsmil_search_index_t* dsmil_search_index_create_logs(const dsmil_log_entry_t *lo
         if (i > 0 && index->keys[i] < index->keys[i - 1]) {
             free(index->keys);
             free(index);
-            return NULL; /* NOT_STISLA requires sorted keys */
+            return NULL; /* KEYSTONE requires sorted keys */
         }
     }
 
@@ -250,14 +250,14 @@ int dsmil_search_telemetry_events(
     }
 
     // Perform search using telemetry-tuned tolerance
-    not_stisla_result_t search_result = not_stisla_search_telemetry(
-        timestamps, num_events, (int64_t)target_time, ctx->not_stisla_table
+    keystone_result_t search_result = keystone_search_telemetry(
+        timestamps, num_events, (int64_t)target_time, ctx->keystone_table
     );
 
     // Update statistics
     ctx->search_operations++;
 
-    if (search_result == NOT_STISLA_NOT_FOUND) {
+    if (search_result == KEYSTONE_NOT_FOUND) {
         result->event = NULL;
         result->index = (size_t)-1;
         result->exact_match_time = 0;
@@ -295,15 +295,15 @@ int dsmil_search_telemetry_events_indexed(
     clear_error(ctx);
 
     // Perform search using pre-extracted keys
-    not_stisla_result_t search_result = not_stisla_search_telemetry(
-        index->keys, index->num_elements, (int64_t)target_time, ctx->not_stisla_table
+    keystone_result_t search_result = keystone_search_telemetry(
+        index->keys, index->num_elements, (int64_t)target_time, ctx->keystone_table
     );
 
     // Update statistics
     ctx->search_operations++;
     ctx->cache_hits++; // Consider indexed search as a cache hit in terms of avoided extraction
 
-    if (search_result == NOT_STISLA_NOT_FOUND) {
+    if (search_result == KEYSTONE_NOT_FOUND) {
         result->event = NULL;
         result->index = (size_t)-1;
         result->exact_match_time = 0;
@@ -417,14 +417,14 @@ int dsmil_search_security_events(
     }
 
     // Perform search using ID-tuned tolerance
-    not_stisla_result_t search_result = not_stisla_search_ids(
-        event_ids, num_events, (int64_t)target_id, ctx->not_stisla_table
+    keystone_result_t search_result = keystone_search_ids(
+        event_ids, num_events, (int64_t)target_id, ctx->keystone_table
     );
 
     // Update statistics
     ctx->search_operations++;
 
-    if (search_result == NOT_STISLA_NOT_FOUND) {
+    if (search_result == KEYSTONE_NOT_FOUND) {
         result->event = NULL;
         result->index = (size_t)-1;
         result->matched_id = 0;
@@ -462,15 +462,15 @@ int dsmil_search_security_events_indexed(
     clear_error(ctx);
 
     // Perform search using pre-extracted keys
-    not_stisla_result_t search_result = not_stisla_search_ids(
-        index->keys, index->num_elements, (int64_t)target_id, ctx->not_stisla_table
+    keystone_result_t search_result = keystone_search_ids(
+        index->keys, index->num_elements, (int64_t)target_id, ctx->keystone_table
     );
 
     // Update statistics
     ctx->search_operations++;
     ctx->cache_hits++;
 
-    if (search_result == NOT_STISLA_NOT_FOUND) {
+    if (search_result == KEYSTONE_NOT_FOUND) {
         result->event = NULL;
         result->index = (size_t)-1;
         result->matched_id = 0;
@@ -585,14 +585,14 @@ int dsmil_search_log_entries(
     }
 
     // Perform search using ID-tuned tolerance
-    not_stisla_result_t search_result = not_stisla_search_ids(
-        log_ids, num_logs, (int64_t)target_id, ctx->not_stisla_table
+    keystone_result_t search_result = keystone_search_ids(
+        log_ids, num_logs, (int64_t)target_id, ctx->keystone_table
     );
 
     // Update statistics
     ctx->search_operations++;
 
-    if (search_result == NOT_STISLA_NOT_FOUND) {
+    if (search_result == KEYSTONE_NOT_FOUND) {
         result->entry = NULL;
         result->index = (size_t)-1;
         result->matched_id = 0;
@@ -630,15 +630,15 @@ int dsmil_search_log_entries_indexed(
     clear_error(ctx);
 
     // Perform search using pre-extracted keys
-    not_stisla_result_t search_result = not_stisla_search_ids(
-        index->keys, index->num_elements, (int64_t)target_id, ctx->not_stisla_table
+    keystone_result_t search_result = keystone_search_ids(
+        index->keys, index->num_elements, (int64_t)target_id, ctx->keystone_table
     );
 
     // Update statistics
     ctx->search_operations++;
     ctx->cache_hits++;
 
-    if (search_result == NOT_STISLA_NOT_FOUND) {
+    if (search_result == KEYSTONE_NOT_FOUND) {
         result->entry = NULL;
         result->index = (size_t)-1;
         result->matched_id = 0;
@@ -698,7 +698,7 @@ int dsmil_search_logs_by_facility_time_range(
  * tar.zst Streaming Search Implementation
  * ============================================================================ */
 
-#ifdef NOT_STISLA_ENABLE_TAR_ZST
+#ifdef KEYSTONE_ENABLE_TAR_ZST
 
 int dsmil_search_telemetry_events_from_tar_zst(
     dsmil_search_context_t *ctx,
@@ -719,8 +719,8 @@ int dsmil_search_telemetry_events_from_tar_zst(
 
     clear_error(ctx);
 
-    not_stisla_tar_zst_options_t opts = {
-        .format = NOT_STISLA_TAR_ZST_FORMAT_AUTO,
+    keystone_tar_zst_options_t opts = {
+        .format = KEYSTONE_TAR_ZST_FORMAT_AUTO,
         .chunk_size = 256 * 1024,
         .arena_slab_size = 1u << 20,
         .zstd_workers = 0,
@@ -728,22 +728,22 @@ int dsmil_search_telemetry_events_from_tar_zst(
         .skip_header = 0
     };
 
-    not_stisla_tar_zst_t *tz = not_stisla_tar_zst_open(archive_path, &opts);
+    keystone_tar_zst_t *tz = keystone_tar_zst_open(archive_path, &opts);
     if (!tz) {
         set_error(ctx, "Failed to open archive: %s", archive_path);
         return DSMIL_SEARCH_ERROR_INIT_FAILED;
     }
 
-    not_stisla_config_t config;
-    not_stisla_config_init(&config, NOT_STISLA_WORKLOAD_TELEMETRY);
+    keystone_config_t config;
+    keystone_config_init(&config, KEYSTONE_WORKLOAD_TELEMETRY);
 
-    not_stisla_result_t search_result = not_stisla_tar_zst_search_member(
-        tz, member_name, (int64_t)target_time, ctx->not_stisla_table, &config
+    keystone_result_t search_result = keystone_tar_zst_search_member(
+        tz, member_name, (int64_t)target_time, ctx->keystone_table, &config
     );
 
-    not_stisla_tar_zst_close(tz);
+    keystone_tar_zst_close(tz);
 
-    if (search_result == NOT_STISLA_NOT_FOUND) {
+    if (search_result == KEYSTONE_NOT_FOUND) {
         result->event = NULL;
         result->index = (size_t)-1;
         result->exact_match_time = 0;
@@ -780,8 +780,8 @@ int dsmil_search_security_events_from_tar_zst(
 
     clear_error(ctx);
 
-    not_stisla_tar_zst_options_t opts = {
-        .format = NOT_STISLA_TAR_ZST_FORMAT_AUTO,
+    keystone_tar_zst_options_t opts = {
+        .format = KEYSTONE_TAR_ZST_FORMAT_AUTO,
         .chunk_size = 256 * 1024,
         .arena_slab_size = 1u << 20,
         .zstd_workers = 0,
@@ -789,22 +789,22 @@ int dsmil_search_security_events_from_tar_zst(
         .skip_header = 0
     };
 
-    not_stisla_tar_zst_t *tz = not_stisla_tar_zst_open(archive_path, &opts);
+    keystone_tar_zst_t *tz = keystone_tar_zst_open(archive_path, &opts);
     if (!tz) {
         set_error(ctx, "Failed to open archive: %s", archive_path);
         return DSMIL_SEARCH_ERROR_INIT_FAILED;
     }
 
-    not_stisla_config_t config;
-    not_stisla_config_init(&config, NOT_STISLA_WORKLOAD_IDS);
+    keystone_config_t config;
+    keystone_config_init(&config, KEYSTONE_WORKLOAD_IDS);
 
-    not_stisla_result_t search_result = not_stisla_tar_zst_search_member(
-        tz, member_name, (int64_t)target_id, ctx->not_stisla_table, &config
+    keystone_result_t search_result = keystone_tar_zst_search_member(
+        tz, member_name, (int64_t)target_id, ctx->keystone_table, &config
     );
 
-    not_stisla_tar_zst_close(tz);
+    keystone_tar_zst_close(tz);
 
-    if (search_result == NOT_STISLA_NOT_FOUND) {
+    if (search_result == KEYSTONE_NOT_FOUND) {
         result->event = NULL;
         result->index = (size_t)-1;
         result->matched_id = 0;
@@ -840,8 +840,8 @@ int dsmil_search_log_entries_from_tar_zst(
 
     clear_error(ctx);
 
-    not_stisla_tar_zst_options_t opts = {
-        .format = NOT_STISLA_TAR_ZST_FORMAT_AUTO,
+    keystone_tar_zst_options_t opts = {
+        .format = KEYSTONE_TAR_ZST_FORMAT_AUTO,
         .chunk_size = 256 * 1024,
         .arena_slab_size = 1u << 20,
         .zstd_workers = 0,
@@ -849,22 +849,22 @@ int dsmil_search_log_entries_from_tar_zst(
         .skip_header = 0
     };
 
-    not_stisla_tar_zst_t *tz = not_stisla_tar_zst_open(archive_path, &opts);
+    keystone_tar_zst_t *tz = keystone_tar_zst_open(archive_path, &opts);
     if (!tz) {
         set_error(ctx, "Failed to open archive: %s", archive_path);
         return DSMIL_SEARCH_ERROR_INIT_FAILED;
     }
 
-    not_stisla_config_t config;
-    not_stisla_config_init(&config, NOT_STISLA_WORKLOAD_IDS);
+    keystone_config_t config;
+    keystone_config_init(&config, KEYSTONE_WORKLOAD_IDS);
 
-    not_stisla_result_t search_result = not_stisla_tar_zst_search_member(
-        tz, member_name, (int64_t)target_id, ctx->not_stisla_table, &config
+    keystone_result_t search_result = keystone_tar_zst_search_member(
+        tz, member_name, (int64_t)target_id, ctx->keystone_table, &config
     );
 
-    not_stisla_tar_zst_close(tz);
+    keystone_tar_zst_close(tz);
 
-    if (search_result == NOT_STISLA_NOT_FOUND) {
+    if (search_result == KEYSTONE_NOT_FOUND) {
         result->entry = NULL;
         result->index = (size_t)-1;
         result->matched_id = 0;
@@ -897,7 +897,7 @@ int dsmil_search_batch_tar_zst(
         return DSMIL_SEARCH_ERROR_INVALID_PARAM;
     }
 
-    not_stisla_tar_zst_t *tz = not_stisla_tar_zst_open(archive_path, NULL);
+    keystone_tar_zst_t *tz = keystone_tar_zst_open(archive_path, NULL);
     if (!tz) {
         return DSMIL_SEARCH_ERROR_INIT_FAILED;
     }
@@ -905,7 +905,7 @@ int dsmil_search_batch_tar_zst(
     /* Track which keys have been found */
     int *found = calloc(num_keys, sizeof(int));
     if (!found) {
-        not_stisla_tar_zst_close(tz);
+        keystone_tar_zst_close(tz);
         return DSMIL_SEARCH_ERROR_MEMORY;
     }
 
@@ -920,7 +920,7 @@ int dsmil_search_batch_tar_zst(
         for (;;) {
             char *name = NULL;
             size_t name_len = 0;
-            int r = not_stisla_tar_zst_next_member(tz, &name, &name_len);
+            int r = keystone_tar_zst_next_member(tz, &name, &name_len);
             if (r <= 0) break;
             if (name_len == strlen(member_names[m]) &&
                 memcmp(name, member_names[m], name_len) == 0) {
@@ -930,7 +930,7 @@ int dsmil_search_batch_tar_zst(
         }
         if (!member_found) continue;
 
-        if (not_stisla_tar_zst_extract_member(tz, member_names[m],
+        if (keystone_tar_zst_extract_member(tz, member_names[m],
                                                 &member_keys, &count) != 0) {
             continue;
         }
@@ -971,12 +971,12 @@ int dsmil_search_batch_tar_zst(
     }
 
     free(found);
-    not_stisla_tar_zst_close(tz);
+    keystone_tar_zst_close(tz);
 
     return (found_total > 0) ? DSMIL_SEARCH_SUCCESS : DSMIL_SEARCH_ERROR_NOT_FOUND;
 }
 
-#endif /* NOT_STISLA_ENABLE_TAR_ZST */
+#endif /* KEYSTONE_ENABLE_TAR_ZST */
 
 /* ============================================================================
  * Utility Functions Implementation
@@ -993,7 +993,7 @@ int dsmil_search_get_stats(
         return DSMIL_SEARCH_ERROR_INVALID_PARAM;
     }
 
-    /* NOT_STISLA counters are uint64_t; API returns uint32_t. Saturate to avoid silent wrap. */
+    /* KEYSTONE counters are uint64_t; API returns uint32_t. Saturate to avoid silent wrap. */
     *total_searches = ctx->search_operations > UINT32_MAX ? UINT32_MAX : (uint32_t)ctx->search_operations;
     *cache_hit_rate = ctx->search_operations > 0 ?
         (double)ctx->cache_hits / ctx->search_operations : 0.0;
@@ -1025,5 +1025,5 @@ bool dsmil_search_avx2_enabled(const dsmil_search_context_t *ctx) {
 }
 
 const char* dsmil_search_get_version(void) {
-    return not_stisla_version();
+    return keystone_version();
 }

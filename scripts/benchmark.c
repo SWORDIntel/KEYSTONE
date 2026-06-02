@@ -1,5 +1,5 @@
 /**
- * NOT_STISLA Enhanced Benchmark v3.0
+ * KEYSTONE Enhanced Benchmark v3.0
  * 
  * Tests AVX-512 branchless search, software prefetching, and huge pages optimizations
  * Shows detailed performance metrics and optimization impact
@@ -16,7 +16,7 @@
 #include <float.h>
 #include <unistd.h>
 #include <sys/mman.h>
-#include "include/not_stisla.h"
+#include "include/keystone.h"
 
 /* Benchmark configuration */
 #define WARMUP_ITERATIONS 1000
@@ -45,12 +45,12 @@ static inline uint64_t get_time_ns(void) {
 static void generate_sorted_array(int64_t* arr, size_t n, int workload_type) {
     srand(42); /* Fixed seed for reproducibility */
     switch (workload_type) {
-        case NOT_STISLA_WORKLOAD_TELEMETRY:
+        case KEYSTONE_WORKLOAD_TELEMETRY:
             for (size_t i = 0; i < n; i++) {
                 arr[i] = (int64_t)i * 1000 + (int64_t)(rand() % 500);
             }
             break;
-        case NOT_STISLA_WORKLOAD_IDS:
+        case KEYSTONE_WORKLOAD_IDS:
             for (size_t i = 0; i < n; i++) {
                 arr[i] = (int64_t)i * 2;
             }
@@ -65,25 +65,25 @@ static void generate_sorted_array(int64_t* arr, size_t n, int workload_type) {
 
 /* Display CPU features */
 static void display_cpu_features(void) {
-    uint32_t features = not_stisla_detect_cpu_features();
+    uint32_t features = keystone_detect_cpu_features();
     printf("  " BOLD "CPU Features Detected:\n" RESET);
     printf("    ");
-    if (features & NOT_STISLA_CPU_AVX2) {
+    if (features & KEYSTONE_CPU_AVX2) {
         printf(GREEN "AVX2 " RESET);
     } else {
         printf(RED "AVX2 " RESET);
     }
-    if (features & NOT_STISLA_CPU_AVX512) {
+    if (features & KEYSTONE_CPU_AVX512) {
         printf(GREEN "AVX-512 " RESET);
     } else {
         printf(RED "AVX-512 " RESET);
     }
-    if (features & NOT_STISLA_CPU_AMX) {
+    if (features & KEYSTONE_CPU_AMX) {
         printf(GREEN "AMX " RESET);
     } else {
         printf(RED "AMX " RESET);
     }
-    if (features & NOT_STISLA_CPU_VNNI) {
+    if (features & KEYSTONE_CPU_VNNI) {
         printf(GREEN "VNNI" RESET);
     } else {
         printf(RED "VNNI" RESET);
@@ -109,10 +109,10 @@ static void show_live_stats(int current, int total, const char* label,
     fflush(stdout);
 }
 
-/* Benchmark a single NOT_STISLA core search function */
+/* Benchmark a single KEYSTONE core search function */
 static double benchmark_search(const char* name, int64_t* arr, size_t n, 
                                int64_t* keys, size_t num_keys, int iterations,
-                               not_stisla_anchor_table_t* table, size_t tol) {
+                               keystone_anchor_table_t* table, size_t tol) {
     uint64_t total = 0;
     uint64_t min_ns = UINT64_MAX;
     uint64_t max_ns = 0;
@@ -128,13 +128,13 @@ static double benchmark_search(const char* name, int64_t* arr, size_t n,
         
         int64_t key = keys[i % num_keys];
         uint64_t start = get_time_ns();
-        not_stisla_result_t result = not_stisla_search(arr, n, key, table, tol);
+        keystone_result_t result = keystone_search(arr, n, key, table, tol);
         uint64_t elapsed = get_time_ns() - start;
         
         total += elapsed;
         if (elapsed < min_ns) min_ns = elapsed;
         if (elapsed > max_ns) max_ns = elapsed;
-        if (result != NOT_STISLA_NOT_FOUND) found++;
+        if (result != KEYSTONE_NOT_FOUND) found++;
     }
     printf("\n");
     
@@ -166,7 +166,7 @@ static void run_benchmark(size_t array_size, int workload_type, int use_huge_pag
     
     /* Apply huge pages optimization if requested and array is large enough */
     if (use_huge_pages && array_size * sizeof(int64_t) >= HUGE_PAGE_THRESHOLD) {
-        int hp_result = not_stisla_optimize_array_memory(arr, array_size);
+        int hp_result = keystone_optimize_array_memory(arr, array_size);
         if (hp_result == 0) {
             printf("  " GREEN "✓" RESET " Huge pages optimization applied\n");
         } else {
@@ -183,8 +183,8 @@ static void run_benchmark(size_t array_size, int workload_type, int use_huge_pag
     }
 
     /* Create anchor tables */
-    not_stisla_anchor_table_t* table_core = not_stisla_anchor_table_create();
-    not_stisla_anchor_table_t* table_enhanced = not_stisla_anchor_table_create();
+    keystone_anchor_table_t* table_core = keystone_anchor_table_create();
+    keystone_anchor_table_t* table_enhanced = keystone_anchor_table_create();
     
     if (!table_core || !table_enhanced) {
         printf(RED "  ERROR: Failed to create anchor tables\n" RESET);
@@ -194,37 +194,37 @@ static void run_benchmark(size_t array_size, int workload_type, int use_huge_pag
     }
 
     /* Initialize config */
-    not_stisla_config_t config;
-    not_stisla_config_init(&config, workload_type);
-    not_stisla_set_performance_tracking(1);
+    keystone_config_t config;
+    keystone_config_init(&config, workload_type);
+    keystone_set_performance_tracking(1);
 
     /* Warmup */
     printf("\n  " YELLOW "Warming up..." RESET);
     fflush(stdout);
     for (int i = 0; i < WARMUP_ITERATIONS; i++) {
         int64_t key = keys[i % num_keys];
-        not_stisla_search(arr, array_size, key, table_core, 8);
-        not_stisla_search_enhanced(arr, array_size, key, table_enhanced, &config);
+        keystone_search(arr, array_size, key, table_core, 8);
+        keystone_search_enhanced(arr, array_size, key, table_enhanced, &config);
     }
     printf(" " GREEN "Done" RESET "\n\n");
 
     /* Test small array SIMD path if applicable */
     if (array_size < 32) {
         printf("  " BOLD MAGENTA "Small Array SIMD Test (AVX-512/AVX2 branchless):\n" RESET);
-        benchmark_search("NOT_STISLA Core Search (scalar fallback)", arr, array_size,
+        benchmark_search("KEYSTONE Core Search (scalar fallback)", arr, array_size,
                          keys, num_keys, BENCHMARK_ITERATIONS, table_core, 8);
         printf("\n");
     }
 
-    /* Benchmark NOT_STISLA core search */
-    printf("  " BOLD "NOT_STISLA Core Search:\n" RESET);
+    /* Benchmark KEYSTONE core search */
+    printf("  " BOLD "KEYSTONE Core Search:\n" RESET);
     double core_avg = benchmark_search("Core Search", arr, array_size,
                                            keys, num_keys, BENCHMARK_ITERATIONS,
                                            table_core, 8);
 
-    /* Benchmark tuned/enhanced NOT_STISLA search */
-    printf("\n  " BOLD "Tuned/Enhanced NOT_STISLA Search:\n" RESET);
-    not_stisla_reset_performance_stats();
+    /* Benchmark tuned/enhanced KEYSTONE search */
+    printf("\n  " BOLD "Tuned/Enhanced KEYSTONE Search:\n" RESET);
+    keystone_reset_performance_stats();
     
     uint64_t enhanced_total = 0;
     uint64_t enhanced_min_ns = UINT64_MAX;
@@ -240,13 +240,13 @@ static void run_benchmark(size_t array_size, int workload_type, int use_huge_pag
         
         int64_t key = keys[i % num_keys];
         uint64_t start = get_time_ns();
-        not_stisla_result_t result = not_stisla_search_enhanced(arr, array_size, key, table_enhanced, &config);
+        keystone_result_t result = keystone_search_enhanced(arr, array_size, key, table_enhanced, &config);
         uint64_t elapsed = get_time_ns() - start;
         
         enhanced_total += elapsed;
         if (elapsed < enhanced_min_ns) enhanced_min_ns = elapsed;
         if (elapsed > enhanced_max_ns) enhanced_max_ns = elapsed;
-        if (result != NOT_STISLA_NOT_FOUND) enhanced_found++;
+        if (result != KEYSTONE_NOT_FOUND) enhanced_found++;
     }
     printf("\n");
     
@@ -270,11 +270,11 @@ static void run_benchmark(size_t array_size, int workload_type, int use_huge_pag
     
     /* Show optimization details */
     printf("\n  " BOLD "Optimization Status:\n" RESET);
-    uint32_t cpu_features = not_stisla_detect_cpu_features();
+    uint32_t cpu_features = keystone_detect_cpu_features();
     printf("    ");
-    if (cpu_features & NOT_STISLA_CPU_AVX512) {
+    if (cpu_features & KEYSTONE_CPU_AVX512) {
         printf(GREEN "✓" RESET " AVX-512 branchless search: " GREEN "ACTIVE" RESET "\n");
-    } else if (cpu_features & NOT_STISLA_CPU_AVX2) {
+    } else if (cpu_features & KEYSTONE_CPU_AVX2) {
         printf(GREEN "✓" RESET " AVX2 branchless search: " GREEN "ACTIVE" RESET "\n");
     } else {
         printf(YELLOW "⚠" RESET " SIMD optimizations: " YELLOW "UNAVAILABLE" RESET " (scalar fallback)\n");
@@ -294,8 +294,8 @@ static void run_benchmark(size_t array_size, int workload_type, int use_huge_pag
     const size_t batch_size = 256;
     size_t batch_runs = BENCHMARK_ITERATIONS / 100;
     if (batch_runs == 0) batch_runs = 1;
-    not_stisla_batch_item_t* batch_items = calloc(batch_size, sizeof(not_stisla_batch_item_t));
-    not_stisla_anchor_table_t* batch_table = not_stisla_anchor_table_create();
+    keystone_batch_item_t* batch_items = calloc(batch_size, sizeof(keystone_batch_item_t));
+    keystone_anchor_table_t* batch_table = keystone_anchor_table_create();
 
     if (batch_items && batch_table) {
         printf("\n  " BOLD "Batch Search Performance:\n" RESET);
@@ -304,7 +304,7 @@ static void run_benchmark(size_t array_size, int workload_type, int use_huge_pag
             for (size_t j = 0; j < batch_size; ++j) {
                 size_t idx = (run * batch_size + j) % num_keys;
                 batch_items[j].key = keys[idx];
-                batch_items[j].result = NOT_STISLA_NOT_FOUND;
+                batch_items[j].result = KEYSTONE_NOT_FOUND;
                 batch_items[j].ordinal = j;
             }
         }
@@ -316,7 +316,7 @@ static void run_benchmark(size_t array_size, int workload_type, int use_huge_pag
                 size_t idx = (run * batch_size + j) % num_keys;
                 batch_items[j].key = keys[idx];
             }
-            batch_found += not_stisla_search_batch(arr, array_size, batch_items, batch_size, batch_table, 8);
+            batch_found += keystone_search_batch(arr, array_size, batch_items, batch_size, batch_table, 8);
         }
         uint64_t batch_elapsed = get_time_ns() - batch_start;
         
@@ -325,19 +325,19 @@ static void run_benchmark(size_t array_size, int workload_type, int use_huge_pag
                batch_avg_per_key, batch_found, batch_runs * batch_size);
         
         free(batch_items);
-        not_stisla_anchor_table_destroy(batch_table);
+        keystone_anchor_table_destroy(batch_table);
     }
 
     /* Cleanup */
-    not_stisla_anchor_table_destroy(table_core);
-    not_stisla_anchor_table_destroy(table_enhanced);
+    keystone_anchor_table_destroy(table_core);
+    keystone_anchor_table_destroy(table_enhanced);
     free(keys);
     free(arr);
 }
 
 int main(int argc, char** argv) {
     printf("\n" BOLD CYAN "╔═══════════════════════════════════════════════════════════════╗\n");
-    printf("║     NOT_STISLA Enhanced Benchmark v3.0                    ║\n");
+    printf("║     KEYSTONE Enhanced Benchmark v3.0                    ║\n");
     printf("║     AVX-512 Branchless + Prefetching + Huge Pages         ║\n");
     printf("╚═══════════════════════════════════════════════════════════════╝\n" RESET);
     
@@ -347,13 +347,13 @@ int main(int argc, char** argv) {
     printf("  Warmup iterations:   %d\n", WARMUP_ITERATIONS);
     printf("  Architecture:        Meteor Lake (AVX2/AVX-512)\n");
 
-    int workload_type = NOT_STISLA_WORKLOAD_TELEMETRY;
+    int workload_type = KEYSTONE_WORKLOAD_TELEMETRY;
     int use_huge_pages = 1;  /* Default: enable huge pages */
     
     if (argc > 1) {
         workload_type = atoi(argv[1]);
         if (workload_type < 0 || workload_type > 3) {
-            workload_type = NOT_STISLA_WORKLOAD_TELEMETRY;
+            workload_type = KEYSTONE_WORKLOAD_TELEMETRY;
         }
     }
     if (argc > 2) {

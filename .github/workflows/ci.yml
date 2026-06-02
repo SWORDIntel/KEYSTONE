@@ -57,8 +57,8 @@ jobs:
           END_TS=$(date -u +%s)
           DURATION=$((END_TS - START_TS))
           {
-            echo "# StiSorter CI Summary"
-            echo "repository: StiSorter"
+            echo "# KEYSTONE CI Summary"
+            echo "repository: KEYSTONE"
             echo "workflow: ${{ github.workflow }}"
             echo "run_id: ${{ github.run_id }}"
             echo "job: ${{ github.job }}"
@@ -86,4 +86,4 @@ jobs:
       - name: Emit workflow status
         if: always()
         run: |
-          echo "::notice file=.github/ci-artifacts/ci-summary.md,title=StiSorter CI Summary::See attached artifact 'stisorter-ci-artifacts'"
+          echo "::notice file=.github/ci-artifacts/ci-summary.md,title=KEYSTONE CI Summary::See attached artifact 'stisorter-ci-artifacts'"

@@ -1,11 +1,11 @@
-module not_stisla_batch_backend
+module keystone_batch_backend
   use, intrinsic :: iso_c_binding
   implicit none
 
 contains
 
-  subroutine not_stisla_batch_search_i64(data, n, keys, key_count, out_indices) &
-      bind(C, name="not_stisla_batch_search_i64")
+  subroutine keystone_batch_search_i64(data, n, keys, key_count, out_indices) &
+      bind(C, name="keystone_batch_search_i64")
     type(c_ptr), value :: data
     integer(c_size_t), value :: n
     type(c_ptr), value :: keys
@@ -40,7 +40,7 @@ contains
       end do
       !$omp end parallel do
     end if
-  end subroutine not_stisla_batch_search_i64
+  end subroutine keystone_batch_search_i64
 
   function should_use_merge_walk(arr, n, keys, key_count) result(use_merge)
     integer(c_int64_t), intent(in) :: arr(:)
@@ -182,4 +182,4 @@ contains
     end do
   end function binary_search_i64
 
-end module not_stisla_batch_backend
+end module keystone_batch_backend

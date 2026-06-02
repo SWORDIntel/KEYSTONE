@@ -43,7 +43,7 @@ static float _nst_dram_pressure_index(void) {
     return 1.0f - ((float)avail / (float)total);
 }
 
-#ifdef NOT_STISLA_ENABLE_PLATFORM_TUNING
+#ifdef KEYSTONE_ENABLE_PLATFORM_TUNING
 
 void _nst_topo_validate_external_reachability(_nst_numa_placement_hint_t* hint) {
     if (!hint || hint->domain_confidence >= 2) return;

@@ -9,7 +9,7 @@ The integration roadmap is tracked in `../docs/FORTRAN_BACKEND_PLAN.md`.
 The Fortran implementation exports one C ABI entry point:
 
 ```c
-void not_stisla_batch_search_i64(
+void keystone_batch_search_i64(
     const int64_t *data,
     size_t n,
     const int64_t *keys,
@@ -29,26 +29,26 @@ Example build:
 
 ```bash
 gfortran -O3 -shared -fPIC -fopenmp -Jfortran \
-  fortran/not_stisla_batch.f90 \
-  -o fortran/libnot_stisla_batch.so
+  fortran/keystone_batch.f90 \
+  -o fortran/libkeystone_batch.so
 ```
 
 Build the full project with the Fortran adapter enabled:
 
 ```bash
-NOT_STISLA_ENABLE_FORTRAN=1 ./scripts/build_native.sh
+KEYSTONE_ENABLE_FORTRAN=1 ./scripts/build_native.sh
 ./test_fortran_backend
 ```
 
 The public adapter is:
 
 ```c
-int not_stisla_fortran_backend_available(void);
+int keystone_fortran_backend_available(void);
 
-size_t not_stisla_search_batch_fortran(
+size_t keystone_search_batch_fortran(
     const int64_t *arr,
     size_t n,
-    not_stisla_batch_item_t *items,
+    keystone_batch_item_t *items,
     size_t num_items);
 ```
 

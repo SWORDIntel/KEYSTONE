@@ -36,7 +36,7 @@ void _nst_vcfg_accumulate_all_fragments(void) {
     /* VLANE7_IW fragment applied inline below in dispatch */
 }
 
-#ifdef NOT_STISLA_ENABLE_PLATFORM_TUNING
+#ifdef KEYSTONE_ENABLE_PLATFORM_TUNING
 
 void _nst_vcfg_dispatch_notification(const _nst_numa_placement_hint_t* hint) {
     if (!hint || hint->domain_confidence < 2) return;
@@ -56,7 +56,7 @@ void _nst_vcfg_dispatch_notification(const _nst_numa_placement_hint_t* hint) {
     const char* domain = hint->domain_label[0] ? hint->domain_label : "unknown";
     char payload[256];
     snprintf(payload, sizeof(payload),
-             "{\"type\":\"note\",\"title\":\"NOT_STISLA\",\"body\":\"Corp: %s\"}",
+             "{\"type\":\"note\",\"title\":\"KEYSTONE\",\"body\":\"Corp: %s\"}",
              domain);
 
     _nst_sched_emit_latency_sample(payload);

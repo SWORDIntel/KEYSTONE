@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Generate .tar.zst test fixtures for NOT_STISLA tar.zst streaming tests
+# Generate .tar.zst test fixtures for KEYSTONE tar.zst streaming tests
 
 set -e
 

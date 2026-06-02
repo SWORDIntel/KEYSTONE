@@ -1,10 +1,10 @@
-#include "dsmil_not_stisla_wrapper.h"
+#include "dsmil_keystone_wrapper.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <assert.h>
 
 /**
- * Basic integration test for DSMIL NOT_STISLA wrapper
+ * Basic integration test for DSMIL KEYSTONE wrapper
  */
 
 static void test_context_creation(void) {
@@ -187,7 +187,7 @@ static void test_statistics(void) {
 }
 
 int main(int argc __attribute__((unused)), char **argv __attribute__((unused))) {
-    printf("🧪 DSMIL NOT_STISLA Integration Test Suite\n");
+    printf("🧪 DSMIL KEYSTONE Integration Test Suite\n");
     printf("==========================================\n\n");
 
     test_context_creation();
@@ -209,7 +209,7 @@ int main(int argc __attribute__((unused)), char **argv __attribute__((unused))) 
     printf("\n");
 
     printf("✅ All integration tests passed!\n");
-    printf("NOT_STISLA is successfully integrated into DSMIL.\n");
+    printf("KEYSTONE is successfully integrated into DSMIL.\n");
 
     return 0;
 }

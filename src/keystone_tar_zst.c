@@ -1,12 +1,12 @@
 /**
- * NOT_STISLA - tar.zst streaming search implementation
+ * KEYSTONE - tar.zst streaming search implementation
  *
  * Uses libarchive for tar + zstd streaming, minimal in-memory parsing,
  * arena allocation, and member offset indexing.
  */
 
-#include "../include/not_stisla_tar_zst.h"
-#include "../include/not_stisla.h"
+#include "../include/keystone_tar_zst.h"
+#include "../include/keystone.h"
 #include <archive.h>
 #include <archive_entry.h>
 #include <stdlib.h>
@@ -25,49 +25,49 @@
  * Arena Allocator
  * ============================================================================ */
 
-typedef struct not_stisla_arena_slab {
-    struct not_stisla_arena_slab* next;
+typedef struct keystone_arena_slab {
+    struct keystone_arena_slab* next;
     size_t size;
     size_t used;
     unsigned char data[];
-} not_stisla_arena_slab_t;
+} keystone_arena_slab_t;
 
 typedef struct {
-    not_stisla_arena_slab_t* slabs;
+    keystone_arena_slab_t* slabs;
     size_t slab_size;
-} not_stisla_arena_t;
+} keystone_arena_t;
 
-static not_stisla_arena_t* arena_create(size_t slab_size) {
-    not_stisla_arena_t* arena = calloc(1, sizeof(not_stisla_arena_t));
+static keystone_arena_t* arena_create(size_t slab_size) {
+    keystone_arena_t* arena = calloc(1, sizeof(keystone_arena_t));
     if (!arena) return NULL;
     arena->slab_size = slab_size ? slab_size : (1u << 20); /* 1 MiB default */
     return arena;
 }
 
-static void arena_destroy(not_stisla_arena_t* arena) {
+static void arena_destroy(keystone_arena_t* arena) {
     if (!arena) return;
-    not_stisla_arena_slab_t* s = arena->slabs;
+    keystone_arena_slab_t* s = arena->slabs;
     while (s) {
-        not_stisla_arena_slab_t* next = s->next;
+        keystone_arena_slab_t* next = s->next;
         free(s);
         s = next;
     }
     free(arena);
 }
 
-static void arena_reset(not_stisla_arena_t* arena) {
+static void arena_reset(keystone_arena_t* arena) {
     if (!arena) return;
-    not_stisla_arena_slab_t* s = arena->slabs;
+    keystone_arena_slab_t* s = arena->slabs;
     while (s) {
         s->used = 0;
         s = s->next;
     }
 }
 
-static void* arena_alloc(not_stisla_arena_t* arena, size_t n) {
+static void* arena_alloc(keystone_arena_t* arena, size_t n) {
     if (!arena || n == 0) return NULL;
     /* Try existing slabs */
-    not_stisla_arena_slab_t* s = arena->slabs;
+    keystone_arena_slab_t* s = arena->slabs;
     while (s) {
         if (s->used + n <= s->size) {
             void* p = &s->data[s->used];
@@ -79,7 +79,7 @@ static void* arena_alloc(not_stisla_arena_t* arena, size_t n) {
     /* Need new slab */
     size_t alloc_size = arena->slab_size;
     if (n > alloc_size) alloc_size = n;
-    not_stisla_arena_slab_t* slab = malloc(sizeof(not_stisla_arena_slab_t) + alloc_size);
+    keystone_arena_slab_t* slab = malloc(sizeof(keystone_arena_slab_t) + alloc_size);
     if (!slab) return NULL;
     slab->next = arena->slabs;
     slab->size = alloc_size;
@@ -302,7 +302,7 @@ typedef struct parse_ctx {
     size_t count;
     int64_t first_key;
     int64_t last_key;
-    not_stisla_arena_t* arena;
+    keystone_arena_t* arena;
     int64_t* keys;
     size_t capacity;
 } parse_ctx_t;
@@ -402,16 +402,16 @@ static int int64_compare(const void* a, const void* b) {
  * Archive Handle
  * ============================================================================ */
 
-#define NOT_STISLA_TAR_ZST_MAX_DECOMPRESS_BYTES (500ULL * 1024 * 1024) /* 500 MB */
+#define KEYSTONE_TAR_ZST_MAX_DECOMPRESS_BYTES (500ULL * 1024 * 1024) /* 500 MB */
 
-struct not_stisla_tar_zst {
+struct keystone_tar_zst {
     struct archive* archive;
     struct archive_entry* current_entry;
-    not_stisla_arena_t* arena;
+    keystone_arena_t* arena;
     tar_zst_index_t* index;
     parse_ctx_t parse_ctx;
-    not_stisla_tar_zst_options_t options;
-    not_stisla_tar_zst_stats_t stats;
+    keystone_tar_zst_options_t options;
+    keystone_tar_zst_stats_t stats;
     char* archive_path;
     char error_buf[512];
     char member_name[512];
@@ -426,7 +426,7 @@ static inline uint64_t ns_now(void) {
     return (uint64_t)ts.tv_sec * 1000000000ULL + (uint64_t)ts.tv_nsec;
 }
 
-static void set_error(not_stisla_tar_zst_t* tz, const char* fmt, ...) {
+static void set_error(keystone_tar_zst_t* tz, const char* fmt, ...) {
     if (!tz) return;
     va_list args;
     va_start(args, fmt);
@@ -438,14 +438,14 @@ static void set_error(not_stisla_tar_zst_t* tz, const char* fmt, ...) {
  * Public API
  * ============================================================================ */
 
-not_stisla_tar_zst_t* not_stisla_tar_zst_open(const char* path,
-                                              const not_stisla_tar_zst_options_t* opts) {
+keystone_tar_zst_t* keystone_tar_zst_open(const char* path,
+                                              const keystone_tar_zst_options_t* opts) {
     if (!path) return NULL;
 
-    not_stisla_tar_zst_t* tz = calloc(1, sizeof(not_stisla_tar_zst_t));
+    keystone_tar_zst_t* tz = calloc(1, sizeof(keystone_tar_zst_t));
     if (!tz) return NULL;
 
-    tz->options.format = NOT_STISLA_TAR_ZST_FORMAT_AUTO;
+    tz->options.format = KEYSTONE_TAR_ZST_FORMAT_AUTO;
     tz->options.chunk_size = 256 * 1024;
     tz->options.arena_slab_size = 1u << 20;
     tz->options.zstd_workers = 0;
@@ -494,7 +494,7 @@ not_stisla_tar_zst_t* not_stisla_tar_zst_open(const char* path,
     return tz;
 }
 
-void not_stisla_tar_zst_close(not_stisla_tar_zst_t* tz) {
+void keystone_tar_zst_close(keystone_tar_zst_t* tz) {
     if (!tz) return;
     if (tz->archive) {
         archive_read_free(tz->archive);
@@ -512,7 +512,7 @@ void not_stisla_tar_zst_close(not_stisla_tar_zst_t* tz) {
     free(tz);
 }
 
-int not_stisla_tar_zst_next_member(not_stisla_tar_zst_t* tz,
+int keystone_tar_zst_next_member(keystone_tar_zst_t* tz,
                                    char** out_name,
                                    size_t* out_name_len) {
     if (!tz || !tz->archive) {
@@ -550,7 +550,7 @@ int not_stisla_tar_zst_next_member(not_stisla_tar_zst_t* tz,
 /* Read current entry fully into a single text buffer, then parse.
  * This avoids chunk-boundary corruption where strtoll could read
  * past buffer end when a number is split across chunks. */
-static int tar_zst_parse_current_entry(not_stisla_tar_zst_t* tz,
+static int tar_zst_parse_current_entry(keystone_tar_zst_t* tz,
                                         int64_t** out_keys,
                                         size_t* out_count,
                                         int64_t* out_first_key,
@@ -565,7 +565,7 @@ static int tar_zst_parse_current_entry(not_stisla_tar_zst_t* tz,
 
     /* Determine parse mode from options + filename heuristic */
     parse_mode_t mode;
-    if (tz->options.format == NOT_STISLA_TAR_ZST_FORMAT_AUTO) {
+    if (tz->options.format == KEYSTONE_TAR_ZST_FORMAT_AUTO) {
         const char* name = tz->member_name;
         size_t len = tz->member_name_len;
         if (len > 4 && strcasecmp(name + len - 4, ".csv") == 0) {
@@ -578,8 +578,8 @@ static int tar_zst_parse_current_entry(not_stisla_tar_zst_t* tz,
         }
     } else {
         switch (tz->options.format) {
-            case NOT_STISLA_TAR_ZST_FORMAT_CSV:   mode = PARSE_CSV;  break;
-            case NOT_STISLA_TAR_ZST_FORMAT_JSON:  mode = PARSE_JSON; break;
+            case KEYSTONE_TAR_ZST_FORMAT_CSV:   mode = PARSE_CSV;  break;
+            case KEYSTONE_TAR_ZST_FORMAT_JSON:  mode = PARSE_JSON; break;
             default:                              mode = PARSE_TEXT; break;
         }
     }
@@ -617,9 +617,9 @@ static int tar_zst_parse_current_entry(not_stisla_tar_zst_t* tz,
         }
         if (n == 0) break;
         bytes_total += n;
-        if ((uint64_t)bytes_total > NOT_STISLA_TAR_ZST_MAX_DECOMPRESS_BYTES) {
+        if ((uint64_t)bytes_total > KEYSTONE_TAR_ZST_MAX_DECOMPRESS_BYTES) {
             set_error(tz, "Member exceeds max decompression size (%llu bytes)",
-                      (unsigned long long)NOT_STISLA_TAR_ZST_MAX_DECOMPRESS_BYTES);
+                      (unsigned long long)KEYSTONE_TAR_ZST_MAX_DECOMPRESS_BYTES);
             free(chunk);
             free(text);
             return -1;
@@ -655,7 +655,7 @@ static int tar_zst_parse_current_entry(not_stisla_tar_zst_t* tz,
     tz->stats.parse_time_ns += ns_now() - t0_parse;
     free(text);
 
-    /* Sort keys (NOT_STISLA requires sorted input) */
+    /* Sort keys (KEYSTONE requires sorted input) */
     if (tz->parse_ctx.count > 1 && tz->parse_ctx.keys) {
         qsort(tz->parse_ctx.keys, tz->parse_ctx.count,
               sizeof(int64_t), int64_compare);
@@ -669,17 +669,17 @@ static int tar_zst_parse_current_entry(not_stisla_tar_zst_t* tz,
     return 0;
 }
 
-not_stisla_result_t not_stisla_tar_zst_search_member(
-    not_stisla_tar_zst_t* tz,
+keystone_result_t keystone_tar_zst_search_member(
+    keystone_tar_zst_t* tz,
     const char* member_name,
     int64_t key,
-    not_stisla_anchor_table_t* table,
-    const not_stisla_config_t* config) {
-    if (!tz || !member_name) return NOT_STISLA_NOT_FOUND;
+    keystone_anchor_table_t* table,
+    const keystone_config_t* config) {
+    if (!tz || !member_name) return KEYSTONE_NOT_FOUND;
 
     /* If indexed, jump directly */
     if (tz->index_built && tz->index) {
-        return not_stisla_tar_zst_search_indexed(tz, member_name, key, table, config);
+        return keystone_tar_zst_search_indexed(tz, member_name, key, table, config);
     }
 
     /* Otherwise linear scan from current position */
@@ -689,7 +689,7 @@ not_stisla_result_t not_stisla_tar_zst_search_member(
         /* Need to find the member */
         int found = 0;
         for (;;) {
-            int r = not_stisla_tar_zst_next_member(tz, NULL, NULL);
+            int r = keystone_tar_zst_next_member(tz, NULL, NULL);
             if (r <= 0) break;
             if (tz->member_name_len == strlen(member_name) &&
                 memcmp(tz->member_name, member_name, tz->member_name_len) == 0) {
@@ -699,38 +699,38 @@ not_stisla_result_t not_stisla_tar_zst_search_member(
         }
         if (!found) {
             set_error(tz, "Member not found: %s", member_name);
-            return NOT_STISLA_NOT_FOUND;
+            return KEYSTONE_NOT_FOUND;
         }
     }
 
     int64_t* keys = NULL;
     size_t count = 0;
     if (tar_zst_parse_current_entry(tz, &keys, &count, NULL, NULL) != 0) {
-        return NOT_STISLA_NOT_FOUND;
+        return KEYSTONE_NOT_FOUND;
     }
     if (count == 0 || !keys) {
-        return NOT_STISLA_NOT_FOUND;
+        return KEYSTONE_NOT_FOUND;
     }
 
-    not_stisla_config_t default_config;
+    keystone_config_t default_config;
     if (!config) {
-        not_stisla_config_init(&default_config, NOT_STISLA_WORKLOAD_IDS);
+        keystone_config_init(&default_config, KEYSTONE_WORKLOAD_IDS);
         config = &default_config;
     }
 
-    not_stisla_result_t result = not_stisla_search_enhanced(keys, count, key,
+    keystone_result_t result = keystone_search_enhanced(keys, count, key,
                                                              table, config);
     return result;
 }
 
-size_t not_stisla_tar_zst_search_member_batch(
-    not_stisla_tar_zst_t* tz,
+size_t keystone_tar_zst_search_member_batch(
+    keystone_tar_zst_t* tz,
     const char* member_name,
-    not_stisla_batch_item_t* items,
+    keystone_batch_item_t* items,
     size_t num_items,
-    not_stisla_anchor_table_t* table,
+    keystone_anchor_table_t* table,
     size_t tol,
-    const not_stisla_parallel_config_t* config) {
+    const keystone_parallel_config_t* config) {
     if (!tz || !member_name || !items || num_items == 0) return 0;
 
     int64_t* keys = NULL;
@@ -742,7 +742,7 @@ size_t not_stisla_tar_zst_search_member_batch(
         memcmp(tz->member_name, member_name, tz->member_name_len) != 0) {
         int found = 0;
         for (;;) {
-            int r = not_stisla_tar_zst_next_member(tz, NULL, NULL);
+            int r = keystone_tar_zst_next_member(tz, NULL, NULL);
             if (r <= 0) break;
             if (tz->member_name_len == strlen(member_name) &&
                 memcmp(tz->member_name, member_name, tz->member_name_len) == 0) {
@@ -763,7 +763,7 @@ size_t not_stisla_tar_zst_search_member_batch(
         return 0;
     }
 
-    return not_stisla_search_batch_auto(keys, count, items, num_items,
+    return keystone_search_batch_auto(keys, count, items, num_items,
                                          table, tol, config);
 }
 
@@ -771,8 +771,8 @@ size_t not_stisla_tar_zst_search_member_batch(
  * Extract Member Keys
  * ============================================================================ */
 
-int not_stisla_tar_zst_extract_member(
-    not_stisla_tar_zst_t* tz,
+int keystone_tar_zst_extract_member(
+    keystone_tar_zst_t* tz,
     const char* member_name,
     int64_t** out_keys,
     size_t* out_count) {
@@ -784,7 +784,7 @@ int not_stisla_tar_zst_extract_member(
         memcmp(tz->member_name, member_name, tz->member_name_len) != 0) {
         int found = 0;
         for (;;) {
-            int r = not_stisla_tar_zst_next_member(tz, NULL, NULL);
+            int r = keystone_tar_zst_next_member(tz, NULL, NULL);
             if (r <= 0) break;
             if (tz->member_name_len == strlen(member_name) &&
                 memcmp(tz->member_name, member_name, tz->member_name_len) == 0) {
@@ -813,7 +813,7 @@ int not_stisla_tar_zst_extract_member(
  * Index API
  * ============================================================================ */
 
-int not_stisla_tar_zst_build_index(not_stisla_tar_zst_t* tz) {
+int keystone_tar_zst_build_index(keystone_tar_zst_t* tz) {
     if (!tz || !tz->archive) return -1;
 
     if (tz->index) {
@@ -824,7 +824,7 @@ int not_stisla_tar_zst_build_index(not_stisla_tar_zst_t* tz) {
 
     /* Scan all members, recording offsets */
     for (;;) {
-        int r = not_stisla_tar_zst_next_member(tz, NULL, NULL);
+        int r = keystone_tar_zst_next_member(tz, NULL, NULL);
         if (r <= 0) break;
 
         int64_t* keys = NULL;
@@ -850,50 +850,50 @@ int not_stisla_tar_zst_build_index(not_stisla_tar_zst_t* tz) {
     tz->index_built = 1;
 
     /* Store archive path for reopen in search_indexed */
-    /* Already stored in tz->archive_path from not_stisla_tar_zst_open */
+    /* Already stored in tz->archive_path from keystone_tar_zst_open */
 
     return 0;
 }
 
-not_stisla_result_t not_stisla_tar_zst_search_indexed(
-    not_stisla_tar_zst_t* tz,
+keystone_result_t keystone_tar_zst_search_indexed(
+    keystone_tar_zst_t* tz,
     const char* member_name,
     int64_t key,
-    not_stisla_anchor_table_t* table,
-    const not_stisla_config_t* config) {
+    keystone_anchor_table_t* table,
+    const keystone_config_t* config) {
     if (!tz || !member_name || !tz->index) {
         if (tz) set_error(tz, "Index not built");
-        return NOT_STISLA_NOT_FOUND;
+        return KEYSTONE_NOT_FOUND;
     }
 
     tar_zst_index_entry_t* entry = tar_zst_index_find(tz->index, member_name,
                                                        strlen(member_name));
     if (!entry) {
         set_error(tz, "Member not in index: %s", member_name);
-        return NOT_STISLA_NOT_FOUND;
+        return KEYSTONE_NOT_FOUND;
     }
 
     /* Quick-reject via Bloom filter (avoids decompression on negative) */
     if (entry->bloom && !tar_zst_bloom_may_contain(entry->bloom, key)) {
-        return NOT_STISLA_NOT_FOUND;
+        return KEYSTONE_NOT_FOUND;
     }
 
     /* Bloom says "maybe present" — reopen archive and verify by streaming */
     if (!tz->archive_path) {
         set_error(tz, "Archive path not available for reopen");
-        return NOT_STISLA_NOT_FOUND;
+        return KEYSTONE_NOT_FOUND;
     }
 
-    not_stisla_tar_zst_t* tz2 = not_stisla_tar_zst_open(tz->archive_path, &tz->options);
+    keystone_tar_zst_t* tz2 = keystone_tar_zst_open(tz->archive_path, &tz->options);
     if (!tz2) {
         set_error(tz, "Failed to reopen archive for indexed search");
-        return NOT_STISLA_NOT_FOUND;
+        return KEYSTONE_NOT_FOUND;
     }
 
-    not_stisla_result_t result = not_stisla_tar_zst_search_member(
+    keystone_result_t result = keystone_tar_zst_search_member(
         tz2, member_name, key, table, config);
 
-    not_stisla_tar_zst_close(tz2);
+    keystone_tar_zst_close(tz2);
     return result;
 }
 
@@ -901,13 +901,13 @@ not_stisla_result_t not_stisla_tar_zst_search_indexed(
  * Error & Stats Helpers
  * ============================================================================ */
 
-const char* not_stisla_tar_zst_error_string(not_stisla_tar_zst_t* tz) {
+const char* keystone_tar_zst_error_string(keystone_tar_zst_t* tz) {
     if (!tz) return "Invalid handle";
     return tz->error_buf[0] ? tz->error_buf : "No error";
 }
 
-int not_stisla_tar_zst_get_stats(not_stisla_tar_zst_t* tz,
-                                 not_stisla_tar_zst_stats_t* stats) {
+int keystone_tar_zst_get_stats(keystone_tar_zst_t* tz,
+                                 keystone_tar_zst_stats_t* stats) {
     if (!tz || !stats) return -1;
     *stats = tz->stats;
     return 0;

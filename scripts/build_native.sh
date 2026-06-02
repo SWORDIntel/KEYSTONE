@@ -1,63 +1,63 @@
 #!/bin/bash
 
-echo "Building StiSorter for native x86_64 architecture..."
+echo "Building KEYSTONE for native x86_64 architecture..."
 
 FORTRAN_CFLAGS=""
 ROOT_FORTRAN_LDFLAGS=""
 BENCHMARK_FORTRAN_LDFLAGS=""
 OPENMP_CFLAGS=""
 OPENMP_LDFLAGS=""
-BASE_CFLAGS="${NOT_STISLA_BASE_CFLAGS:--O3 -march=native}"
+BASE_CFLAGS="${KEYSTONE_BASE_CFLAGS:--O3 -march=native}"
 SIMD_CFLAGS=""
 
 cpu_has() {
     grep -m1 '^flags' /proc/cpuinfo | grep -qw "$1"
 }
 
-if [ "${NOT_STISLA_FORCE_SCALAR:-0}" = "1" ]; then
+if [ "${KEYSTONE_FORCE_SCALAR:-0}" = "1" ]; then
     echo "Forcing scalar/SSE-safe build."
 else
-    if [ "${NOT_STISLA_ENABLE_AVX2:-auto}" != "0" ] && cpu_has avx2; then
+    if [ "${KEYSTONE_ENABLE_AVX2:-auto}" != "0" ] && cpu_has avx2; then
         SIMD_CFLAGS="$SIMD_CFLAGS -mavx2"
     fi
 
-    if [ "${NOT_STISLA_ENABLE_AVX512:-0}" = "1" ] && cpu_has avx512f && cpu_has avx512dq; then
+    if [ "${KEYSTONE_ENABLE_AVX512:-0}" = "1" ] && cpu_has avx512f && cpu_has avx512dq; then
         SIMD_CFLAGS="$SIMD_CFLAGS -mavx512f -mavx512dq"
     fi
 fi
 
-NATIVE_CFLAGS="${NOT_STISLA_NATIVE_CFLAGS:-$BASE_CFLAGS$SIMD_CFLAGS}"
+NATIVE_CFLAGS="${KEYSTONE_NATIVE_CFLAGS:-$BASE_CFLAGS$SIMD_CFLAGS}"
 echo "Using native CFLAGS: $NATIVE_CFLAGS"
 
-if [ "${NOT_STISLA_ENABLE_OPENMP:-1}" = "1" ]; then
+if [ "${KEYSTONE_ENABLE_OPENMP:-1}" = "1" ]; then
     OPENMP_CFLAGS="-fopenmp"
     OPENMP_LDFLAGS="-fopenmp"
 fi
 
-if [ "${NOT_STISLA_ENABLE_FORTRAN:-1}" = "1" ]; then
+if [ "${KEYSTONE_ENABLE_FORTRAN:-1}" = "1" ]; then
     if ! command -v gfortran >/dev/null 2>&1; then
-        echo "NOT_STISLA_ENABLE_FORTRAN=1 requires gfortran"
+        echo "KEYSTONE_ENABLE_FORTRAN=1 requires gfortran"
         exit 1
     fi
 
     echo "Building optional Fortran batch backend..."
     mkdir -p fortran
     gfortran -O3 -shared -fPIC -fopenmp -Jfortran \
-        fortran/not_stisla_batch.f90 \
-        -o fortran/libnot_stisla_batch.so || { echo "Fortran backend build failed"; exit 1; }
+        fortran/keystone_batch.f90 \
+        -o fortran/libkeystone_batch.so || { echo "Fortran backend build failed"; exit 1; }
 
-    FORTRAN_CFLAGS="-DNOT_STISLA_ENABLE_FORTRAN"
-    ROOT_FORTRAN_LDFLAGS="-L./fortran -lnot_stisla_batch -Wl,-rpath,\$ORIGIN/fortran"
-    BIN_FORTRAN_LDFLAGS="-L./fortran -lnot_stisla_batch -Wl,-rpath,\$ORIGIN/../fortran"
-    BENCHMARK_FORTRAN_LDFLAGS="-L./fortran -lnot_stisla_batch -Wl,-rpath,\$ORIGIN/../fortran"
+    FORTRAN_CFLAGS="-DKEYSTONE_ENABLE_FORTRAN"
+    ROOT_FORTRAN_LDFLAGS="-L./fortran -lkeystone_batch -Wl,-rpath,\$ORIGIN/fortran"
+    BIN_FORTRAN_LDFLAGS="-L./fortran -lkeystone_batch -Wl,-rpath,\$ORIGIN/../fortran"
+    BENCHMARK_FORTRAN_LDFLAGS="-L./fortran -lkeystone_batch -Wl,-rpath,\$ORIGIN/../fortran"
 fi
 
 TAR_ZST_CFLAGS=""
 TAR_ZST_LDFLAGS=""
-if [ "${NOT_STISLA_ENABLE_TAR_ZST:-auto}" != "0" ]; then
+if [ "${KEYSTONE_ENABLE_TAR_ZST:-auto}" != "0" ]; then
     if pkg-config --exists libarchive libzstd 2>/dev/null; then
         echo "tar.zst support detected (libarchive + libzstd)"
-        TAR_ZST_CFLAGS="-DNOT_STISLA_ENABLE_TAR_ZST"
+        TAR_ZST_CFLAGS="-DKEYSTONE_ENABLE_TAR_ZST"
         TAR_ZST_LDFLAGS="$(pkg-config --libs libarchive libzstd)"
     fi
 fi
@@ -68,11 +68,11 @@ mkdir -p bin
 rm -f *.o bin/test_* benchmarks/dsmil_benchmark benchmarks/performance_proof scripts/compare_search_auto
 
 # Compile source files for tests and benchmarks
-echo "Compiling src/not_stisla.c..."
-gcc $NATIVE_CFLAGS $OPENMP_CFLAGS -Wall -Wextra -Werror=implicit-function-declaration -I./include $FORTRAN_CFLAGS -c src/not_stisla.c || { echo "not_stisla.c compilation failed"; exit 1; }
+echo "Compiling src/keystone.c..."
+gcc $NATIVE_CFLAGS $OPENMP_CFLAGS -Wall -Wextra -Werror=implicit-function-declaration -I./include $FORTRAN_CFLAGS -c src/keystone.c || { echo "keystone.c compilation failed"; exit 1; }
 
-echo "Compiling src/dsmil_not_stisla_wrapper.c..."
-gcc $NATIVE_CFLAGS -Wall -Wextra -I./include $TAR_ZST_CFLAGS -c src/dsmil_not_stisla_wrapper.c || { echo "dsmil_not_stisla_wrapper.c compilation failed"; exit 1; }
+echo "Compiling src/dsmil_keystone_wrapper.c..."
+gcc $NATIVE_CFLAGS -Wall -Wextra -I./include $TAR_ZST_CFLAGS -c src/dsmil_keystone_wrapper.c || { echo "dsmil_keystone_wrapper.c compilation failed"; exit 1; }
 
 echo "Compiling src/dsmil_telemetry_processor.c..."
 gcc $NATIVE_CFLAGS -Wall -Wextra -I./include $TAR_ZST_CFLAGS -c src/dsmil_telemetry_processor.c || { echo "dsmil_telemetry_processor.c compilation failed"; exit 1; }
@@ -95,33 +95,33 @@ gcc $NATIVE_CFLAGS -Wall -Wextra -I./include -c tests/test_telemetry_processor_p
 echo "Compiling tests/test_performance_fix.c..."
 gcc $NATIVE_CFLAGS -Wall -Wextra -I./include -c tests/test_performance_fix.c || { echo "test_performance_fix.c compilation failed"; exit 1; }
 
-echo "Compiling src/not_stisla_tar_zst.c..."
-gcc $NATIVE_CFLAGS -Wall -Wextra -I./include $TAR_ZST_CFLAGS -c src/not_stisla_tar_zst.c || { echo "not_stisla_tar_zst.c compilation failed"; exit 1; }
+echo "Compiling src/keystone_tar_zst.c..."
+gcc $NATIVE_CFLAGS -Wall -Wextra -I./include $TAR_ZST_CFLAGS -c src/keystone_tar_zst.c || { echo "keystone_tar_zst.c compilation failed"; exit 1; }
 
 echo "Compiling tests/test_tar_zst.c..."
 gcc $NATIVE_CFLAGS -Wall -Wextra -I./include $TAR_ZST_CFLAGS -c tests/test_tar_zst.c || { echo "test_tar_zst.c compilation failed"; exit 1; }
 
 # Link test binaries into bin/
 echo "Linking bin/test_enhanced..."
-gcc -o bin/test_enhanced not_stisla.o dsmil_not_stisla_wrapper.o dsmil_telemetry_processor.o not_stisla_tar_zst.o dsmil_integration_test.o -lm $OPENMP_LDFLAGS $BIN_FORTRAN_LDFLAGS $TAR_ZST_LDFLAGS || { echo "test_enhanced linking failed"; exit 1; }
+gcc -o bin/test_enhanced keystone.o dsmil_keystone_wrapper.o dsmil_telemetry_processor.o keystone_tar_zst.o dsmil_integration_test.o -lm $OPENMP_LDFLAGS $BIN_FORTRAN_LDFLAGS $TAR_ZST_LDFLAGS || { echo "test_enhanced linking failed"; exit 1; }
 
 echo "Linking bin/test_core_native..."
-gcc -o bin/test_core_native not_stisla.o test_core_native.o -lm $OPENMP_LDFLAGS $BIN_FORTRAN_LDFLAGS || { echo "test_core_native linking failed"; exit 1; }
+gcc -o bin/test_core_native keystone.o test_core_native.o -lm $OPENMP_LDFLAGS $BIN_FORTRAN_LDFLAGS || { echo "test_core_native linking failed"; exit 1; }
 
 echo "Linking bin/test_fortran_backend..."
-gcc -o bin/test_fortran_backend not_stisla.o test_fortran_backend.o -lm $OPENMP_LDFLAGS $BIN_FORTRAN_LDFLAGS || { echo "test_fortran_backend linking failed"; exit 1; }
+gcc -o bin/test_fortran_backend keystone.o test_fortran_backend.o -lm $OPENMP_LDFLAGS $BIN_FORTRAN_LDFLAGS || { echo "test_fortran_backend linking failed"; exit 1; }
 
 echo "Linking bin/test_auto_backend..."
-gcc -o bin/test_auto_backend not_stisla.o test_auto_backend.o -lm $OPENMP_LDFLAGS $BIN_FORTRAN_LDFLAGS || { echo "test_auto_backend linking failed"; exit 1; }
+gcc -o bin/test_auto_backend keystone.o test_auto_backend.o -lm $OPENMP_LDFLAGS $BIN_FORTRAN_LDFLAGS || { echo "test_auto_backend linking failed"; exit 1; }
 
 echo "Linking bin/test_telemetry_processor_perf..."
-gcc -o bin/test_telemetry_processor_perf not_stisla.o dsmil_not_stisla_wrapper.o dsmil_telemetry_processor.o not_stisla_tar_zst.o test_telemetry_processor_perf.o -lm $OPENMP_LDFLAGS $BIN_FORTRAN_LDFLAGS $TAR_ZST_LDFLAGS || { echo "test_telemetry_processor_perf linking failed"; exit 1; }
+gcc -o bin/test_telemetry_processor_perf keystone.o dsmil_keystone_wrapper.o dsmil_telemetry_processor.o keystone_tar_zst.o test_telemetry_processor_perf.o -lm $OPENMP_LDFLAGS $BIN_FORTRAN_LDFLAGS $TAR_ZST_LDFLAGS || { echo "test_telemetry_processor_perf linking failed"; exit 1; }
 
 echo "Linking bin/test_performance_fix..."
-gcc -o bin/test_performance_fix not_stisla.o dsmil_not_stisla_wrapper.o dsmil_telemetry_processor.o not_stisla_tar_zst.o test_performance_fix.o -lm $OPENMP_LDFLAGS $BIN_FORTRAN_LDFLAGS $TAR_ZST_LDFLAGS || { echo "test_performance_fix linking failed"; exit 1; }
+gcc -o bin/test_performance_fix keystone.o dsmil_keystone_wrapper.o dsmil_telemetry_processor.o keystone_tar_zst.o test_performance_fix.o -lm $OPENMP_LDFLAGS $BIN_FORTRAN_LDFLAGS $TAR_ZST_LDFLAGS || { echo "test_performance_fix linking failed"; exit 1; }
 
 echo "Linking bin/test_tar_zst..."
-gcc -o bin/test_tar_zst not_stisla.o dsmil_not_stisla_wrapper.o dsmil_telemetry_processor.o not_stisla_tar_zst.o test_tar_zst.o -lm $OPENMP_LDFLAGS $BIN_FORTRAN_LDFLAGS $TAR_ZST_LDFLAGS || { echo "test_tar_zst linking failed"; exit 1; }
+gcc -o bin/test_tar_zst keystone.o dsmil_keystone_wrapper.o dsmil_telemetry_processor.o keystone_tar_zst.o test_tar_zst.o -lm $OPENMP_LDFLAGS $BIN_FORTRAN_LDFLAGS $TAR_ZST_LDFLAGS || { echo "test_tar_zst linking failed"; exit 1; }
 
 # Compile source files for benchmarks
 echo "Compiling benchmarks/dsmil_benchmark.c..."
@@ -132,14 +132,14 @@ gcc $NATIVE_CFLAGS -Wall -Wextra -I./include -c benchmarks/performance_proof.c |
 
 # Link benchmarks
 echo "Linking benchmarks/dsmil_benchmark..."
-gcc -o benchmarks/dsmil_benchmark dsmil_benchmark.o not_stisla.o dsmil_not_stisla_wrapper.o dsmil_telemetry_processor.o not_stisla_tar_zst.o -lm $OPENMP_LDFLAGS $BENCHMARK_FORTRAN_LDFLAGS $TAR_ZST_LDFLAGS || { echo "dsmil_benchmark linking failed"; exit 1; }
+gcc -o benchmarks/dsmil_benchmark dsmil_benchmark.o keystone.o dsmil_keystone_wrapper.o dsmil_telemetry_processor.o keystone_tar_zst.o -lm $OPENMP_LDFLAGS $BENCHMARK_FORTRAN_LDFLAGS $TAR_ZST_LDFLAGS || { echo "dsmil_benchmark linking failed"; exit 1; }
 
 echo "Linking benchmarks/performance_proof..."
-gcc -o benchmarks/performance_proof performance_proof.o not_stisla.o dsmil_not_stisla_wrapper.o dsmil_telemetry_processor.o not_stisla_tar_zst.o -lm $OPENMP_LDFLAGS $BENCHMARK_FORTRAN_LDFLAGS $TAR_ZST_LDFLAGS || { echo "performance_proof linking failed"; exit 1; }
+gcc -o benchmarks/performance_proof performance_proof.o keystone.o dsmil_keystone_wrapper.o dsmil_telemetry_processor.o keystone_tar_zst.o -lm $OPENMP_LDFLAGS $BENCHMARK_FORTRAN_LDFLAGS $TAR_ZST_LDFLAGS || { echo "performance_proof linking failed"; exit 1; }
 
 echo "Building scripts/compare_search_auto..."
-gcc $NATIVE_CFLAGS $OPENMP_CFLAGS -Wall -Wextra -I. -I./include -DNOT_STISLA_BENCH_AUTO=1 $FORTRAN_CFLAGS \
-    scripts/compare_search.c not_stisla.o \
+gcc $NATIVE_CFLAGS $OPENMP_CFLAGS -Wall -Wextra -I. -I./include -DKEYSTONE_BENCH_AUTO=1 $FORTRAN_CFLAGS \
+    scripts/compare_search.c keystone.o \
     -lm $OPENMP_LDFLAGS $BENCHMARK_FORTRAN_LDFLAGS \
     -o scripts/compare_search_auto || { echo "compare_search_auto build failed"; exit 1; }
 

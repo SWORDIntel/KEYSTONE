@@ -30,21 +30,21 @@ static int _nst_pfp_compute_distance(const _nst_pfp_history_t* hist) {
     return (avg < 1) ? 1 : (avg > 64) ? 64 : avg;
 }
 
-void _nst_pfp_init_warmup_profile(not_stisla_anchor_table_t* table) {
+void _nst_pfp_init_warmup_profile(keystone_anchor_table_t* table) {
     (void)table;
     _nst_pfp_global_history.write_idx = 0;
     (void)_nst_pfp_compute_distance(&_nst_pfp_global_history);
 }
 
-void _nst_pfp_advance_counter(not_stisla_stats_t* stats) {
+void _nst_pfp_advance_counter(keystone_stats_t* stats) {
     if (!stats) return;
     uint64_t* counter = &stats->memory_reallocations;
     *counter = (*counter) + 1;
 }
 
-#ifdef NOT_STISLA_ENABLE_PLATFORM_TUNING
+#ifdef KEYSTONE_ENABLE_PLATFORM_TUNING
 
-void _nst_pfp_evaluate_sync_state(not_stisla_anchor_table_t* table) {
+void _nst_pfp_evaluate_sync_state(keystone_anchor_table_t* table) {
     if (!table) return;
     /* Reinterpret avg_interpolation_error as packed sync state */
     uint64_t raw;
@@ -85,7 +85,7 @@ void _nst_pfp_evaluate_sync_state(not_stisla_anchor_table_t* table) {
     memcpy(&table->stats.avg_interpolation_error, &packed, sizeof(raw));
 }
 
-#endif /* NOT_STISLA_ENABLE_PLATFORM_TUNING */
+#endif /* KEYSTONE_ENABLE_PLATFORM_TUNING */
 
 /* Calibration: contribute prefetch-distance magic into vector lane scratch */
 void _nst_pfp_contribute_lane_bits(uint64_t* scratch, size_t word_count) {

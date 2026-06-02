@@ -1,13 +1,13 @@
 /**
- * DSMIL Telemetry Processor with NOT_STISLA Acceleration
+ * DSMIL Telemetry Processor with KEYSTONE Acceleration
  * NATO RESTRICTED
  *
- * High-performance telemetry data processing using NOT_STISLA for ultra-fast
+ * High-performance telemetry data processing using KEYSTONE for ultra-fast
  * timestamp-based event lookups and time-series analysis.
  */
 
-#include "dsmil_not_stisla_wrapper.h"
-#include "not_stisla.h"
+#include "dsmil_keystone_wrapper.h"
+#include "keystone.h"
 #include "nst_platform_hints.h"
 #include <stdlib.h>
 #include <string.h>
@@ -26,7 +26,7 @@ typedef struct dsmil_telemetry_processor {
     size_t max_events;
     size_t event_count;
     dsmil_telemetry_event_t *events;
-    int64_t *timestamps;  // For NOT_STISLA search
+    int64_t *timestamps;  // For KEYSTONE search
     bool timestamps_sorted;
     bool initialized;
 } dsmil_telemetry_processor_t;
@@ -96,7 +96,7 @@ static void telemetry_fill_not_found(dsmil_telemetry_result_t *result) {
  * ============================================================================ */
 
 /**
- * Create a new telemetry processor with NOT_STISLA acceleration
+ * Create a new telemetry processor with KEYSTONE acceleration
  */
 dsmil_telemetry_processor_t* dsmil_telemetry_processor_create(size_t max_events) {
     dsmil_telemetry_processor_t *processor = calloc(1, sizeof(dsmil_telemetry_processor_t));
@@ -169,7 +169,7 @@ int dsmil_telemetry_processor_add_event(dsmil_telemetry_processor_t *processor,
 }
 
 /**
- * Find telemetry event by timestamp (NOT_STISLA accelerated)
+ * Find telemetry event by timestamp (KEYSTONE accelerated)
  */
 int dsmil_telemetry_processor_find_by_timestamp(
     dsmil_telemetry_processor_t *processor,
@@ -200,7 +200,7 @@ int dsmil_telemetry_processor_find_by_timestamp(
         );
     }
 
-    // NOT_STISLA expects sorted keys; preserve correctness for unsorted append streams.
+    // KEYSTONE expects sorted keys; preserve correctness for unsorted append streams.
     for (size_t i = 0; i < processor->event_count; i++) {
         const dsmil_telemetry_event_t *event = &processor->events[i];
         if (event->timestamp == target_time) {
@@ -356,7 +356,7 @@ int dsmil_telemetry_processor_get_stats(
     *avg_search_time_ns = 0.0;
     *memory_usage = 0;
 
-    // Get search statistics from NOT_STISLA context
+    // Get search statistics from KEYSTONE context
     double cache_hit_rate;
     int rc = dsmil_search_get_stats(
         processor->search_ctx,
@@ -387,7 +387,7 @@ int dsmil_telemetry_processor_clear(dsmil_telemetry_processor_t *processor) {
  * tar.zst Streaming Loaders
  * ============================================================================ */
 
-#ifdef NOT_STISLA_ENABLE_TAR_ZST
+#ifdef KEYSTONE_ENABLE_TAR_ZST
 
 int dsmil_telemetry_processor_load_from_tar_zst(
     dsmil_telemetry_processor_t *processor,
@@ -398,8 +398,8 @@ int dsmil_telemetry_processor_load_from_tar_zst(
         return DSMIL_SEARCH_ERROR_INVALID_PARAM;
     }
 
-    not_stisla_tar_zst_options_t opts = {
-        .format = NOT_STISLA_TAR_ZST_FORMAT_AUTO,
+    keystone_tar_zst_options_t opts = {
+        .format = KEYSTONE_TAR_ZST_FORMAT_AUTO,
         .chunk_size = 256 * 1024,
         .arena_slab_size = 1u << 20,
         .zstd_workers = 0,
@@ -407,7 +407,7 @@ int dsmil_telemetry_processor_load_from_tar_zst(
         .skip_header = 0
     };
 
-    not_stisla_tar_zst_t *tz = not_stisla_tar_zst_open(archive_path, &opts);
+    keystone_tar_zst_t *tz = keystone_tar_zst_open(archive_path, &opts);
     if (!tz) {
         return DSMIL_SEARCH_ERROR_INIT_FAILED;
     }
@@ -420,7 +420,7 @@ int dsmil_telemetry_processor_load_from_tar_zst(
     for (;;) {
         char *name = NULL;
         size_t name_len = 0;
-        int r = not_stisla_tar_zst_next_member(tz, &name, &name_len);
+        int r = keystone_tar_zst_next_member(tz, &name, &name_len);
         if (r <= 0) break;
         if (name_len == strlen(member_name) &&
             memcmp(name, member_name, name_len) == 0) {
@@ -429,7 +429,7 @@ int dsmil_telemetry_processor_load_from_tar_zst(
         }
     }
 
-    not_stisla_tar_zst_close(tz);
+    keystone_tar_zst_close(tz);
 
     if (!found) {
         return DSMIL_SEARCH_ERROR_NOT_FOUND;
@@ -479,8 +479,8 @@ int dsmil_telemetry_processor_load_all_members(
         return DSMIL_SEARCH_ERROR_INVALID_PARAM;
     }
 
-    not_stisla_tar_zst_options_t opts = {
-        .format = NOT_STISLA_TAR_ZST_FORMAT_AUTO,
+    keystone_tar_zst_options_t opts = {
+        .format = KEYSTONE_TAR_ZST_FORMAT_AUTO,
         .chunk_size = 256 * 1024,
         .arena_slab_size = 1u << 20,
         .zstd_workers = 0,
@@ -488,7 +488,7 @@ int dsmil_telemetry_processor_load_all_members(
         .skip_header = 0
     };
 
-    not_stisla_tar_zst_t *tz = not_stisla_tar_zst_open(archive_path, &opts);
+    keystone_tar_zst_t *tz = keystone_tar_zst_open(archive_path, &opts);
     if (!tz) {
         return DSMIL_SEARCH_ERROR_INIT_FAILED;
     }
@@ -498,7 +498,7 @@ int dsmil_telemetry_processor_load_all_members(
     for (;;) {
         char *name = NULL;
         size_t name_len = 0;
-        int r = not_stisla_tar_zst_next_member(tz, &name, &name_len);
+        int r = keystone_tar_zst_next_member(tz, &name, &name_len);
         if (r <= 0) break;
         (void)name_len;
 
@@ -506,7 +506,7 @@ int dsmil_telemetry_processor_load_all_members(
 
         int64_t *keys = NULL;
         size_t count = 0;
-        if (not_stisla_tar_zst_extract_member(tz, name, &keys, &count) != 0) {
+        if (keystone_tar_zst_extract_member(tz, name, &keys, &count) != 0) {
             continue;
         }
         if (!keys || count == 0) continue;
@@ -529,18 +529,18 @@ int dsmil_telemetry_processor_load_all_members(
     }
 
 done:
-    not_stisla_tar_zst_close(tz);
+    keystone_tar_zst_close(tz);
     return result;
 }
 
-#endif /* NOT_STISLA_ENABLE_TAR_ZST */
+#endif /* KEYSTONE_ENABLE_TAR_ZST */
 
 /* ============================================================================
  * High-Level Telemetry Analysis Functions
  * ============================================================================ */
 
 /**
- * Analyze telemetry patterns using NOT_STISLA acceleration
+ * Analyze telemetry patterns using KEYSTONE acceleration
  */
 int dsmil_telemetry_processor_analyze_patterns(
     dsmil_telemetry_processor_t *processor,
@@ -579,7 +579,7 @@ int dsmil_telemetry_processor_analyze_patterns(
     size_t report_len = 0;
     if (report_len < max_report_length) {
         report_len += snprintf(analysis_report + report_len, max_report_length - report_len,
-                              "DSMIL Telemetry Analysis Report (NOT_STISLA Accelerated)\n");
+                              "DSMIL Telemetry Analysis Report (KEYSTONE Accelerated)\n");
     }
     if (report_len < max_report_length) {
         report_len += snprintf(analysis_report + report_len, max_report_length - report_len,
@@ -597,7 +597,7 @@ int dsmil_telemetry_processor_analyze_patterns(
     }
     if (report_len < max_report_length) {
         report_len += snprintf(analysis_report + report_len, max_report_length - report_len,
-                              "Search Performance: NOT_STISLA accelerated lookup\n\n");
+                              "Search Performance: KEYSTONE accelerated lookup\n\n");
     }
 
     /* Maximum device IDs tracked in pattern analysis (configurable limit). */

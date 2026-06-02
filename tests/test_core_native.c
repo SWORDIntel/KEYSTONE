@@ -1,15 +1,15 @@
 /* ============================================================================
- * ENHANCED NOT_STISLA TEST SUITE
+ * ENHANCED KEYSTONE TEST SUITE
  * ============================================================================
  *
- * Tests for NOT_STISLA-native improvements to traditional NOT_STISLA:
+ * Tests for KEYSTONE-native improvements to traditional KEYSTONE:
  * - Runtime CPU feature detection
  * - Memory-bounded anchor learning
  * - Enhanced statistics and monitoring
  * - Workload-specific optimizations
  * ============================================================================ */
 
-#include "../include/not_stisla.h"
+#include "../include/keystone.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include "test_macros.h"
@@ -23,14 +23,14 @@
 static void test_cpu_feature_detection(void) {
     printf("Testing runtime CPU feature detection...\n");
 
-    uint32_t features = not_stisla_detect_cpu_features();
+    uint32_t features = keystone_detect_cpu_features();
     printf("  Detected CPU features: 0x%08x\n", features);
 
     /* Should detect at least basic features */
     TEST_ASSERT(features != 0);
 
     /* Test multiple calls return same result */
-    uint32_t features2 = not_stisla_detect_cpu_features();
+    uint32_t features2 = keystone_detect_cpu_features();
     TEST_ASSERT(features == features2);
 
     printf("  ✓ CPU feature detection works\n");
@@ -40,22 +40,22 @@ static void test_cpu_feature_detection(void) {
 static void test_memory_bounded_anchors(void) {
     printf("Testing memory-bounded anchor management...\n");
 
-    not_stisla_anchor_table_t* table = not_stisla_anchor_table_create();
+    keystone_anchor_table_t* table = keystone_anchor_table_create();
     TEST_ASSERT(table != NULL);
 
     /* Test memory limit setting */
-    int ret = not_stisla_anchor_table_set_memory_limit(table, 5);
+    int ret = keystone_anchor_table_set_memory_limit(table, 5);
     TEST_ASSERT(ret == 0);
     TEST_ASSERT(table->max_capacity == 5);
 
     /* Test invalid limits */
-    ret = not_stisla_anchor_table_set_memory_limit(table, 1);  /* Too small */
+    ret = keystone_anchor_table_set_memory_limit(table, 1);  /* Too small */
     TEST_ASSERT(ret == -1);
 
-    ret = not_stisla_anchor_table_set_memory_limit(table, NOT_STISLA_MAX_ANCHORS + 1); /* Too large */
+    ret = keystone_anchor_table_set_memory_limit(table, KEYSTONE_MAX_ANCHORS + 1); /* Too large */
     TEST_ASSERT(ret == -1);
 
-    not_stisla_anchor_table_destroy(table);
+    keystone_anchor_table_destroy(table);
     printf("  ✓ Memory-bounded anchor management works\n");
 }
 
@@ -63,22 +63,22 @@ static void test_memory_bounded_anchors(void) {
 static void test_workload_optimization(void) {
     printf("Testing workload-specific optimization...\n");
 
-    not_stisla_anchor_table_t* table = not_stisla_anchor_table_create();
+    keystone_anchor_table_t* table = keystone_anchor_table_create();
     TEST_ASSERT(table != NULL);
 
     /* Test telemetry workload */
-    int ret = not_stisla_anchor_table_optimize_for_workload(table, NOT_STISLA_WORKLOAD_TELEMETRY);
+    int ret = keystone_anchor_table_optimize_for_workload(table, KEYSTONE_WORKLOAD_TELEMETRY);
     TEST_ASSERT(ret == 0);
     size_t telemetry_capacity = table->max_capacity;
-    TEST_ASSERT(telemetry_capacity >= NOT_STISLA_MIN_ANCHORS);
+    TEST_ASSERT(telemetry_capacity >= KEYSTONE_MIN_ANCHORS);
 
     /* Test ID workload */
-    ret = not_stisla_anchor_table_optimize_for_workload(table, NOT_STISLA_WORKLOAD_IDS);
+    ret = keystone_anchor_table_optimize_for_workload(table, KEYSTONE_WORKLOAD_IDS);
     TEST_ASSERT(ret == 0);
-    TEST_ASSERT(table->max_capacity >= NOT_STISLA_MIN_ANCHORS);
+    TEST_ASSERT(table->max_capacity >= KEYSTONE_MIN_ANCHORS);
     TEST_ASSERT(table->max_capacity < telemetry_capacity);  /* IDs use fewer anchors than telemetry */
 
-    not_stisla_anchor_table_destroy(table);
+    keystone_anchor_table_destroy(table);
     printf("  ✓ Workload-specific optimization works\n");
 }
 
@@ -86,7 +86,7 @@ static void test_workload_optimization(void) {
 static void test_enhanced_statistics(void) {
     printf("Testing enhanced statistics tracking...\n");
 
-    not_stisla_anchor_table_t* table = not_stisla_anchor_table_create();
+    keystone_anchor_table_t* table = keystone_anchor_table_create();
     TEST_ASSERT(table != NULL);
 
     /* Create test array */
@@ -98,20 +98,20 @@ static void test_enhanced_statistics(void) {
     /* Perform searches to generate statistics - mix exact matches and near misses */
     for (size_t i = 0; i < 25; i++) {
         /* Exact matches - should not learn anchors */
-        not_stisla_result_t result = not_stisla_search(test_array, 100, i * 10, table, 2);
-        TEST_ASSERT(result != NOT_STISLA_NOT_FOUND);
+        keystone_result_t result = keystone_search(test_array, 100, i * 10, table, 2);
+        TEST_ASSERT(result != KEYSTONE_NOT_FOUND);
     }
 
     /* Near misses that should trigger anchor learning */
     for (size_t i = 0; i < 25; i++) {
         /* Search for values that require interpolation and anchor learning */
         int64_t search_val = (i * 10) + 3;  /* Offset from exact match */
-        (void)not_stisla_search(test_array, 100, search_val, table, 2);
+        (void)keystone_search(test_array, 100, search_val, table, 2);
         /* May or may not find exact match, but should learn anchors */
     }
 
     /* Check enhanced statistics */
-    const not_stisla_stats_t* stats = not_stisla_anchor_table_get_stats(table);
+    const keystone_stats_t* stats = keystone_anchor_table_get_stats(table);
     TEST_ASSERT(stats != NULL);
     TEST_ASSERT(stats->searches_total >= 50);  /* Should have recorded all searches */
     TEST_ASSERT(stats->cpu_features_detected != 0);  /* Should have detected CPU features */
@@ -121,12 +121,12 @@ static void test_enhanced_statistics(void) {
 
     /* Test legacy statistics API still works */
     size_t searches_total, anchors_learned, memory_used;
-    not_stisla_get_stats(table, &searches_total, &anchors_learned, &memory_used);
+    keystone_get_stats(table, &searches_total, &anchors_learned, &memory_used);
     TEST_ASSERT(searches_total == stats->searches_total);
     TEST_ASSERT(anchors_learned == stats->anchors_learned);
     TEST_ASSERT(memory_used > 0);
 
-    not_stisla_anchor_table_destroy(table);
+    keystone_anchor_table_destroy(table);
     printf("  ✓ Enhanced statistics tracking works\n");
 }
 
@@ -144,13 +144,13 @@ static void test_performance_improvements(void) {
         test_array[i] = i * 100;  /* Sparse array for interpolation */
     }
 
-    not_stisla_anchor_table_t* table = not_stisla_anchor_table_create();
+    keystone_anchor_table_t* table = keystone_anchor_table_create();
     TEST_ASSERT(table != NULL);
 
     /* Warm up anchor learning */
     for (size_t i = 0; i < 100; i++) {
         size_t idx = rand() % array_size;
-        not_stisla_result_t result = not_stisla_search(test_array, array_size,
+        keystone_result_t result = keystone_search(test_array, array_size,
                                                      test_array[idx], table, 4);
         TEST_ASSERT(result == idx);
     }
@@ -160,7 +160,7 @@ static void test_performance_improvements(void) {
 
     for (size_t i = 0; i < TEST_ITERATIONS; i++) {
         size_t idx = rand() % array_size;
-        not_stisla_result_t result = not_stisla_search(test_array, array_size,
+        keystone_result_t result = keystone_search(test_array, array_size,
                                                      test_array[idx], table, 4);
         TEST_ASSERT(result == idx);
     }
@@ -172,11 +172,11 @@ static void test_performance_improvements(void) {
     printf("  ✓ Average search time: %.2f ns\n", (time_taken * 1e9) / TEST_ITERATIONS);
 
     /* Check that anchors were learned efficiently */
-    const not_stisla_stats_t* stats = not_stisla_anchor_table_get_stats(table);
+    const keystone_stats_t* stats = keystone_anchor_table_get_stats(table);
     TEST_ASSERT(stats->anchors_learned <= table->max_capacity);  /* Memory bounded */
 
     free(test_array);
-    not_stisla_anchor_table_destroy(table);
+    keystone_anchor_table_destroy(table);
     printf("  ✓ Performance improvements verified\n");
 }
 
@@ -184,22 +184,22 @@ static void test_performance_improvements(void) {
 static void test_dsmil_workload_init(void) {
     printf("Testing DSMIL workload initialization...\n");
 
-    not_stisla_anchor_table_t* table = not_stisla_anchor_table_create();
+    keystone_anchor_table_t* table = keystone_anchor_table_create();
     TEST_ASSERT(table != NULL);
 
     /* Test telemetry workload */
-    bool success = not_stisla_init_for_dsmil(table, NOT_STISLA_WORKLOAD_TELEMETRY);
+    bool success = keystone_init_for_dsmil(table, KEYSTONE_WORKLOAD_TELEMETRY);
     TEST_ASSERT(success);
-    TEST_ASSERT(table->workload_type == NOT_STISLA_WORKLOAD_TELEMETRY);
+    TEST_ASSERT(table->workload_type == KEYSTONE_WORKLOAD_TELEMETRY);
 
     /* Verify workload-specific optimization was applied */
     TEST_ASSERT(table->max_capacity > 10);  /* Telemetry gets higher limit */
 
     /* Test that statistics are initialized */
-    const not_stisla_stats_t* stats = not_stisla_anchor_table_get_stats(table);
+    const keystone_stats_t* stats = keystone_anchor_table_get_stats(table);
     TEST_ASSERT(stats->cpu_features_detected != 0);
 
-    not_stisla_anchor_table_destroy(table);
+    keystone_anchor_table_destroy(table);
     printf("  ✓ DSMIL workload initialization works\n");
 }
 
@@ -208,7 +208,7 @@ int main(int argc, char** argv) {
     (void)argc;
     (void)argv;
 
-    printf("Running Enhanced NOT_STISLA Test Suite\n");
+    printf("Running Enhanced KEYSTONE Test Suite\n");
     printf("=======================================\n\n");
 
     /* Seed random number generator */
@@ -232,8 +232,8 @@ int main(int argc, char** argv) {
     test_dsmil_workload_init();
     printf("\n");
 
-    printf("🎉 All Enhanced NOT_STISLA tests passed!\n");
-    printf("NOT_STISLA-native improvements successfully integrated.\n");
+    printf("🎉 All Enhanced KEYSTONE tests passed!\n");
+    printf("KEYSTONE-native improvements successfully integrated.\n");
 
     return 0;
 }

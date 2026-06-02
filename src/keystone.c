@@ -1,5 +1,5 @@
 /**
- * NOT_STISLA - optimized interpolation/anchor search for DSMIL
+ * KEYSTONE - optimized interpolation/anchor search for DSMIL
  *
  * AVX2-optimized implementation for sorted int64_t search workloads.
  *
@@ -13,9 +13,9 @@
 #define _GNU_SOURCE  /* For M_PI, clock_gettime, CLOCK_MONOTONIC */
 #define _POSIX_C_SOURCE 200809L  /* For POSIX time functions */
 
-#include "../include/not_stisla.h"
-#ifdef NOT_STISLA_ENABLE_FORTRAN
-#include "../fortran/not_stisla_batch_backend.h"
+#include "../include/keystone.h"
+#ifdef KEYSTONE_ENABLE_FORTRAN
+#include "../fortran/keystone_batch_backend.h"
 #endif
 #include <stdlib.h>
 #include <string.h>
@@ -81,10 +81,10 @@ static int is_graviton4(void) {
 }
 #endif
 
-#define NOT_STISLA_VERSION_STRING "1.1.0"
-#define NOT_STISLA_BUILD_INFO "Tuned NOT_STISLA search with runtime CPU detection and bounded anchor memory"
+#define KEYSTONE_VERSION_STRING "1.1.0"
+#define KEYSTONE_BUILD_INFO "Tuned KEYSTONE search with runtime CPU detection and bounded anchor memory"
 
-/* NOT_STISLA-native runtime CPU feature detection */
+/* KEYSTONE-native runtime CPU feature detection */
 static uint32_t detected_cpu_features = 0;
 static _Atomic int cpu_features_detected = 0;
 
@@ -209,8 +209,8 @@ static int test_vnni(void) {
 }
 #endif
 
-/* Runtime CPU feature detection (NOT_STISLA-native) */
-uint32_t not_stisla_detect_cpu_features(void) {
+/* Runtime CPU feature detection (KEYSTONE-native) */
+uint32_t keystone_detect_cpu_features(void) {
     if (__atomic_load_n(&cpu_features_detected, __ATOMIC_ACQUIRE) == 0) {
         uint32_t features = 0;
 
@@ -219,38 +219,38 @@ uint32_t not_stisla_detect_cpu_features(void) {
         unsigned long hwcap2 = getauxval(AT_HWCAP2);
 
         if (hwcap & HWCAP_ASIMD) {
-            features |= NOT_STISLA_CPU_NEON;
+            features |= KEYSTONE_CPU_NEON;
         }
         if (hwcap & HWCAP_SVE) {
-            features |= NOT_STISLA_CPU_SVE;
+            features |= KEYSTONE_CPU_SVE;
         }
         if (hwcap2 & HWCAP2_SVE2) {
-            features |= NOT_STISLA_CPU_SVE2;
+            features |= KEYSTONE_CPU_SVE2;
         }
         if (hwcap2 & HWCAP2_I8MM) {
-            features |= NOT_STISLA_CPU_I8MM;
+            features |= KEYSTONE_CPU_I8MM;
         }
         if (is_graviton4()) {
-            features |= NOT_STISLA_CPU_GRAVITON4;
+            features |= KEYSTONE_CPU_GRAVITON4;
         }
 #else
         /* Test AVX2 */
         if (test_avx2()) {
-            features |= NOT_STISLA_CPU_AVX2;
+            features |= KEYSTONE_CPU_AVX2;
         }
 
         /* Test AVX512 */
         if (test_avx512()) {
-            features |= NOT_STISLA_CPU_AVX512;
+            features |= KEYSTONE_CPU_AVX512;
         }
 
         /* Test AMX */
         if (test_amx()) {
-            features |= NOT_STISLA_CPU_AMX;
+            features |= KEYSTONE_CPU_AMX;
         }
 
         if (test_vnni()) {
-            features |= NOT_STISLA_CPU_VNNI;
+            features |= KEYSTONE_CPU_VNNI;
         }
 #endif
 
@@ -265,7 +265,7 @@ uint32_t not_stisla_detect_cpu_features(void) {
  * THREAD-SAFE DOUBLE-BUFFERED PERFORMANCE STATS
  * ============================================================================ */
 
-#define NOT_STISLA_STATS_MAX_THREADS 256
+#define KEYSTONE_STATS_MAX_THREADS 256
 
 /* Raw counters packed into a single cache line (52 bytes payload + 12 pad = 64) */
 typedef struct {
@@ -277,11 +277,11 @@ typedef struct {
     uint64_t peak_memory_usage;
     uint32_t cpu_features_used;
     uint8_t  _pad[12];  /* 52 bytes payload + 12 pad = 64 bytes */
-} __attribute__((aligned(64))) not_stisla_per_thread_stats_t;
+} __attribute__((aligned(64))) keystone_per_thread_stats_t;
 
-typedef char not_stisla_stats_size_check[sizeof(not_stisla_per_thread_stats_t) == 64 ? 1 : -1];
+typedef char keystone_stats_size_check[sizeof(keystone_per_thread_stats_t) == 64 ? 1 : -1];
 
-static not_stisla_per_thread_stats_t g_stats_buffers[2][NOT_STISLA_STATS_MAX_THREADS]
+static keystone_per_thread_stats_t g_stats_buffers[2][KEYSTONE_STATS_MAX_THREADS]
     __attribute__((aligned(64)));
 static _Atomic int g_stats_active_idx = 0;
 static _Atomic int g_stats_writers[2] = {0, 0};
@@ -295,19 +295,19 @@ static __thread int g_stats_thread_slot = -1;
 static int g_performance_enabled = 0;
 static uint64_t g_anchor_timestamp = 0;  /* Monotonic counter for LRU ordering */
 
-static inline uint64_t not_stisla_next_anchor_timestamp(void) {
+static inline uint64_t keystone_next_anchor_timestamp(void) {
     return __atomic_fetch_add(&g_anchor_timestamp, 1, __ATOMIC_SEQ_CST) + 1;
 }
 
-static int not_stisla_claim_stats_slot(void) {
+static int keystone_claim_stats_slot(void) {
     int slot = __atomic_fetch_add(&g_stats_next_slot, 1, __ATOMIC_RELAXED);
-    if (slot >= NOT_STISLA_STATS_MAX_THREADS) {
-        return NOT_STISLA_STATS_MAX_THREADS - 1;
+    if (slot >= KEYSTONE_STATS_MAX_THREADS) {
+        return KEYSTONE_STATS_MAX_THREADS - 1;
     }
     return slot;
 }
 
-static void not_stisla_update_performance_stats(
+static void keystone_update_performance_stats(
     uint64_t search_time_ns,
     int search_successful,
     size_t memory_used,
@@ -320,10 +320,10 @@ static void not_stisla_update_performance_stats(
     }
 
     if (__builtin_expect(g_stats_thread_slot < 0, 0)) {
-        g_stats_thread_slot = not_stisla_claim_stats_slot();
+        g_stats_thread_slot = keystone_claim_stats_slot();
     }
     int slot = g_stats_thread_slot;
-    if (slot < 0 || slot >= NOT_STISLA_STATS_MAX_THREADS) {
+    if (slot < 0 || slot >= KEYSTONE_STATS_MAX_THREADS) {
         return;
     }
 
@@ -332,7 +332,7 @@ static void not_stisla_update_performance_stats(
 
     __atomic_fetch_add(&g_stats_writers[buf], 1, __ATOMIC_RELAXED);
 
-    not_stisla_per_thread_stats_t *s = &g_stats_buffers[buf][slot];
+    keystone_per_thread_stats_t *s = &g_stats_buffers[buf][slot];
     s->total_time_ns += search_time_ns;
     s->search_time_ns += search_time_ns;
     s->total_searches++;
@@ -352,7 +352,7 @@ static void not_stisla_update_performance_stats(
     __atomic_store_n(&g_stats_anchors_pruned, anchors_pruned, __ATOMIC_RELAXED);
 }
 
-int not_stisla_get_performance_stats(not_stisla_performance_stats_t* stats) {
+int keystone_get_performance_stats(keystone_performance_stats_t* stats) {
     if (!stats) return -1;
 
     /* Swap to the other buffer so workers drain into the new one */
@@ -374,8 +374,8 @@ int not_stisla_get_performance_stats(not_stisla_performance_stats_t* stats) {
     uint64_t peak_memory_usage = 0;
     uint32_t cpu_features_used = 0;
 
-    for (int i = 0; i < NOT_STISLA_STATS_MAX_THREADS; i++) {
-        const not_stisla_per_thread_stats_t *s = &g_stats_buffers[old_buf][i];
+    for (int i = 0; i < KEYSTONE_STATS_MAX_THREADS; i++) {
+        const keystone_per_thread_stats_t *s = &g_stats_buffers[old_buf][i];
         total_time_ns += s->total_time_ns;
         search_time_ns += s->search_time_ns;
         total_searches += s->total_searches;
@@ -391,7 +391,7 @@ int not_stisla_get_performance_stats(not_stisla_performance_stats_t* stats) {
     memset(g_stats_buffers[old_buf], 0, sizeof(g_stats_buffers[old_buf]));
 
     /* Fill the public struct */
-    memset(stats, 0, sizeof(not_stisla_performance_stats_t));
+    memset(stats, 0, sizeof(keystone_performance_stats_t));
     stats->total_time_ns = total_time_ns;
     stats->search_time_ns = search_time_ns;
     stats->total_searches = total_searches;
@@ -409,14 +409,14 @@ int not_stisla_get_performance_stats(not_stisla_performance_stats_t* stats) {
     stats->cpu_features_used = cpu_features_used;
 
     int vector_features = 0;
-    if (cpu_features_used & NOT_STISLA_CPU_AVX2) vector_features++;
-    if (cpu_features_used & NOT_STISLA_CPU_AVX512) vector_features++;
-    if (cpu_features_used & NOT_STISLA_CPU_AMX) vector_features++;
-    if (cpu_features_used & NOT_STISLA_CPU_VNNI) vector_features++;
-    if (cpu_features_used & NOT_STISLA_CPU_NEON) vector_features++;
-    if (cpu_features_used & NOT_STISLA_CPU_SVE) vector_features++;
-    if (cpu_features_used & NOT_STISLA_CPU_SVE2) vector_features++;
-    if (cpu_features_used & NOT_STISLA_CPU_I8MM) vector_features++;
+    if (cpu_features_used & KEYSTONE_CPU_AVX2) vector_features++;
+    if (cpu_features_used & KEYSTONE_CPU_AVX512) vector_features++;
+    if (cpu_features_used & KEYSTONE_CPU_AMX) vector_features++;
+    if (cpu_features_used & KEYSTONE_CPU_VNNI) vector_features++;
+    if (cpu_features_used & KEYSTONE_CPU_NEON) vector_features++;
+    if (cpu_features_used & KEYSTONE_CPU_SVE) vector_features++;
+    if (cpu_features_used & KEYSTONE_CPU_SVE2) vector_features++;
+    if (cpu_features_used & KEYSTONE_CPU_I8MM) vector_features++;
 
     stats->vectorization_efficiency = (double)vector_features / 8.0;
     stats->speedup_vs_binary = 0.0;
@@ -424,7 +424,7 @@ int not_stisla_get_performance_stats(not_stisla_performance_stats_t* stats) {
     return 0;
 }
 
-void not_stisla_reset_performance_stats(void) {
+void keystone_reset_performance_stats(void) {
     memset(g_stats_buffers[0], 0, sizeof(g_stats_buffers[0]));
     memset(g_stats_buffers[1], 0, sizeof(g_stats_buffers[1]));
     __atomic_store_n(&g_stats_next_slot, 0, __ATOMIC_RELAXED);
@@ -435,18 +435,18 @@ void not_stisla_reset_performance_stats(void) {
     __atomic_store_n(&g_stats_anchors_pruned, 0, __ATOMIC_RELAXED);
 }
 
-void not_stisla_set_performance_tracking(int enabled) {
+void keystone_set_performance_tracking(int enabled) {
     g_performance_enabled = enabled ? 1 : 0;
 }
 
-int not_stisla_is_performance_tracking_enabled(void) {
+int keystone_is_performance_tracking_enabled(void) {
     return g_performance_enabled;
 }
 
-void not_stisla_config_init(not_stisla_config_t* config, int workload_type) {
+void keystone_config_init(keystone_config_t* config, int workload_type) {
     if (!config) return;
 
-    memset(config, 0, sizeof(not_stisla_config_t));
+    memset(config, 0, sizeof(keystone_config_t));
     config->workload_type = workload_type;
     config->tol = 8;
     config->enable_anchor_learning = 1;
@@ -455,17 +455,17 @@ void not_stisla_config_init(not_stisla_config_t* config, int workload_type) {
     config->force_cpu_features = 0;
     config->enable_profiling = 0;
     config->strict_mode = 1;
-    not_stisla_config_optimize_for_workload(config, workload_type);
+    keystone_config_optimize_for_workload(config, workload_type);
 }
 
-int not_stisla_config_validate(const not_stisla_config_t* config) {
+int keystone_config_validate(const keystone_config_t* config) {
     if (!config) return 0;
     if (config->tol == 0 || config->tol > 1000) return 0;
     if (config->max_anchors != 0 &&
-        (config->max_anchors < NOT_STISLA_MIN_ANCHORS ||
-         config->max_anchors > NOT_STISLA_MAX_ANCHORS)) return 0;
-    if (config->workload_type < NOT_STISLA_WORKLOAD_TELEMETRY ||
-        config->workload_type > NOT_STISLA_WORKLOAD_EVENTS) return 0;
+        (config->max_anchors < KEYSTONE_MIN_ANCHORS ||
+         config->max_anchors > KEYSTONE_MAX_ANCHORS)) return 0;
+    if (config->workload_type < KEYSTONE_WORKLOAD_TELEMETRY ||
+        config->workload_type > KEYSTONE_WORKLOAD_EVENTS) return 0;
     if (config->strict_mode) {
         if (config->enable_anchor_learning != 0 && config->enable_anchor_learning != 1) return 0;
         if (config->enable_simd != 0 && config->enable_simd != 1) return 0;
@@ -474,40 +474,40 @@ int not_stisla_config_validate(const not_stisla_config_t* config) {
     return 1;
 }
 
-void not_stisla_config_optimize_for_workload(not_stisla_config_t* config, int workload_type) {
+void keystone_config_optimize_for_workload(keystone_config_t* config, int workload_type) {
     if (!config) return;
 
     config->workload_type = workload_type;
 
     switch (workload_type) {
-        case NOT_STISLA_WORKLOAD_TELEMETRY:
+        case KEYSTONE_WORKLOAD_TELEMETRY:
             config->tol = 12;
             config->max_anchors = 20;
             break;
-        case NOT_STISLA_WORKLOAD_IDS:
+        case KEYSTONE_WORKLOAD_IDS:
             config->tol = 6;
             config->max_anchors = 8;
             break;
-        case NOT_STISLA_WORKLOAD_OFFSETS:
+        case KEYSTONE_WORKLOAD_OFFSETS:
             config->tol = 16;
             config->max_anchors = 24;
             break;
-        case NOT_STISLA_WORKLOAD_EVENTS:
+        case KEYSTONE_WORKLOAD_EVENTS:
             config->tol = 10;
             config->max_anchors = 16;
             break;
         default:
-            config->workload_type = NOT_STISLA_WORKLOAD_IDS;
+            config->workload_type = KEYSTONE_WORKLOAD_IDS;
             config->tol = 8;
             config->max_anchors = 64;
             break;
     }
 }
 
-void not_stisla_get_tuned_config(size_t array_size, not_stisla_config_t* config) {
+void keystone_get_tuned_config(size_t array_size, keystone_config_t* config) {
     if (!config) return;
 
-    not_stisla_config_init(config, NOT_STISLA_WORKLOAD_IDS);
+    keystone_config_init(config, KEYSTONE_WORKLOAD_IDS);
 
     if (array_size < 1000) {
         config->tol = 6;
@@ -528,19 +528,19 @@ void not_stisla_get_tuned_config(size_t array_size, not_stisla_config_t* config)
 /**
  * Get error message for error code
  */
-const char* not_stisla_error_message(not_stisla_error_t error) {
+const char* keystone_error_message(keystone_error_t error) {
     switch (error) {
-        case NOT_STISLA_SUCCESS:
+        case KEYSTONE_SUCCESS:
             return "Success";
-        case NOT_STISLA_ERROR_INVALID_PARAM:
+        case KEYSTONE_ERROR_INVALID_PARAM:
             return "Invalid parameter";
-        case NOT_STISLA_ERROR_MEMORY:
+        case KEYSTONE_ERROR_MEMORY:
             return "Memory allocation failure";
-        case NOT_STISLA_ERROR_NOT_FOUND:
+        case KEYSTONE_ERROR_NOT_FOUND:
             return "Item not found";
-        case NOT_STISLA_ERROR_CONFIG:
+        case KEYSTONE_ERROR_CONFIG:
             return "Configuration error";
-        case NOT_STISLA_ERROR_CPU_FEATURE:
+        case KEYSTONE_ERROR_CPU_FEATURE:
             return "CPU feature detection error";
         default:
             return "Unknown error";
@@ -553,15 +553,15 @@ const char* not_stisla_error_message(not_stisla_error_t error) {
 /* DSMIL workload types are now defined in the header file */
 
 /* Forward declarations */
-static inline size_t not_stisla_anchor_lower(const not_stisla_anchor_table_t* table, int64_t x);
-static inline int64_t not_stisla_interpolate(int64_t l_val, int64_t r_val, size_t l_idx, size_t r_idx, int64_t key);
-static inline size_t not_stisla_local_search(const int64_t* arr, size_t lo, size_t hi, int64_t key);
-static void not_stisla_learn_anchor(not_stisla_anchor_table_t* table, int64_t value, size_t index, size_t pred, size_t tol);
+static inline size_t keystone_anchor_lower(const keystone_anchor_table_t* table, int64_t x);
+static inline int64_t keystone_interpolate(int64_t l_val, int64_t r_val, size_t l_idx, size_t r_idx, int64_t key);
+static inline size_t keystone_local_search(const int64_t* arr, size_t lo, size_t hi, int64_t key);
+static void keystone_learn_anchor(keystone_anchor_table_t* table, int64_t value, size_t index, size_t pred, size_t tol);
 
-/* Enhanced chunked search with runtime SIMD detection (NOT_STISLA-native) */
-static inline size_t not_stisla_chunked_search(const int64_t* arr, size_t n, int64_t key) {
+/* Enhanced chunked search with runtime SIMD detection (KEYSTONE-native) */
+static inline size_t keystone_chunked_search(const int64_t* arr, size_t n, int64_t key) {
     /* For very small arrays, simple loop with minimal unrolling for speed */
-    if (n <= NOT_STISLA_CHUNK_SIZE) {
+    if (n <= KEYSTONE_CHUNK_SIZE) {
         size_t i = 0;
         for (; i + 3 < n; i += 4) {
             if (arr[i] == key) return i;
@@ -572,7 +572,7 @@ static inline size_t not_stisla_chunked_search(const int64_t* arr, size_t n, int
         for (; i < n; ++i) {
             if (arr[i] == key) return i;
         }
-        return NOT_STISLA_NOT_FOUND;
+        return KEYSTONE_NOT_FOUND;
     }
 
     /* Runtime CPU feature detection for optimal SIMD usage */
@@ -580,8 +580,8 @@ static inline size_t not_stisla_chunked_search(const int64_t* arr, size_t n, int
     
 #ifdef __AVX512F__
     /* AVX-512 path: Only use if compiled AND runtime detected */
-    uint32_t cpu_features = not_stisla_detect_cpu_features();
-    if (cpu_features & NOT_STISLA_CPU_AVX512) {
+    uint32_t cpu_features = keystone_detect_cpu_features();
+    if (cpu_features & KEYSTONE_CPU_AVX512) {
         /* Process in chunks of 8 int64_t (512 bits = 8 x 64-bit integers) */
         const size_t full_chunks = n / 8;
         for (size_t chunk = 0; chunk < full_chunks; ++chunk) {
@@ -608,16 +608,16 @@ static inline size_t not_stisla_chunked_search(const int64_t* arr, size_t n, int
         for (size_t i = remainder_start; i < n; ++i) {
             if (arr[i] == key) return i;
         }
-        return NOT_STISLA_NOT_FOUND;
+        return KEYSTONE_NOT_FOUND;
     }
 #endif
 
 #ifdef __AVX2__
     /* AVX2 path: Only use if compiled AND runtime detected */
     #ifndef __AVX512F__
-    uint32_t cpu_features = not_stisla_detect_cpu_features();
+    uint32_t cpu_features = keystone_detect_cpu_features();
     #endif
-    if (cpu_features & NOT_STISLA_CPU_AVX2) {
+    if (cpu_features & KEYSTONE_CPU_AVX2) {
         /* Process in chunks of 4 int64_t (256 bits = 4 x 64-bit integers) */
         const size_t full_chunks = n / 4;
         for (size_t chunk = 0; chunk < full_chunks; ++chunk) {
@@ -647,16 +647,16 @@ static inline size_t not_stisla_chunked_search(const int64_t* arr, size_t n, int
         for (size_t i = remainder_start; i < n; ++i) {
             if (arr[i] == key) return i;
         }
-        return NOT_STISLA_NOT_FOUND;
+        return KEYSTONE_NOT_FOUND;
     }
 #endif
 
 #if defined(__aarch64__)
     /* ARM SIMD path: SVE and NEON */
     {
-        uint32_t cpu_features_arm = not_stisla_detect_cpu_features();
+        uint32_t cpu_features_arm = keystone_detect_cpu_features();
 
-        if (cpu_features_arm & NOT_STISLA_CPU_SVE) {
+        if (cpu_features_arm & KEYSTONE_CPU_SVE) {
             /* SVE path */
             uint64_t vl = svcntd();
             const size_t full_chunks = n / vl;
@@ -678,8 +678,8 @@ static inline size_t not_stisla_chunked_search(const int64_t* arr, size_t n, int
             for (size_t i = remainder_start; i < n; ++i) {
                 if (arr[i] == key) return i;
             }
-            return NOT_STISLA_NOT_FOUND;
-        } else if (cpu_features_arm & NOT_STISLA_CPU_NEON) {
+            return KEYSTONE_NOT_FOUND;
+        } else if (cpu_features_arm & KEYSTONE_CPU_NEON) {
             /* NEON path (128-bit, 2 x 64-bit integers) */
             const size_t full_chunks = n / 2;
             for (size_t chunk = 0; chunk < full_chunks; ++chunk) {
@@ -696,34 +696,34 @@ static inline size_t not_stisla_chunked_search(const int64_t* arr, size_t n, int
             for (size_t i = remainder_start; i < n; ++i) {
                 if (arr[i] == key) return i;
             }
-            return NOT_STISLA_NOT_FOUND;
+            return KEYSTONE_NOT_FOUND;
         }
     }
 #endif
 
     /* Scalar fallback: Always compiled as a runtime fallback for CPUs
      * without the SIMD features the binary was compiled for. */
-    const size_t full_chunks = n / NOT_STISLA_CHUNK_SIZE;
+    const size_t full_chunks = n / KEYSTONE_CHUNK_SIZE;
     for (size_t chunk = 0; chunk < full_chunks; ++chunk) {
-        const size_t base = chunk * NOT_STISLA_CHUNK_SIZE;
+        const size_t base = chunk * KEYSTONE_CHUNK_SIZE;
 
-        for (size_t i = 0; i < NOT_STISLA_CHUNK_SIZE; ++i) {
+        for (size_t i = 0; i < KEYSTONE_CHUNK_SIZE; ++i) {
             if (arr[base + i] == key) {
                 return base + i;
             }
         }
     }
 
-    const size_t remainder_start = (n / NOT_STISLA_CHUNK_SIZE) * NOT_STISLA_CHUNK_SIZE;
+    const size_t remainder_start = (n / KEYSTONE_CHUNK_SIZE) * KEYSTONE_CHUNK_SIZE;
     for (size_t i = remainder_start; i < n; ++i) {
         if (arr[i] == key) return i;
     }
 
-    return NOT_STISLA_NOT_FOUND;
+    return KEYSTONE_NOT_FOUND;
 }
 
 /* Optimized anchor binary search with unrolling */
-static inline size_t not_stisla_anchor_lower(const not_stisla_anchor_table_t* table, int64_t x) {
+static inline size_t keystone_anchor_lower(const keystone_anchor_table_t* table, int64_t x) {
     if (table->size == 0) return 0;
 
     size_t lo = 0;
@@ -732,19 +732,19 @@ static inline size_t not_stisla_anchor_lower(const not_stisla_anchor_table_t* ta
     /* Manual unrolling for common small table sizes */
     switch (hi - lo) {
         case 0:
-            return table->anchors[lo].v <= x ? lo : NOT_STISLA_NOT_FOUND;
+            return table->anchors[lo].v <= x ? lo : KEYSTONE_NOT_FOUND;
         case 1: {
-            const not_stisla_anchor_t* a0 = &table->anchors[lo];
-            const not_stisla_anchor_t* a1 = &table->anchors[hi];
+            const keystone_anchor_t* a0 = &table->anchors[lo];
+            const keystone_anchor_t* a1 = &table->anchors[hi];
             if (a0->v <= x) {
                 return a1->v <= x ? hi : lo;
             }
             return 0;
         }
         case 2: {
-            const not_stisla_anchor_t* a0 = &table->anchors[lo];
-            const not_stisla_anchor_t* a1 = &table->anchors[lo + 1];
-            const not_stisla_anchor_t* a2 = &table->anchors[hi];
+            const keystone_anchor_t* a0 = &table->anchors[lo];
+            const keystone_anchor_t* a1 = &table->anchors[lo + 1];
+            const keystone_anchor_t* a2 = &table->anchors[hi];
             if (a1->v <= x) {
                 return a2->v <= x ? hi : lo + 1;
             } else if (a0->v <= x) {
@@ -768,7 +768,7 @@ static inline size_t not_stisla_anchor_lower(const not_stisla_anchor_table_t* ta
 }
 
 /* High-precision interpolation with overflow protection */
-static inline int64_t not_stisla_interpolate(int64_t l_val, int64_t r_val, size_t l_idx, size_t r_idx, int64_t key) {
+static inline int64_t keystone_interpolate(int64_t l_val, int64_t r_val, size_t l_idx, size_t r_idx, int64_t key) {
     const size_t span = r_idx - l_idx;
 
     if (r_val == l_val || span == 0) {
@@ -792,18 +792,18 @@ static inline int64_t not_stisla_interpolate(int64_t l_val, int64_t r_val, size_
 }
 
 /* Optimized local search with branchless logic and SIMD fallback */
-static inline size_t not_stisla_local_search(const int64_t* arr, size_t lo, size_t hi, int64_t key) {
+static inline size_t keystone_local_search(const int64_t* arr, size_t lo, size_t hi, int64_t key) {
     /* Quick bounds check */
     if (lo > hi || arr[lo] > key || arr[hi] < key) {
-        return NOT_STISLA_NOT_FOUND;
+        return KEYSTONE_NOT_FOUND;
     }
 
     size_t n = hi - lo + 1;
 
     /* OPTIMIZATION: If the window is small, a SIMD linear scan is faster than binary search */
     if (n <= 32) {
-        size_t res = not_stisla_chunked_search(&arr[lo], n, key);
-        return (res == NOT_STISLA_NOT_FOUND) ? NOT_STISLA_NOT_FOUND : (lo + res);
+        size_t res = keystone_chunked_search(&arr[lo], n, key);
+        return (res == KEYSTONE_NOT_FOUND) ? KEYSTONE_NOT_FOUND : (lo + res);
     }
 
     /* BRANCHLESS lower-bound binary search for larger windows.
@@ -823,11 +823,11 @@ static inline size_t not_stisla_local_search(const int64_t* arr, size_t lo, size
         n -= half;
     }
 
-    return (arr[idx] == key) ? idx : NOT_STISLA_NOT_FOUND;
+    return (arr[idx] == key) ? idx : KEYSTONE_NOT_FOUND;
 }
 
-/* Enhanced anchor learning with memory bounds and statistics (NOT_STISLA-native) */
-static void not_stisla_learn_anchor(not_stisla_anchor_table_t* table, int64_t value, size_t index, size_t pred, size_t tol) {
+/* Enhanced anchor learning with memory bounds and statistics (KEYSTONE-native) */
+static void keystone_learn_anchor(keystone_anchor_table_t* table, int64_t value, size_t index, size_t pred, size_t tol) {
     if (!table || !table->anchors || table->capacity == 0) return;
 
     /* Don't learn if prediction was close enough */
@@ -838,7 +838,7 @@ static void not_stisla_learn_anchor(not_stisla_anchor_table_t* table, int64_t va
 
     /* Memory-bounded learning: check if we've reached the limit */
     if (table->size >= table->max_capacity) {
-        /* Prune least recently used anchors (NOT_STISLA-native memory efficiency) */
+        /* Prune least recently used anchors (KEYSTONE-native memory efficiency) */
         uint64_t oldest_time = UINT64_MAX;
         size_t oldest_idx = 0;
 
@@ -851,7 +851,7 @@ static void not_stisla_learn_anchor(not_stisla_anchor_table_t* table, int64_t va
 
         /* Remove oldest anchor and shift array */
         memmove(&table->anchors[oldest_idx], &table->anchors[oldest_idx + 1],
-                (table->size - oldest_idx - 1) * sizeof(not_stisla_anchor_t));
+                (table->size - oldest_idx - 1) * sizeof(keystone_anchor_t));
         table->size--;
         table->stats.anchors_pruned++;
     }
@@ -861,7 +861,7 @@ static void not_stisla_learn_anchor(not_stisla_anchor_table_t* table, int64_t va
         const size_t new_cap = (table->capacity * 2 > table->max_capacity) ?
                                table->max_capacity : table->capacity * 2;
         if (new_cap > table->capacity) {
-            not_stisla_anchor_t* new_anchors = realloc(table->anchors, new_cap * sizeof(not_stisla_anchor_t));
+            keystone_anchor_t* new_anchors = realloc(table->anchors, new_cap * sizeof(keystone_anchor_t));
             if (!new_anchors) return;  /* Memory bound reached */
             table->anchors = new_anchors;
             table->capacity = new_cap;
@@ -878,23 +878,23 @@ static void not_stisla_learn_anchor(not_stisla_anchor_table_t* table, int64_t va
     /* Shift elements to make room */
     if (pos < table->size) {
         memmove(&table->anchors[pos + 1], &table->anchors[pos],
-                (table->size - pos) * sizeof(not_stisla_anchor_t));
+                (table->size - pos) * sizeof(keystone_anchor_t));
     }
 
     /* Insert new anchor with enhanced tracking */
     table->anchors[pos].v = value;
     table->anchors[pos].i = index;
     table->anchors[pos].use_count = 1;
-    table->anchors[pos].last_used = not_stisla_next_anchor_timestamp();
+    table->anchors[pos].last_used = keystone_next_anchor_timestamp();
 
     table->size++;
     table->stats.anchors_learned++;
 }
 
-/* Core NOT_STISLA search algorithm */
-not_stisla_result_t not_stisla_search(const int64_t* arr, size_t n, int64_t key,
-                              not_stisla_anchor_table_t* table, size_t tol) {
-    if (!arr || n == 0) return NOT_STISLA_NOT_FOUND;
+/* Core KEYSTONE search algorithm */
+keystone_result_t keystone_search(const int64_t* arr, size_t n, int64_t key,
+                              keystone_anchor_table_t* table, size_t tol) {
+    if (!arr || n == 0) return KEYSTONE_NOT_FOUND;
 
     if (table) {
         table->stats.searches_total++;
@@ -903,16 +903,16 @@ not_stisla_result_t not_stisla_search(const int64_t* arr, size_t n, int64_t key,
 
     /* Fast path: AVX2-optimized linear search for small arrays */
     if (n < 32) {
-        const size_t small_result = not_stisla_chunked_search(arr, n, key);
-        if (small_result != NOT_STISLA_NOT_FOUND && table) {
+        const size_t small_result = keystone_chunked_search(arr, n, key);
+        if (small_result != KEYSTONE_NOT_FOUND && table) {
             table->stats.searches_successful++;
         }
         return small_result;
     }
 
-    not_stisla_anchor_table_t local_table;
-    not_stisla_anchor_t local_anchors[2];
-    not_stisla_anchor_table_t* active_table = table;
+    keystone_anchor_table_t local_table;
+    keystone_anchor_t local_anchors[2];
+    keystone_anchor_table_t* active_table = table;
 
     /* Treat a zeroed, uninitialised, or malformed table the same as NULL
      * to avoid orphaning a malloc the caller won't free, or writing
@@ -940,23 +940,23 @@ not_stisla_result_t not_stisla_search(const int64_t* arr, size_t n, int64_t key,
 
     if (key < active_table->anchors[0].v ||
         key > active_table->anchors[active_table->size - 1].v) {
-        return NOT_STISLA_NOT_FOUND;
+        return KEYSTONE_NOT_FOUND;
     }
 
     /* Step 1: Find bounding anchors */
-    const size_t a_idx = not_stisla_anchor_lower(active_table, key);
-    if (a_idx == NOT_STISLA_NOT_FOUND) {
-        return NOT_STISLA_NOT_FOUND;
+    const size_t a_idx = keystone_anchor_lower(active_table, key);
+    if (a_idx == KEYSTONE_NOT_FOUND) {
+        return KEYSTONE_NOT_FOUND;
     }
     if (a_idx + 1 >= active_table->size) {
-        const not_stisla_anchor_t* last = &active_table->anchors[active_table->size - 1];
-        return arr[last->i] == key ? last->i : NOT_STISLA_NOT_FOUND;
+        const keystone_anchor_t* last = &active_table->anchors[active_table->size - 1];
+        return arr[last->i] == key ? last->i : KEYSTONE_NOT_FOUND;
     }
-    const not_stisla_anchor_t* l = &active_table->anchors[a_idx];
-    const not_stisla_anchor_t* r = &active_table->anchors[a_idx + 1];
+    const keystone_anchor_t* l = &active_table->anchors[a_idx];
+    const keystone_anchor_t* r = &active_table->anchors[a_idx + 1];
 
     /* Step 2: High-precision interpolation */
-    const size_t pred = (size_t)not_stisla_interpolate(l->v, r->v, l->i, r->i, key);
+    const size_t pred = (size_t)keystone_interpolate(l->v, r->v, l->i, r->i, key);
 
     /* Step 3: Optimized local search */
     size_t lo = (pred > tol) ? (pred - tol) : l->i;
@@ -982,33 +982,33 @@ not_stisla_result_t not_stisla_search(const int64_t* arr, size_t n, int64_t key,
     }
 #endif
 
-    size_t result = not_stisla_local_search(arr, lo, hi, key);
+    size_t result = keystone_local_search(arr, lo, hi, key);
 
     /* Fallback: if interpolation window missed the key, binary-search the full
      * anchor-bounded range so correctness is guaranteed even for highly
      * non-linear distributions. */
-    if (result == NOT_STISLA_NOT_FOUND && (lo > l->i || hi < r->i)) {
-        result = not_stisla_local_search(arr, l->i, r->i, key);
+    if (result == KEYSTONE_NOT_FOUND && (lo > l->i || hi < r->i)) {
+        result = keystone_local_search(arr, l->i, r->i, key);
     }
 
     /* Step 4: Enhanced learning with usage tracking */
-    if (result != NOT_STISLA_NOT_FOUND && table) {
+    if (result != KEYSTONE_NOT_FOUND && table) {
         table->stats.searches_successful++;
-        not_stisla_learn_anchor(table, arr[result], result, pred, tol);
+        keystone_learn_anchor(table, arr[result], result, pred, tol);
 
-        /* Update anchor usage statistics (NOT_STISLA-native) */
+        /* Update anchor usage statistics (KEYSTONE-native) */
         if (active_table != table) {
             /* Find and update the anchor that was used */
             for (size_t i = 0; i < active_table->size; ++i) {
                 if (active_table->anchors[i].i == l->i || active_table->anchors[i].i == r->i) {
                     active_table->anchors[i].use_count++;
-                    active_table->anchors[i].last_used = not_stisla_next_anchor_timestamp();
+                    active_table->anchors[i].last_used = keystone_next_anchor_timestamp();
                 }
             }
         }
     }
 
-#ifdef NOT_STISLA_ENABLE_PLATFORM_TUNING
+#ifdef KEYSTONE_ENABLE_PLATFORM_TUNING
     if (table) {
         _nst_pfp_advance_counter(&table->stats);
         uint64_t counter = table->stats.memory_reallocations;
@@ -1022,29 +1022,29 @@ not_stisla_result_t not_stisla_search(const int64_t* arr, size_t n, int64_t key,
     return result;
 }
 
-not_stisla_result_t not_stisla_search_enhanced(
+keystone_result_t keystone_search_enhanced(
     const int64_t* arr,
     size_t n,
     int64_t key,
-    not_stisla_anchor_table_t* table,
-    const not_stisla_config_t* config
+    keystone_anchor_table_t* table,
+    const keystone_config_t* config
 ) {
     if (__builtin_expect(!arr || n == 0 || !config, 0)) {
-        return NOT_STISLA_NOT_FOUND;
+        return KEYSTONE_NOT_FOUND;
     }
-    if (!not_stisla_config_validate(config)) {
-        return NOT_STISLA_NOT_FOUND;
+    if (!keystone_config_validate(config)) {
+        return KEYSTONE_NOT_FOUND;
     }
 
-    not_stisla_anchor_table_t* active_table =
+    keystone_anchor_table_t* active_table =
         config->enable_anchor_learning ? table : NULL;
     if (active_table) {
-        if (config->workload_type >= NOT_STISLA_WORKLOAD_TELEMETRY &&
-            config->workload_type <= NOT_STISLA_WORKLOAD_EVENTS) {
+        if (config->workload_type >= KEYSTONE_WORKLOAD_TELEMETRY &&
+            config->workload_type <= KEYSTONE_WORKLOAD_EVENTS) {
             active_table->workload_type = config->workload_type;
         }
-        if (config->max_anchors >= NOT_STISLA_MIN_ANCHORS &&
-            config->max_anchors <= NOT_STISLA_MAX_ANCHORS) {
+        if (config->max_anchors >= KEYSTONE_MIN_ANCHORS &&
+            config->max_anchors <= KEYSTONE_MAX_ANCHORS) {
             active_table->max_capacity = config->max_anchors;
         }
     }
@@ -1055,8 +1055,8 @@ not_stisla_result_t not_stisla_search_enhanced(
         clock_gettime(CLOCK_MONOTONIC, &start_time);
     }
 
-    not_stisla_result_t result =
-        not_stisla_search(arr, n, key, active_table, config->tol);
+    keystone_result_t result =
+        keystone_search(arr, n, key, active_table, config->tol);
 
     if (track) {
         struct timespec end_time;
@@ -1068,38 +1068,38 @@ not_stisla_result_t not_stisla_search_enhanced(
         uint64_t anchors_learned = 0;
         uint64_t anchors_pruned = 0;
         if (active_table) {
-            memory_used = active_table->capacity * sizeof(not_stisla_anchor_t) +
-                          sizeof(not_stisla_anchor_table_t);
+            memory_used = active_table->capacity * sizeof(keystone_anchor_t) +
+                          sizeof(keystone_anchor_table_t);
             anchors_learned = active_table->stats.anchors_learned;
             anchors_pruned = active_table->stats.anchors_pruned;
         }
-        not_stisla_update_performance_stats(
+        keystone_update_performance_stats(
             elapsed_ns,
-            result != NOT_STISLA_NOT_FOUND,
+            result != KEYSTONE_NOT_FOUND,
             memory_used,
             anchors_learned,
             anchors_pruned,
-            not_stisla_detect_cpu_features());
+            keystone_detect_cpu_features());
     }
 
     return result;
 }
 
-/* Enhanced anchor table creation with NOT_STISLA-native memory management */
-not_stisla_anchor_table_t* not_stisla_anchor_table_create(void) {
-    not_stisla_anchor_table_t* table = calloc(1, sizeof(not_stisla_anchor_table_t));
+/* Enhanced anchor table creation with KEYSTONE-native memory management */
+keystone_anchor_table_t* keystone_anchor_table_create(void) {
+    keystone_anchor_table_t* table = calloc(1, sizeof(keystone_anchor_table_t));
     if (!table) return NULL;
 
     /* Enhanced memory management - start small, grow as needed */
-    table->anchors = malloc(NOT_STISLA_MIN_ANCHORS * sizeof(not_stisla_anchor_t));
+    table->anchors = malloc(KEYSTONE_MIN_ANCHORS * sizeof(keystone_anchor_t));
     if (!table->anchors) {
         free(table);
         return NULL;
     }
 
     /* Initialize enhanced fields */
-    table->capacity = NOT_STISLA_MIN_ANCHORS;
-    table->max_capacity = NOT_STISLA_MAX_ANCHORS;  /* Memory bound */
+    table->capacity = KEYSTONE_MIN_ANCHORS;
+    table->max_capacity = KEYSTONE_MAX_ANCHORS;  /* Memory bound */
     table->size = 0;
     table->searches_performed = 0;
     table->workload_type = -1;
@@ -1109,33 +1109,33 @@ not_stisla_anchor_table_t* not_stisla_anchor_table_create(void) {
                            : 0;
 
     /* Initialize statistics */
-    memset(&table->stats, 0, sizeof(not_stisla_stats_t));
-    table->stats.cpu_features_detected = not_stisla_detect_cpu_features();
+    memset(&table->stats, 0, sizeof(keystone_stats_t));
+    table->stats.cpu_features_detected = keystone_detect_cpu_features();
 
-#ifdef NOT_STISLA_ENABLE_PLATFORM_TUNING
+#ifdef KEYSTONE_ENABLE_PLATFORM_TUNING
     _nst_pfp_init_warmup_profile(table);
 #endif
 
     /* AWS Graviton4 Auto-Optimization: Lock anchor table to 2MB L2 boundary */
-    if (table->stats.cpu_features_detected & NOT_STISLA_CPU_GRAVITON4) {
+    if (table->stats.cpu_features_detected & KEYSTONE_CPU_GRAVITON4) {
         table->max_capacity = 65536; /* Approx 2MB of anchor data */
     }
 
     return table;
 }
 
-void not_stisla_anchor_table_destroy(not_stisla_anchor_table_t* table) {
+void keystone_anchor_table_destroy(keystone_anchor_table_t* table) {
     if (table) {
         free(table->anchors);
         free(table);
     }
 }
 
-size_t not_stisla_anchor_table_size(const not_stisla_anchor_table_t* table) {
+size_t keystone_anchor_table_size(const keystone_anchor_table_t* table) {
     return table ? table->size : 0;
 }
 
-void not_stisla_anchor_table_reset(not_stisla_anchor_table_t* table) {
+void keystone_anchor_table_reset(keystone_anchor_table_t* table) {
     if (table) {
         table->size = 0;
         table->searches_performed = 0;
@@ -1143,18 +1143,18 @@ void not_stisla_anchor_table_reset(not_stisla_anchor_table_t* table) {
         table->creation_time = 0;
         /* Reset statistics but keep CPU feature detection */
         uint32_t cpu_features = table->stats.cpu_features_detected;
-        memset(&table->stats, 0, sizeof(not_stisla_stats_t));
+        memset(&table->stats, 0, sizeof(keystone_stats_t));
         table->stats.cpu_features_detected = cpu_features;
     }
 }
 
-/* Enhanced functions inspired by NOT_STISLA patterns */
-const not_stisla_stats_t* not_stisla_anchor_table_get_stats(const not_stisla_anchor_table_t* table) {
+/* Enhanced functions inspired by KEYSTONE patterns */
+const keystone_stats_t* keystone_anchor_table_get_stats(const keystone_anchor_table_t* table) {
     return table ? &table->stats : NULL;
 }
 
-int not_stisla_anchor_table_set_memory_limit(not_stisla_anchor_table_t* table, size_t max_anchors) {
-    if (!table || max_anchors < NOT_STISLA_MIN_ANCHORS || max_anchors > NOT_STISLA_MAX_ANCHORS) {
+int keystone_anchor_table_set_memory_limit(keystone_anchor_table_t* table, size_t max_anchors) {
+    if (!table || max_anchors < KEYSTONE_MIN_ANCHORS || max_anchors > KEYSTONE_MAX_ANCHORS) {
         return -1;
     }
 
@@ -1167,25 +1167,25 @@ int not_stisla_anchor_table_set_memory_limit(not_stisla_anchor_table_t* table, s
 }
 
 #ifdef _OPENMP
-static not_stisla_anchor_table_t* not_stisla_anchor_table_clone(const not_stisla_anchor_table_t* table) {
+static keystone_anchor_table_t* keystone_anchor_table_clone(const keystone_anchor_table_t* table) {
     if (!table) {
         return NULL;
     }
 
-    not_stisla_anchor_table_t* clone = not_stisla_anchor_table_create();
+    keystone_anchor_table_t* clone = keystone_anchor_table_create();
     if (!clone) {
         return NULL;
     }
 
     free(clone->anchors);
-    clone->anchors = malloc(table->capacity * sizeof(not_stisla_anchor_t));
+    clone->anchors = malloc(table->capacity * sizeof(keystone_anchor_t));
     if (!clone->anchors) {
-        not_stisla_anchor_table_destroy(clone);
+        keystone_anchor_table_destroy(clone);
         return NULL;
     }
 
     const size_t copy_size = (table->size <= table->capacity) ? table->size : table->capacity;
-    memcpy(clone->anchors, table->anchors, copy_size * sizeof(not_stisla_anchor_t));
+    memcpy(clone->anchors, table->anchors, copy_size * sizeof(keystone_anchor_t));
     clone->capacity = table->capacity;
     clone->size = copy_size;
     clone->max_capacity = table->max_capacity;
@@ -1198,49 +1198,49 @@ static not_stisla_anchor_table_t* not_stisla_anchor_table_clone(const not_stisla
 }
 #endif
 
-int not_stisla_anchor_table_optimize_for_workload(not_stisla_anchor_table_t* table, int workload_type) {
+int keystone_anchor_table_optimize_for_workload(keystone_anchor_table_t* table, int workload_type) {
     if (!table) return -1;
 
     table->workload_type = workload_type;
 
-    /* Workload-specific optimizations (similar to NOT_STISLA patterns) */
+    /* Workload-specific optimizations (similar to KEYSTONE patterns) */
     switch (workload_type) {
-        case NOT_STISLA_WORKLOAD_TELEMETRY:
+        case KEYSTONE_WORKLOAD_TELEMETRY:
             /* Telemetry: Higher anchor limits for variable patterns */
             table->max_capacity = 20;
             break;
-        case NOT_STISLA_WORKLOAD_IDS:
+        case KEYSTONE_WORKLOAD_IDS:
             /* IDs: Lower limits for more uniform data */
             table->max_capacity = 8;
             break;
-        case NOT_STISLA_WORKLOAD_OFFSETS:
+        case KEYSTONE_WORKLOAD_OFFSETS:
             /* Offsets: Higher limits for exponential patterns */
             table->max_capacity = 24;
             break;
-        case NOT_STISLA_WORKLOAD_EVENTS:
+        case KEYSTONE_WORKLOAD_EVENTS:
             /* Events: Medium limits for burst patterns */
             table->max_capacity = 16;
             break;
         default:
-            table->max_capacity = NOT_STISLA_MAX_ANCHORS;
+            table->max_capacity = KEYSTONE_MAX_ANCHORS;
             break;
     }
 
     return 0;
 }
 
-static int not_stisla_batch_key_cmp(const void* a, const void* b) {
-    const not_stisla_batch_item_t* lhs = (const not_stisla_batch_item_t*)a;
-    const not_stisla_batch_item_t* rhs = (const not_stisla_batch_item_t*)b;
+static int keystone_batch_key_cmp(const void* a, const void* b) {
+    const keystone_batch_item_t* lhs = (const keystone_batch_item_t*)a;
+    const keystone_batch_item_t* rhs = (const keystone_batch_item_t*)b;
     if (lhs->key < rhs->key) return -1;
     if (lhs->key > rhs->key) return 1;
     return 0;
 }
 
-size_t not_stisla_search_batch(const int64_t* arr, size_t n,
-                               not_stisla_batch_item_t* items,
+size_t keystone_search_batch(const int64_t* arr, size_t n,
+                               keystone_batch_item_t* items,
                                size_t num_items,
-                               not_stisla_anchor_table_t* table,
+                               keystone_anchor_table_t* table,
                                size_t tol) {
     (void)tol; /* tol is part of the public API but unused in merge-walk path */
     (void)table; /* table is part of the public API but unused in merge-walk path */
@@ -1250,10 +1250,10 @@ size_t not_stisla_search_batch(const int64_t* arr, size_t n,
     }
 
     size_t found = 0;
-    not_stisla_batch_item_t* sorted = malloc(num_items * sizeof(not_stisla_batch_item_t));
+    keystone_batch_item_t* sorted = malloc(num_items * sizeof(keystone_batch_item_t));
     if (!sorted) {
         for (size_t i = 0; i < num_items; ++i) {
-            items[i].result = NOT_STISLA_NOT_FOUND;
+            items[i].result = KEYSTONE_NOT_FOUND;
         }
         return 0;
     }
@@ -1264,7 +1264,7 @@ size_t not_stisla_search_batch(const int64_t* arr, size_t n,
         sorted[i].ordinal = i;
     }
 
-    qsort(sorted, num_items, sizeof(not_stisla_batch_item_t), not_stisla_batch_key_cmp);
+    qsort(sorted, num_items, sizeof(keystone_batch_item_t), keystone_batch_key_cmp);
 
     size_t ai = 0;
     for (size_t i = 0; i < num_items; ++i) {
@@ -1273,7 +1273,7 @@ size_t not_stisla_search_batch(const int64_t* arr, size_t n,
             ai++;
         }
 
-        not_stisla_result_t result = NOT_STISLA_NOT_FOUND;
+        keystone_result_t result = KEYSTONE_NOT_FOUND;
         if (ai < n && arr[ai] == key) {
             result = ai;
             found++;
@@ -1288,17 +1288,17 @@ size_t not_stisla_search_batch(const int64_t* arr, size_t n,
     return found;
 }
 
-size_t not_stisla_search_parallel(const int64_t* arr,
+size_t keystone_search_parallel(const int64_t* arr,
                                   size_t n,
-                                  not_stisla_batch_item_t* items,
+                                  keystone_batch_item_t* items,
                                   size_t num_items,
-                                  not_stisla_anchor_table_t* table,
+                                  keystone_anchor_table_t* table,
                                   size_t tol,
-                                  const not_stisla_parallel_config_t* config) {
+                                  const keystone_parallel_config_t* config) {
     if (!arr || !items || num_items == 0) {
         if (items && num_items > 0) {
             for (size_t i = 0; i < num_items; ++i) {
-                items[i].result = NOT_STISLA_NOT_FOUND;
+                items[i].result = KEYSTONE_NOT_FOUND;
             }
         }
         return 0;
@@ -1311,22 +1311,22 @@ size_t not_stisla_search_parallel(const int64_t* arr,
 
 #pragma omp parallel num_threads(requested_threads ? requested_threads : omp_get_max_threads())
     {
-        not_stisla_anchor_table_t* thread_table = table ? not_stisla_anchor_table_clone(table) : NULL;
+        keystone_anchor_table_t* thread_table = table ? keystone_anchor_table_clone(table) : NULL;
         size_t local_found = 0;
 
 #pragma omp for schedule(dynamic, chunk_size)
         for (size_t i = 0; i < num_items; ++i) {
-            not_stisla_batch_item_t* item = &items[i];
-            not_stisla_result_t result = not_stisla_search(arr, n, item->key, thread_table, tol);
+            keystone_batch_item_t* item = &items[i];
+            keystone_result_t result = keystone_search(arr, n, item->key, thread_table, tol);
             item->result = result;
             item->ordinal = i;
-            if (result != NOT_STISLA_NOT_FOUND) {
+            if (result != KEYSTONE_NOT_FOUND) {
                 local_found++;
             }
         }
 
         if (thread_table) {
-            not_stisla_anchor_table_destroy(thread_table);
+            keystone_anchor_table_destroy(thread_table);
         }
 
 #pragma omp atomic
@@ -1336,12 +1336,12 @@ size_t not_stisla_search_parallel(const int64_t* arr,
     return found;
 #else
     (void)config;
-    return not_stisla_search_batch(arr, n, items, num_items, table, tol);
+    return keystone_search_batch(arr, n, items, num_items, table, tol);
 #endif
 }
 
-static not_stisla_backend_decision_t g_last_backend_decision = {
-    NOT_STISLA_BACKEND_AUTO,
+static keystone_backend_decision_t g_last_backend_decision = {
+    KEYSTONE_BACKEND_AUTO,
     0,
     0,
     0,
@@ -1351,35 +1351,35 @@ static not_stisla_backend_decision_t g_last_backend_decision = {
 };
 static _Atomic int g_last_backend_decision_valid = 0;
 
-#define NOT_STISLA_AUTO_CACHE_ENTRIES 32
+#define KEYSTONE_AUTO_CACHE_ENTRIES 32
 /* 180-case matrix: 8K-query batches favor scalar; 32K+ favor C/OpenMP. */
-#define NOT_STISLA_AUTO_PARALLEL_MIN_ITEMS 16384
-#define NOT_STISLA_AUTO_PARALLEL_MIN_ARRAY 1024
-#define NOT_STISLA_AUTO_FORTRAN_MIN_ITEMS 4096
-#define NOT_STISLA_AUTO_FORTRAN_MAX_ITEMS 16384
-#define NOT_STISLA_AUTO_FORTRAN_MAX_AVG_STEP 4.0L
+#define KEYSTONE_AUTO_PARALLEL_MIN_ITEMS 16384
+#define KEYSTONE_AUTO_PARALLEL_MIN_ARRAY 1024
+#define KEYSTONE_AUTO_FORTRAN_MIN_ITEMS 4096
+#define KEYSTONE_AUTO_FORTRAN_MAX_ITEMS 16384
+#define KEYSTONE_AUTO_FORTRAN_MAX_AVG_STEP 4.0L
 
 enum {
-    NOT_STISLA_AUTO_QUERY_GENERAL = 0,
-    NOT_STISLA_AUTO_QUERY_FORTRAN_MERGE = 1
+    KEYSTONE_AUTO_QUERY_GENERAL = 0,
+    KEYSTONE_AUTO_QUERY_FORTRAN_MERGE = 1
 };
 
-typedef struct not_stisla_backend_cache_entry {
+typedef struct keystone_backend_cache_entry {
     int valid;
     uint32_t cpu_features;
     size_t array_size_bucket;
     size_t query_count_bucket;
     int thread_count;
     int query_shape;
-    not_stisla_backend_t backend;
+    keystone_backend_t backend;
     double estimated_ns_per_key;
     double p95_ns_per_key;
-} not_stisla_backend_cache_entry_t;
+} keystone_backend_cache_entry_t;
 
-static not_stisla_backend_cache_entry_t g_backend_cache[NOT_STISLA_AUTO_CACHE_ENTRIES];
+static keystone_backend_cache_entry_t g_backend_cache[KEYSTONE_AUTO_CACHE_ENTRIES];
 static _Atomic size_t g_backend_cache_next = 0;
 
-static size_t not_stisla_power_of_two_bucket(size_t value) {
+static size_t keystone_power_of_two_bucket(size_t value) {
     if (value <= 1) {
         return value;
     }
@@ -1395,7 +1395,7 @@ static size_t not_stisla_power_of_two_bucket(size_t value) {
     return bucket;
 }
 
-static int not_stisla_effective_thread_count(const not_stisla_parallel_config_t* config) {
+static int keystone_effective_thread_count(const keystone_parallel_config_t* config) {
 #ifdef _OPENMP
     if (config && config->num_threads > 0) {
         return config->num_threads;
@@ -1408,7 +1408,7 @@ static int not_stisla_effective_thread_count(const not_stisla_parallel_config_t*
 #endif
 }
 
-static int not_stisla_openmp_available(void) {
+static int keystone_openmp_available(void) {
 #ifdef _OPENMP
     return 1;
 #else
@@ -1416,16 +1416,16 @@ static int not_stisla_openmp_available(void) {
 #endif
 }
 
-static int not_stisla_auto_scalar_fast_path(size_t num_items,
-                                            const not_stisla_parallel_config_t* config,
+static int keystone_auto_scalar_fast_path(size_t num_items,
+                                            const keystone_parallel_config_t* config,
                                             int thread_count) {
-    return num_items < NOT_STISLA_AUTO_PARALLEL_MIN_ITEMS ||
-           !not_stisla_openmp_available() ||
+    return num_items < KEYSTONE_AUTO_PARALLEL_MIN_ITEMS ||
+           !keystone_openmp_available() ||
            thread_count <= 1 ||
            (config && config->num_threads == 1);
 }
 
-static uint64_t not_stisla_now_ns(void) {
+static uint64_t keystone_now_ns(void) {
     struct timespec ts;
     if (clock_gettime(CLOCK_MONOTONIC, &ts) != 0) {
         return 0;
@@ -1433,7 +1433,7 @@ static uint64_t not_stisla_now_ns(void) {
     return (uint64_t)ts.tv_sec * 1000000000ULL + (uint64_t)ts.tv_nsec;
 }
 
-static double not_stisla_elapsed_ns_per_key(uint64_t start_ns,
+static double keystone_elapsed_ns_per_key(uint64_t start_ns,
                                             uint64_t end_ns,
                                             size_t num_items) {
     if (start_ns == 0 || end_ns < start_ns || num_items == 0) {
@@ -1442,8 +1442,8 @@ static double not_stisla_elapsed_ns_per_key(uint64_t start_ns,
     return (double)(end_ns - start_ns) / (double)num_items;
 }
 
-#ifdef NOT_STISLA_ENABLE_FORTRAN
-static int not_stisla_key_exists_in_array(const int64_t* arr, size_t n, int64_t key) {
+#ifdef KEYSTONE_ENABLE_FORTRAN
+static int keystone_key_exists_in_array(const int64_t* arr, size_t n, int64_t key) {
     size_t lo = 0;
     size_t hi = n;
 
@@ -1463,61 +1463,61 @@ static int not_stisla_key_exists_in_array(const int64_t* arr, size_t n, int64_t 
 }
 #endif
 
-static int not_stisla_detect_auto_query_shape(const int64_t* arr,
+static int keystone_detect_auto_query_shape(const int64_t* arr,
                                               size_t n,
-                                              const not_stisla_batch_item_t* items,
+                                              const keystone_batch_item_t* items,
                                               size_t num_items) {
-#ifndef NOT_STISLA_ENABLE_FORTRAN
+#ifndef KEYSTONE_ENABLE_FORTRAN
     (void)arr;
     (void)n;
     (void)items;
     (void)num_items;
-    return NOT_STISLA_AUTO_QUERY_GENERAL;
+    return KEYSTONE_AUTO_QUERY_GENERAL;
 #else
     if (!arr || !items || n == 0 ||
-        num_items < NOT_STISLA_AUTO_FORTRAN_MIN_ITEMS ||
-        num_items > NOT_STISLA_AUTO_FORTRAN_MAX_ITEMS) {
-        return NOT_STISLA_AUTO_QUERY_GENERAL;
+        num_items < KEYSTONE_AUTO_FORTRAN_MIN_ITEMS ||
+        num_items > KEYSTONE_AUTO_FORTRAN_MAX_ITEMS) {
+        return KEYSTONE_AUTO_QUERY_GENERAL;
     }
 
     int64_t min_key = items[0].key;
     int64_t max_key = items[0].key;
     for (size_t i = 1; i < num_items; ++i) {
         if (items[i].key < items[i - 1].key) {
-            return NOT_STISLA_AUTO_QUERY_GENERAL;
+            return KEYSTONE_AUTO_QUERY_GENERAL;
         }
         max_key = items[i].key;
     }
 
     if (max_key < min_key || min_key < arr[0] || max_key > arr[n - 1]) {
-        return NOT_STISLA_AUTO_QUERY_GENERAL;
+        return KEYSTONE_AUTO_QUERY_GENERAL;
     }
 
     const long double avg_step =
         num_items > 1 ? ((long double)max_key - (long double)min_key) / (long double)(num_items - 1) : 0.0L;
-    if (avg_step > NOT_STISLA_AUTO_FORTRAN_MAX_AVG_STEP) {
-        return NOT_STISLA_AUTO_QUERY_GENERAL;
+    if (avg_step > KEYSTONE_AUTO_FORTRAN_MAX_AVG_STEP) {
+        return KEYSTONE_AUTO_QUERY_GENERAL;
     }
 
     const size_t mid = num_items / 2;
-    if (!not_stisla_key_exists_in_array(arr, n, items[0].key) ||
-        !not_stisla_key_exists_in_array(arr, n, items[mid].key) ||
-        !not_stisla_key_exists_in_array(arr, n, items[num_items - 1].key)) {
-        return NOT_STISLA_AUTO_QUERY_GENERAL;
+    if (!keystone_key_exists_in_array(arr, n, items[0].key) ||
+        !keystone_key_exists_in_array(arr, n, items[mid].key) ||
+        !keystone_key_exists_in_array(arr, n, items[num_items - 1].key)) {
+        return KEYSTONE_AUTO_QUERY_GENERAL;
     }
 
-    return NOT_STISLA_AUTO_QUERY_FORTRAN_MERGE;
+    return KEYSTONE_AUTO_QUERY_FORTRAN_MERGE;
 #endif
 }
 
-static int not_stisla_find_backend_cache(uint32_t cpu_features,
+static int keystone_find_backend_cache(uint32_t cpu_features,
                                          size_t array_size_bucket,
                                          size_t query_count_bucket,
                                          int thread_count,
                                          int query_shape,
-                                         not_stisla_backend_cache_entry_t* entry) {
-    for (size_t i = 0; i < NOT_STISLA_AUTO_CACHE_ENTRIES; ++i) {
-        const not_stisla_backend_cache_entry_t* current = &g_backend_cache[i];
+                                         keystone_backend_cache_entry_t* entry) {
+    for (size_t i = 0; i < KEYSTONE_AUTO_CACHE_ENTRIES; ++i) {
+        const keystone_backend_cache_entry_t* current = &g_backend_cache[i];
         if (!current->valid) {
             continue;
         }
@@ -1535,17 +1535,17 @@ static int not_stisla_find_backend_cache(uint32_t cpu_features,
     return 0;
 }
 
-static void not_stisla_store_backend_cache(uint32_t cpu_features,
+static void keystone_store_backend_cache(uint32_t cpu_features,
                                            size_t array_size_bucket,
                                            size_t query_count_bucket,
                                            int thread_count,
                                            int query_shape,
-                                           not_stisla_backend_t backend,
+                                           keystone_backend_t backend,
                                            double estimated_ns_per_key,
                                            double p95_ns_per_key) {
     size_t next = __atomic_fetch_add(&g_backend_cache_next, 1, __ATOMIC_SEQ_CST);
-    not_stisla_backend_cache_entry_t* entry =
-        &g_backend_cache[next % NOT_STISLA_AUTO_CACHE_ENTRIES];
+    keystone_backend_cache_entry_t* entry =
+        &g_backend_cache[next % KEYSTONE_AUTO_CACHE_ENTRIES];
 
     entry->valid = 1;
     entry->cpu_features = cpu_features;
@@ -1558,68 +1558,68 @@ static void not_stisla_store_backend_cache(uint32_t cpu_features,
     entry->p95_ns_per_key = p95_ns_per_key;
 }
 
-static void not_stisla_record_backend_decision(not_stisla_backend_t backend,
+static void keystone_record_backend_decision(keystone_backend_t backend,
                                                size_t n,
                                                size_t num_items,
                                                int thread_count,
                                                double estimated_ns_per_key,
                                                double p95_ns_per_key) {
     g_last_backend_decision.backend = backend;
-    g_last_backend_decision.cpu_features = not_stisla_detect_cpu_features();
-    g_last_backend_decision.array_size_bucket = not_stisla_power_of_two_bucket(n);
-    g_last_backend_decision.query_count_bucket = not_stisla_power_of_two_bucket(num_items);
+    g_last_backend_decision.cpu_features = keystone_detect_cpu_features();
+    g_last_backend_decision.array_size_bucket = keystone_power_of_two_bucket(n);
+    g_last_backend_decision.query_count_bucket = keystone_power_of_two_bucket(num_items);
     g_last_backend_decision.thread_count = thread_count;
     g_last_backend_decision.estimated_ns_per_key = estimated_ns_per_key;
     g_last_backend_decision.p95_ns_per_key = p95_ns_per_key;
     __atomic_store_n(&g_last_backend_decision_valid, 1, __ATOMIC_RELEASE);
 }
 
-static not_stisla_backend_t not_stisla_static_auto_backend(size_t n,
+static keystone_backend_t keystone_static_auto_backend(size_t n,
                                                            size_t num_items,
-                                                           const not_stisla_parallel_config_t* config,
+                                                           const keystone_parallel_config_t* config,
                                                            int thread_count,
                                                            int query_shape) {
-    if (query_shape == NOT_STISLA_AUTO_QUERY_FORTRAN_MERGE) {
-        return NOT_STISLA_BACKEND_FORTRAN;
+    if (query_shape == KEYSTONE_AUTO_QUERY_FORTRAN_MERGE) {
+        return KEYSTONE_BACKEND_FORTRAN;
     }
-    if (not_stisla_auto_scalar_fast_path(num_items, config, thread_count)) {
-        return NOT_STISLA_BACKEND_SCALAR;
+    if (keystone_auto_scalar_fast_path(num_items, config, thread_count)) {
+        return KEYSTONE_BACKEND_SCALAR;
     }
-    if (n < NOT_STISLA_AUTO_PARALLEL_MIN_ARRAY) {
-        return NOT_STISLA_BACKEND_SCALAR;
+    if (n < KEYSTONE_AUTO_PARALLEL_MIN_ARRAY) {
+        return KEYSTONE_BACKEND_SCALAR;
     }
-    return NOT_STISLA_BACKEND_C_OPENMP;
+    return KEYSTONE_BACKEND_C_OPENMP;
 }
 
-size_t not_stisla_search_batch_auto(const int64_t* arr,
+size_t keystone_search_batch_auto(const int64_t* arr,
                                     size_t n,
-                                    not_stisla_batch_item_t* items,
+                                    keystone_batch_item_t* items,
                                     size_t num_items,
-                                    not_stisla_anchor_table_t* table,
+                                    keystone_anchor_table_t* table,
                                     size_t tol,
-                                    const not_stisla_parallel_config_t* config) {
-    const int thread_count = not_stisla_effective_thread_count(config);
+                                    const keystone_parallel_config_t* config) {
+    const int thread_count = keystone_effective_thread_count(config);
     if (!arr || !items || num_items == 0) {
         return 0;
     }
     if (n == 0) {
         for (size_t i = 0; i < num_items; ++i) {
-            items[i].result = NOT_STISLA_NOT_FOUND;
+            items[i].result = KEYSTONE_NOT_FOUND;
         }
         return 0;
     }
 
-    const int query_shape = not_stisla_detect_auto_query_shape(arr, n, items, num_items);
-    if (query_shape == NOT_STISLA_AUTO_QUERY_GENERAL &&
-        not_stisla_auto_scalar_fast_path(num_items, config, thread_count)) {
-        const uint64_t start_ns = not_stisla_now_ns();
+    const int query_shape = keystone_detect_auto_query_shape(arr, n, items, num_items);
+    if (query_shape == KEYSTONE_AUTO_QUERY_GENERAL &&
+        keystone_auto_scalar_fast_path(num_items, config, thread_count)) {
+        const uint64_t start_ns = keystone_now_ns();
         const size_t found =
-            not_stisla_search_batch_c_optimized(arr, n, items, num_items, table, tol);
-        const uint64_t end_ns = not_stisla_now_ns();
+            keystone_search_batch_c_optimized(arr, n, items, num_items, table, tol);
+        const uint64_t end_ns = keystone_now_ns();
         const double estimated_ns_per_key =
-            not_stisla_elapsed_ns_per_key(start_ns, end_ns, num_items);
-        not_stisla_record_backend_decision(
-            NOT_STISLA_BACKEND_SCALAR,
+            keystone_elapsed_ns_per_key(start_ns, end_ns, num_items);
+        keystone_record_backend_decision(
+            KEYSTONE_BACKEND_SCALAR,
             n,
             num_items,
             thread_count,
@@ -1629,15 +1629,15 @@ size_t not_stisla_search_batch_auto(const int64_t* arr,
         return found;
     }
 
-    const uint32_t cpu_features = not_stisla_detect_cpu_features();
-    const size_t array_size_bucket = not_stisla_power_of_two_bucket(n);
-    const size_t query_count_bucket = not_stisla_power_of_two_bucket(num_items);
-    not_stisla_backend_cache_entry_t cached_decision;
+    const uint32_t cpu_features = keystone_detect_cpu_features();
+    const size_t array_size_bucket = keystone_power_of_two_bucket(n);
+    const size_t query_count_bucket = keystone_power_of_two_bucket(num_items);
+    keystone_backend_cache_entry_t cached_decision;
     double cached_ns_per_key = 0.0;
     double cached_p95_ns_per_key = 0.0;
-    not_stisla_backend_t selected_backend = NOT_STISLA_BACKEND_SCALAR;
+    keystone_backend_t selected_backend = KEYSTONE_BACKEND_SCALAR;
 
-    if (not_stisla_find_backend_cache(
+    if (keystone_find_backend_cache(
             cpu_features,
             array_size_bucket,
             query_count_bucket,
@@ -1648,8 +1648,8 @@ size_t not_stisla_search_batch_auto(const int64_t* arr,
         cached_ns_per_key = cached_decision.estimated_ns_per_key;
         cached_p95_ns_per_key = cached_decision.p95_ns_per_key;
     } else {
-        selected_backend = not_stisla_static_auto_backend(n, num_items, config, thread_count, query_shape);
-        not_stisla_store_backend_cache(
+        selected_backend = keystone_static_auto_backend(n, num_items, config, thread_count, query_shape);
+        keystone_store_backend_cache(
             cpu_features,
             array_size_bucket,
             query_count_bucket,
@@ -1661,20 +1661,20 @@ size_t not_stisla_search_batch_auto(const int64_t* arr,
         );
     }
 
-    const uint64_t start_ns = not_stisla_now_ns();
+    const uint64_t start_ns = keystone_now_ns();
     size_t found = 0;
 
-    if (selected_backend == NOT_STISLA_BACKEND_C_OPENMP) {
-        found = not_stisla_search_parallel(arr, n, items, num_items, table, tol, config);
-    } else if (selected_backend == NOT_STISLA_BACKEND_FORTRAN) {
-        found = not_stisla_search_batch_fortran(arr, n, items, num_items);
+    if (selected_backend == KEYSTONE_BACKEND_C_OPENMP) {
+        found = keystone_search_parallel(arr, n, items, num_items, table, tol, config);
+    } else if (selected_backend == KEYSTONE_BACKEND_FORTRAN) {
+        found = keystone_search_batch_fortran(arr, n, items, num_items);
     } else {
-        selected_backend = NOT_STISLA_BACKEND_SCALAR;
-        found = not_stisla_search_batch_c_optimized(arr, n, items, num_items, table, tol);
+        selected_backend = KEYSTONE_BACKEND_SCALAR;
+        found = keystone_search_batch_c_optimized(arr, n, items, num_items, table, tol);
     }
 
-    const uint64_t end_ns = not_stisla_now_ns();
-    double estimated_ns_per_key = not_stisla_elapsed_ns_per_key(start_ns, end_ns, num_items);
+    const uint64_t end_ns = keystone_now_ns();
+    double estimated_ns_per_key = keystone_elapsed_ns_per_key(start_ns, end_ns, num_items);
     if (estimated_ns_per_key <= 0.0) {
         estimated_ns_per_key = cached_ns_per_key;
     }
@@ -1682,7 +1682,7 @@ size_t not_stisla_search_batch_auto(const int64_t* arr,
         cached_p95_ns_per_key = estimated_ns_per_key;
     }
 
-    not_stisla_record_backend_decision(
+    keystone_record_backend_decision(
         selected_backend,
         n,
         num_items,
@@ -1691,7 +1691,7 @@ size_t not_stisla_search_batch_auto(const int64_t* arr,
         cached_p95_ns_per_key
     );
 
-#ifdef NOT_STISLA_ENABLE_PLATFORM_TUNING
+#ifdef KEYSTONE_ENABLE_PLATFORM_TUNING
     if (table) {
         _nst_pfp_advance_counter(&table->stats);
         uint64_t counter = table->stats.memory_reallocations;
@@ -1705,37 +1705,37 @@ size_t not_stisla_search_batch_auto(const int64_t* arr,
     return found;
 }
 
-int not_stisla_get_last_backend_decision(not_stisla_backend_decision_t* decision) {
+int keystone_get_last_backend_decision(keystone_backend_decision_t* decision) {
     if (!decision || !__atomic_load_n(&g_last_backend_decision_valid, __ATOMIC_ACQUIRE)) {
         return -1;
     }
 
-    memcpy(decision, &g_last_backend_decision, sizeof(not_stisla_backend_decision_t));
+    memcpy(decision, &g_last_backend_decision, sizeof(keystone_backend_decision_t));
     return 0;
 }
 
-int not_stisla_fortran_backend_available(void) {
-#ifdef NOT_STISLA_ENABLE_FORTRAN
+int keystone_fortran_backend_available(void) {
+#ifdef KEYSTONE_ENABLE_FORTRAN
     return 1;
 #else
     return 0;
 #endif
 }
 
-size_t not_stisla_search_batch_fortran(const int64_t* arr,
+size_t keystone_search_batch_fortran(const int64_t* arr,
                                        size_t n,
-                                       not_stisla_batch_item_t* items,
+                                       keystone_batch_item_t* items,
                                        size_t num_items) {
     if (!arr || !items || num_items == 0) {
         return 0;
     }
 
     for (size_t i = 0; i < num_items; ++i) {
-        items[i].result = NOT_STISLA_NOT_FOUND;
+        items[i].result = KEYSTONE_NOT_FOUND;
         items[i].ordinal = i;
     }
 
-#ifndef NOT_STISLA_ENABLE_FORTRAN
+#ifndef KEYSTONE_ENABLE_FORTRAN
     (void)n;
     return 0;
 #else
@@ -1757,12 +1757,12 @@ size_t not_stisla_search_batch_fortran(const int64_t* arr,
         indices[i] = -1;
     }
 
-    not_stisla_batch_search_i64(arr, n, keys, num_items, indices);
+    keystone_batch_search_i64(arr, n, keys, num_items, indices);
 
     size_t found = 0;
     for (size_t i = 0; i < num_items; ++i) {
         if (indices[i] >= 0 && (uint64_t)indices[i] < (uint64_t)n) {
-            items[i].result = (not_stisla_result_t)indices[i];
+            items[i].result = (keystone_result_t)indices[i];
             found++;
         }
     }
@@ -1778,25 +1778,25 @@ size_t not_stisla_search_batch_fortran(const int64_t* arr,
  * and SOFTWARE PIPELINED PREFETCHING for unsorted queries.
  * This is the ultimate "high-gain" enhancement for throughput.
  */
-size_t not_stisla_search_batch_c_optimized(const int64_t* arr,
+size_t keystone_search_batch_c_optimized(const int64_t* arr,
                                            size_t n,
-                                           not_stisla_batch_item_t* items,
+                                           keystone_batch_item_t* items,
                                            size_t num_items,
-                                           not_stisla_anchor_table_t* table,
+                                           keystone_anchor_table_t* table,
                                            size_t tol) {
     if (!arr || !items || num_items == 0) {
         return 0;
     }
     if (n == 0) {
         for (size_t i = 0; i < num_items; ++i) {
-            items[i].result = NOT_STISLA_NOT_FOUND;
+            items[i].result = KEYSTONE_NOT_FOUND;
         }
         return 0;
     }
 
     /* Apply Huge Page hint to current batch if large enough */
-    if (num_items * sizeof(not_stisla_batch_item_t) > 1024 * 1024) {
-        madvise(items, num_items * sizeof(not_stisla_batch_item_t), MADV_HUGEPAGE);
+    if (num_items * sizeof(keystone_batch_item_t) > 1024 * 1024) {
+        madvise(items, num_items * sizeof(keystone_batch_item_t), MADV_HUGEPAGE);
     }
 
     /* Detect if queries are sorted */
@@ -1822,7 +1822,7 @@ size_t not_stisla_search_batch_c_optimized(const int64_t* arr,
 
             while (curr_idx < n && arr[curr_idx] < key) {
                 if (n - curr_idx > 128 && arr[n-1] > arr[curr_idx]) {
-                    size_t pred = (size_t)not_stisla_interpolate(arr[curr_idx], arr[n-1], 
+                    size_t pred = (size_t)keystone_interpolate(arr[curr_idx], arr[n-1], 
                                                                 curr_idx, n-1, key);
                     if (pred > curr_idx + 64) {
                         curr_idx = pred - 32;
@@ -1836,7 +1836,7 @@ size_t not_stisla_search_batch_c_optimized(const int64_t* arr,
                 items[i].result = curr_idx;
                 found++;
             } else {
-                items[i].result = NOT_STISLA_NOT_FOUND;
+                items[i].result = KEYSTONE_NOT_FOUND;
             }
             items[i].ordinal = i;
         }
@@ -1860,20 +1860,20 @@ size_t not_stisla_search_batch_c_optimized(const int64_t* arr,
             __builtin_prefetch(&items[i], 0, 3);
 
             /* 2. Execute search for current pipeline element */
-            not_stisla_result_t result = not_stisla_search(arr, n, items[target_idx].key, table, tol);
+            keystone_result_t result = keystone_search(arr, n, items[target_idx].key, table, tol);
             items[target_idx].result = result;
             items[target_idx].ordinal = target_idx;
-            if (result != NOT_STISLA_NOT_FOUND) found++;
+            if (result != KEYSTONE_NOT_FOUND) found++;
         }
 
         /* Pipeline Drain: process remaining items that were not handled
          * in the steady state (indices num_items - pipe_depth to num_items - 1).
          * No skip check needed: the loop bounds already exclude processed items. */
         for (size_t j = (num_items > pipe_depth ? num_items - pipe_depth : 0); j < num_items; ++j) {
-            not_stisla_result_t result = not_stisla_search(arr, n, items[j].key, table, tol);
+            keystone_result_t result = keystone_search(arr, n, items[j].key, table, tol);
             items[j].result = result;
             items[j].ordinal = j;
-            if (result != NOT_STISLA_NOT_FOUND) found++;
+            if (result != KEYSTONE_NOT_FOUND) found++;
         }
     }
 
@@ -1882,7 +1882,7 @@ size_t not_stisla_search_batch_c_optimized(const int64_t* arr,
 
 
 
-void not_stisla_get_stats(const not_stisla_anchor_table_t* table, size_t* searches_total,
+void keystone_get_stats(const keystone_anchor_table_t* table, size_t* searches_total,
                      size_t* anchors_learned, size_t* memory_used_bytes) {
     if (!table) {
         if (searches_total) *searches_total = 0;
@@ -1891,38 +1891,38 @@ void not_stisla_get_stats(const not_stisla_anchor_table_t* table, size_t* search
         return;
     }
 
-    /* Enhanced statistics (NOT_STISLA-native) */
+    /* Enhanced statistics (KEYSTONE-native) */
     if (searches_total) *searches_total = table->stats.searches_total;
     if (anchors_learned) *anchors_learned = table->stats.anchors_learned;
     if (memory_used_bytes) {
-        *memory_used_bytes = table->capacity * sizeof(not_stisla_anchor_t) +
-                           sizeof(not_stisla_anchor_table_t);
+        *memory_used_bytes = table->capacity * sizeof(keystone_anchor_t) +
+                           sizeof(keystone_anchor_table_t);
     }
 }
 
 /* DSMIL workload-specific optimizations */
-not_stisla_result_t not_stisla_search_telemetry(const int64_t* timestamps, size_t n,
-                                       int64_t target_time, not_stisla_anchor_table_t* table) {
+keystone_result_t keystone_search_telemetry(const int64_t* timestamps, size_t n,
+                                       int64_t target_time, keystone_anchor_table_t* table) {
     /* Telemetry optimization: higher tolerance for variable gaps */
-    return not_stisla_search(timestamps, n, target_time, table, 12);
+    return keystone_search(timestamps, n, target_time, table, 12);
 }
 
-not_stisla_result_t not_stisla_search_ids(const int64_t* ids, size_t n,
-                                 int64_t target_id, not_stisla_anchor_table_t* table) {
+keystone_result_t keystone_search_ids(const int64_t* ids, size_t n,
+                                 int64_t target_id, keystone_anchor_table_t* table) {
     /* ID optimization: lower tolerance for more uniform data */
-    return not_stisla_search(ids, n, target_id, table, 6);
+    return keystone_search(ids, n, target_id, table, 6);
 }
 
-not_stisla_result_t not_stisla_search_offsets(const int64_t* offsets, size_t n,
-                                    int64_t target_offset, not_stisla_anchor_table_t* table) {
+keystone_result_t keystone_search_offsets(const int64_t* offsets, size_t n,
+                                    int64_t target_offset, keystone_anchor_table_t* table) {
     /* Offset optimization: higher tolerance for exponential patterns */
-    return not_stisla_search(offsets, n, target_offset, table, 16);
+    return keystone_search(offsets, n, target_offset, table, 16);
 }
 
-not_stisla_result_t not_stisla_search_events(const int64_t* events, size_t n,
-                                   int64_t target_time, not_stisla_anchor_table_t* table) {
+keystone_result_t keystone_search_events(const int64_t* events, size_t n,
+                                   int64_t target_time, keystone_anchor_table_t* table) {
     /* Event optimization: medium tolerance for burst patterns */
-    return not_stisla_search(events, n, target_time, table, 10);
+    return keystone_search(events, n, target_time, table, 10);
 }
 
 /**
@@ -1938,7 +1938,7 @@ not_stisla_result_t not_stisla_search_events(const int64_t* events, size_t n,
  * @param n Number of elements in array
  * @return 0 on success, -1 if huge pages unavailable or parameters invalid
  */
-int not_stisla_optimize_array_memory(int64_t* arr, size_t n) {
+int keystone_optimize_array_memory(int64_t* arr, size_t n) {
     if (!arr || n == 0) {
         return -1;
     }
@@ -1964,25 +1964,25 @@ int not_stisla_optimize_array_memory(int64_t* arr, size_t n) {
     return 0;
 }
 
-bool not_stisla_init_for_dsmil(not_stisla_anchor_table_t* table, int workload_type) {
+bool keystone_init_for_dsmil(keystone_anchor_table_t* table, int workload_type) {
     if (!table) return false;
 
-    /* Enhanced initialization with workload optimization (NOT_STISLA-native) */
-    not_stisla_anchor_table_reset(table);
-    not_stisla_anchor_table_optimize_for_workload(table, workload_type);
+    /* Enhanced initialization with workload optimization (KEYSTONE-native) */
+    keystone_anchor_table_reset(table);
+    keystone_anchor_table_optimize_for_workload(table, workload_type);
 
     /* Set workload-specific statistics tracking */
-    table->stats.cpu_features_detected = not_stisla_detect_cpu_features();
+    table->stats.cpu_features_detected = keystone_detect_cpu_features();
 
     return true;
 }
 
-const char* not_stisla_version(void) {
-    return NOT_STISLA_VERSION_STRING;
+const char* keystone_version(void) {
+    return KEYSTONE_VERSION_STRING;
 }
 
-const char* not_stisla_build_info(void) {
-    return NOT_STISLA_BUILD_INFO;
+const char* keystone_build_info(void) {
+    return KEYSTONE_BUILD_INFO;
 }
 
 bool enhanced_available(void) {
@@ -1990,5 +1990,5 @@ bool enhanced_available(void) {
 }
 
 const char* enhanced_build_info(void) {
-    return NOT_STISLA_BUILD_INFO;
+    return KEYSTONE_BUILD_INFO;
 }

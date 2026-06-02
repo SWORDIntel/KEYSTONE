@@ -2,40 +2,40 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-BENCH_BIN="${NOT_STISLA_BENCH_BIN:-$ROOT_DIR/scripts/compare_search_auto}"
-OUT_ROOT="${NOT_STISLA_MEMORY_OUT:-$ROOT_DIR/bench_results/memory_ramp_$(date -u +%Y%m%dT%H%M%SZ)}"
+BENCH_BIN="${KEYSTONE_BENCH_BIN:-$ROOT_DIR/scripts/compare_search_auto}"
+OUT_ROOT="${KEYSTONE_MEMORY_OUT:-$ROOT_DIR/bench_results/memory_ramp_$(date -u +%Y%m%dT%H%M%SZ)}"
 
-RAM_CAP_PCT="${NOT_STISLA_RAM_CAP_PCT:-40}"
-MEMORY_SIZES="${NOT_STISLA_MEMORY_SIZES:-}"
-FRACTIONS="${NOT_STISLA_MEMORY_FRACTIONS:-5 10 25 40 60}"
-QUERY_SIZES="${NOT_STISLA_MEMORY_QUERIES:-200000}"
-HIT_RATES="${NOT_STISLA_MEMORY_HIT_RATES:-100 50 0}"
-GAP_PROFILES="${NOT_STISLA_MEMORY_GAPS:-dense:1:0 jitter:8:8}"
-STRIDES="${NOT_STISLA_MEMORY_STRIDES:-17}"
-RUNS="${NOT_STISLA_MEMORY_RUNS:-5}"
-THREADS="${NOT_STISLA_MEMORY_THREADS:-${OMP_NUM_THREADS:-16}}"
-MODES="${NOT_STISLA_MEMORY_MODES:-cold warm}"
-WARMUP_RUNS="${NOT_STISLA_MEMORY_WARMUP_RUNS:-1}"
-LIMIT="${NOT_STISLA_MEMORY_LIMIT:-0}"
-SMOKE="${NOT_STISLA_MEMORY_SMOKE:-0}"
+RAM_CAP_PCT="${KEYSTONE_RAM_CAP_PCT:-40}"
+MEMORY_SIZES="${KEYSTONE_MEMORY_SIZES:-}"
+FRACTIONS="${KEYSTONE_MEMORY_FRACTIONS:-5 10 25 40 60}"
+QUERY_SIZES="${KEYSTONE_MEMORY_QUERIES:-200000}"
+HIT_RATES="${KEYSTONE_MEMORY_HIT_RATES:-100 50 0}"
+GAP_PROFILES="${KEYSTONE_MEMORY_GAPS:-dense:1:0 jitter:8:8}"
+STRIDES="${KEYSTONE_MEMORY_STRIDES:-17}"
+RUNS="${KEYSTONE_MEMORY_RUNS:-5}"
+THREADS="${KEYSTONE_MEMORY_THREADS:-${OMP_NUM_THREADS:-16}}"
+MODES="${KEYSTONE_MEMORY_MODES:-cold warm}"
+WARMUP_RUNS="${KEYSTONE_MEMORY_WARMUP_RUNS:-1}"
+LIMIT="${KEYSTONE_MEMORY_LIMIT:-0}"
+SMOKE="${KEYSTONE_MEMORY_SMOKE:-0}"
 
 usage() {
     cat <<EOF
 Usage: $(basename "$0") [--smoke] [--out DIR]
 
 Environment:
-  NOT_STISLA_RAM_CAP_PCT       RAM cap as percent of MemAvailable (default: 40)
-  NOT_STISLA_MEMORY_SIZES      Space-separated NOT_STISLA_N values; skips derived sizes
-  NOT_STISLA_MEMORY_FRACTIONS  MemAvailable fractions for derived sizes (default: 5 10 25 40 60)
-  NOT_STISLA_MEMORY_QUERIES    Space-separated query counts (default: 200000)
-  NOT_STISLA_MEMORY_HIT_RATES  Space-separated hit-rate percentages (default: 100 50 0)
-  NOT_STISLA_MEMORY_GAPS       Space-separated name:gap:jitter profiles (default: dense:1:0 jitter:8:8)
-  NOT_STISLA_MEMORY_STRIDES    Space-separated query strides (default: 17)
-  NOT_STISLA_MEMORY_RUNS       Runs passed to compare_search_auto (default: 5)
-  NOT_STISLA_MEMORY_MODES      Space-separated modes: cold warm (default: cold warm)
-  NOT_STISLA_MEMORY_WARMUP_RUNS Warmup passes for warm mode (default: 1)
-  NOT_STISLA_MEMORY_LIMIT      Stop after this many cases; 0 means no limit
-  NOT_STISLA_MEMORY_OUT        Output directory
+  KEYSTONE_RAM_CAP_PCT       RAM cap as percent of MemAvailable (default: 40)
+  KEYSTONE_MEMORY_SIZES      Space-separated KEYSTONE_N values; skips derived sizes
+  KEYSTONE_MEMORY_FRACTIONS  MemAvailable fractions for derived sizes (default: 5 10 25 40 60)
+  KEYSTONE_MEMORY_QUERIES    Space-separated query counts (default: 200000)
+  KEYSTONE_MEMORY_HIT_RATES  Space-separated hit-rate percentages (default: 100 50 0)
+  KEYSTONE_MEMORY_GAPS       Space-separated name:gap:jitter profiles (default: dense:1:0 jitter:8:8)
+  KEYSTONE_MEMORY_STRIDES    Space-separated query strides (default: 17)
+  KEYSTONE_MEMORY_RUNS       Runs passed to compare_search_auto (default: 5)
+  KEYSTONE_MEMORY_MODES      Space-separated modes: cold warm (default: cold warm)
+  KEYSTONE_MEMORY_WARMUP_RUNS Warmup passes for warm mode (default: 1)
+  KEYSTONE_MEMORY_LIMIT      Stop after this many cases; 0 means no limit
+  KEYSTONE_MEMORY_OUT        Output directory
 EOF
 }
 
@@ -67,17 +67,17 @@ done
 
 if [[ ! -x "$BENCH_BIN" ]]; then
     echo "benchmark binary is not executable: $BENCH_BIN" >&2
-    echo "build it first, for example: NOT_STISLA_ENABLE_FORTRAN=1 ./scripts/build_native.sh" >&2
+    echo "build it first, for example: KEYSTONE_ENABLE_FORTRAN=1 ./scripts/build_native.sh" >&2
     exit 1
 fi
 
 if ! [[ "$RAM_CAP_PCT" =~ ^[0-9]+$ ]] || [[ "$RAM_CAP_PCT" -lt 1 || "$RAM_CAP_PCT" -gt 95 ]]; then
-    echo "NOT_STISLA_RAM_CAP_PCT must be an integer from 1 to 95; got '$RAM_CAP_PCT'" >&2
+    echo "KEYSTONE_RAM_CAP_PCT must be an integer from 1 to 95; got '$RAM_CAP_PCT'" >&2
     exit 1
 fi
 
 if ! [[ "$WARMUP_RUNS" =~ ^[0-9]+$ ]]; then
-    echo "NOT_STISLA_MEMORY_WARMUP_RUNS must be a non-negative integer; got '$WARMUP_RUNS'" >&2
+    echo "KEYSTONE_MEMORY_WARMUP_RUNS must be a non-negative integer; got '$WARMUP_RUNS'" >&2
     exit 1
 fi
 
@@ -86,7 +86,7 @@ for mode in $MODES; do
         cold|warm)
             ;;
         *)
-            echo "invalid NOT_STISLA_MEMORY_MODES entry: '$mode'; expected cold or warm" >&2
+            echo "invalid KEYSTONE_MEMORY_MODES entry: '$mode'; expected cold or warm" >&2
             exit 1
             ;;
     esac
@@ -120,7 +120,7 @@ derive_sizes() {
     local fraction target budget n
     for fraction in $FRACTIONS; do
         if ! [[ "$fraction" =~ ^[0-9]+$ ]] || [[ "$fraction" -lt 1 || "$fraction" -gt 95 ]]; then
-            echo "invalid NOT_STISLA_MEMORY_FRACTIONS entry: '$fraction'" >&2
+            echo "invalid KEYSTONE_MEMORY_FRACTIONS entry: '$fraction'" >&2
             exit 1
         fi
         target=$((mem_available_bytes * fraction / 100))
@@ -142,14 +142,14 @@ parse_time_metric() {
 }
 
 if [[ "$SMOKE" == "1" ]]; then
-    MEMORY_SIZES="${NOT_STISLA_MEMORY_SIZES:-4096}"
-    QUERY_SIZES="${NOT_STISLA_MEMORY_QUERIES:-1024}"
-    HIT_RATES="${NOT_STISLA_MEMORY_HIT_RATES:-100}"
-    GAP_PROFILES="${NOT_STISLA_MEMORY_GAPS:-dense:1:0}"
-    STRIDES="${NOT_STISLA_MEMORY_STRIDES:-17}"
-    RUNS="${NOT_STISLA_MEMORY_RUNS:-1}"
-    MODES="${NOT_STISLA_MEMORY_MODES:-cold}"
-    LIMIT="${NOT_STISLA_MEMORY_LIMIT:-1}"
+    MEMORY_SIZES="${KEYSTONE_MEMORY_SIZES:-4096}"
+    QUERY_SIZES="${KEYSTONE_MEMORY_QUERIES:-1024}"
+    HIT_RATES="${KEYSTONE_MEMORY_HIT_RATES:-100}"
+    GAP_PROFILES="${KEYSTONE_MEMORY_GAPS:-dense:1:0}"
+    STRIDES="${KEYSTONE_MEMORY_STRIDES:-17}"
+    RUNS="${KEYSTONE_MEMORY_RUNS:-1}"
+    MODES="${KEYSTONE_MEMORY_MODES:-cold}"
+    LIMIT="${KEYSTONE_MEMORY_LIMIT:-1}"
 fi
 
 mkdir -p "$OUT_ROOT"
@@ -207,7 +207,7 @@ for queries in $QUERY_SIZES; do
 
     for n in $data_sizes; do
         if ! [[ "$n" =~ ^[0-9]+$ ]] || [[ "$n" -le 0 ]]; then
-            echo "invalid NOT_STISLA_N value: '$n'" >&2
+            echo "invalid KEYSTONE_N value: '$n'" >&2
             exit 1
         fi
 
@@ -259,32 +259,32 @@ for queries in $QUERY_SIZES; do
 
                         if [[ -n "$TIME_BIN" ]]; then
                             if ! OMP_NUM_THREADS="$THREADS" \
-                                NOT_STISLA_PROFILE="$profile" \
-                                NOT_STISLA_BENCH_MODE="$mode" \
-                                NOT_STISLA_WARMUP_RUNS="$mode_warmup_runs" \
-                                NOT_STISLA_N="$n" \
-                                NOT_STISLA_QUERIES="$queries" \
-                                NOT_STISLA_RUNS="$RUNS" \
-                                NOT_STISLA_HIT_RATE_PCT="$hit_rate" \
-                                NOT_STISLA_DATA_GAP="$data_gap" \
-                                NOT_STISLA_DATA_GAP_JITTER="$data_gap_jitter" \
-                                NOT_STISLA_QUERY_STRIDE="$stride" \
+                                KEYSTONE_PROFILE="$profile" \
+                                KEYSTONE_BENCH_MODE="$mode" \
+                                KEYSTONE_WARMUP_RUNS="$mode_warmup_runs" \
+                                KEYSTONE_N="$n" \
+                                KEYSTONE_QUERIES="$queries" \
+                                KEYSTONE_RUNS="$RUNS" \
+                                KEYSTONE_HIT_RATE_PCT="$hit_rate" \
+                                KEYSTONE_DATA_GAP="$data_gap" \
+                                KEYSTONE_DATA_GAP_JITTER="$data_gap_jitter" \
+                                KEYSTONE_QUERY_STRIDE="$stride" \
                                 "$TIME_BIN" -v -o "$time_metrics_path" "$BENCH_BIN" > "$benchmark_csv" 2>> "$RUN_LOG"; then
                                 status="failed"
                             fi
                         else
                             : > "$time_metrics_path"
                             if ! OMP_NUM_THREADS="$THREADS" \
-                                NOT_STISLA_PROFILE="$profile" \
-                                NOT_STISLA_BENCH_MODE="$mode" \
-                                NOT_STISLA_WARMUP_RUNS="$mode_warmup_runs" \
-                                NOT_STISLA_N="$n" \
-                                NOT_STISLA_QUERIES="$queries" \
-                                NOT_STISLA_RUNS="$RUNS" \
-                                NOT_STISLA_HIT_RATE_PCT="$hit_rate" \
-                                NOT_STISLA_DATA_GAP="$data_gap" \
-                                NOT_STISLA_DATA_GAP_JITTER="$data_gap_jitter" \
-                                NOT_STISLA_QUERY_STRIDE="$stride" \
+                                KEYSTONE_PROFILE="$profile" \
+                                KEYSTONE_BENCH_MODE="$mode" \
+                                KEYSTONE_WARMUP_RUNS="$mode_warmup_runs" \
+                                KEYSTONE_N="$n" \
+                                KEYSTONE_QUERIES="$queries" \
+                                KEYSTONE_RUNS="$RUNS" \
+                                KEYSTONE_HIT_RATE_PCT="$hit_rate" \
+                                KEYSTONE_DATA_GAP="$data_gap" \
+                                KEYSTONE_DATA_GAP_JITTER="$data_gap_jitter" \
+                                KEYSTONE_QUERY_STRIDE="$stride" \
                                 "$BENCH_BIN" > "$benchmark_csv" 2>> "$RUN_LOG"; then
                                 status="failed"
                             fi

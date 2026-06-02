@@ -22,7 +22,7 @@ static void _nst_sched_record_sample(double ns) {
     _nst_sched_ring.write_idx++;
 }
 
-#ifdef NOT_STISLA_ENABLE_PLATFORM_TUNING
+#ifdef KEYSTONE_ENABLE_PLATFORM_TUNING
 
 void _nst_sched_emit_latency_sample(const char* payload_json) {
     if (!payload_json) return;

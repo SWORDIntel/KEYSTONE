@@ -1,14 +1,14 @@
 #ifndef DSMIL_TELEMETRY_PROCESSOR_H
 #define DSMIL_TELEMETRY_PROCESSOR_H
 
-#include "dsmil_not_stisla_wrapper.h"
+#include "dsmil_keystone_wrapper.h"
 
 /**
  * @file dsmil_telemetry_processor.h
- * @brief High-performance telemetry processing with NOT_STISLA acceleration
+ * @brief High-performance telemetry processing with KEYSTONE acceleration
  *
  * Provides telemetry event storage, timestamp-based lookups, and pattern analysis
- * using NOT_STISLA acceleration over traditional search methods.
+ * using KEYSTONE acceleration over traditional search methods.
  */
 
 #ifdef __cplusplus
@@ -29,7 +29,7 @@ typedef struct dsmil_telemetry_processor dsmil_telemetry_processor_t;
  * ============================================================================ */
 
 /**
- * @brief Create a new telemetry processor with NOT_STISLA acceleration
+ * @brief Create a new telemetry processor with KEYSTONE acceleration
  *
  * @param max_events Maximum number of telemetry events to store
  * @return Pointer to telemetry processor, or NULL on failure
@@ -54,9 +54,9 @@ int dsmil_telemetry_processor_add_event(dsmil_telemetry_processor_t *processor,
                                       const dsmil_telemetry_event_t *event);
 
 /**
- * @brief Find telemetry event by exact timestamp (NOT_STISLA accelerated)
+ * @brief Find telemetry event by exact timestamp (KEYSTONE accelerated)
  *
- * Uses NOT_STISLA interpolation search for timestamp lookup.
+ * Uses KEYSTONE interpolation search for timestamp lookup.
  *
  * @param processor Telemetry processor
  * @param target_time Target timestamp to search for
@@ -141,7 +141,7 @@ int dsmil_telemetry_processor_get_stats(
  */
 int dsmil_telemetry_processor_clear(dsmil_telemetry_processor_t *processor);
 
-#ifdef NOT_STISLA_ENABLE_TAR_ZST
+#ifdef KEYSTONE_ENABLE_TAR_ZST
 /**
  * @brief Load telemetry events from a .tar.zst archive member into the processor
  *
@@ -167,13 +167,13 @@ int dsmil_telemetry_processor_load_all_members(
     dsmil_telemetry_processor_t *processor,
     const char *archive_path
 );
-#endif /* NOT_STISLA_ENABLE_TAR_ZST */
+#endif /* KEYSTONE_ENABLE_TAR_ZST */
 
 /**
  * @brief Analyze telemetry patterns in time window
  *
  * Performs pattern analysis on telemetry events within the specified time window
- * using NOT_STISLA-accelerated searches.
+ * using KEYSTONE-accelerated searches.
  *
  * @param processor Telemetry processor
  * @param analysis_window_start Start of analysis window

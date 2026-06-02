@@ -2,21 +2,21 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-BENCH_BIN="${NOT_STISLA_BENCH_BIN:-$ROOT_DIR/scripts/compare_search_auto}"
-OUT_ROOT="${NOT_STISLA_MATRIX_OUT:-$ROOT_DIR/bench_results/perf_matrix_$(date -u +%Y%m%dT%H%M%SZ)}"
+BENCH_BIN="${KEYSTONE_BENCH_BIN:-$ROOT_DIR/scripts/compare_search_auto}"
+OUT_ROOT="${KEYSTONE_MATRIX_OUT:-$ROOT_DIR/bench_results/perf_matrix_$(date -u +%Y%m%dT%H%M%SZ)}"
 
-DATA_SIZES="${NOT_STISLA_MATRIX_N:-1000000}"
-QUERY_SIZES="${NOT_STISLA_MATRIX_QUERIES:-512 8192 32768 200000}"
-HIT_RATES="${NOT_STISLA_MATRIX_HIT_RATES:-100 75 50 25 0}"
-GAP_PROFILES="${NOT_STISLA_MATRIX_GAPS:-dense:1:0 sparse:16:0 jitter:8:8}"
-STRIDES="${NOT_STISLA_MATRIX_STRIDES:-1 17 257}"
-RUNS="${NOT_STISLA_MATRIX_RUNS:-7}"
-THREADS="${NOT_STISLA_MATRIX_THREADS:-${OMP_NUM_THREADS:-16}}"
-LIMIT="${NOT_STISLA_MATRIX_LIMIT:-0}"
+DATA_SIZES="${KEYSTONE_MATRIX_N:-1000000}"
+QUERY_SIZES="${KEYSTONE_MATRIX_QUERIES:-512 8192 32768 200000}"
+HIT_RATES="${KEYSTONE_MATRIX_HIT_RATES:-100 75 50 25 0}"
+GAP_PROFILES="${KEYSTONE_MATRIX_GAPS:-dense:1:0 sparse:16:0 jitter:8:8}"
+STRIDES="${KEYSTONE_MATRIX_STRIDES:-1 17 257}"
+RUNS="${KEYSTONE_MATRIX_RUNS:-7}"
+THREADS="${KEYSTONE_MATRIX_THREADS:-${OMP_NUM_THREADS:-16}}"
+LIMIT="${KEYSTONE_MATRIX_LIMIT:-0}"
 
 if [[ ! -x "$BENCH_BIN" ]]; then
     echo "benchmark binary is not executable: $BENCH_BIN" >&2
-    echo "build it first, for example: NOT_STISLA_ENABLE_FORTRAN=1 ./scripts/build_native.sh" >&2
+    echo "build it first, for example: KEYSTONE_ENABLE_FORTRAN=1 ./scripts/build_native.sh" >&2
     exit 1
 fi
 
@@ -59,14 +59,14 @@ for n in $DATA_SIZES; do
                     } >> "$RUN_LOG"
 
                     if ! OMP_NUM_THREADS="$THREADS" \
-                        NOT_STISLA_PROFILE="$profile" \
-                        NOT_STISLA_N="$n" \
-                        NOT_STISLA_QUERIES="$queries" \
-                        NOT_STISLA_RUNS="$RUNS" \
-                        NOT_STISLA_HIT_RATE_PCT="$hit_rate" \
-                        NOT_STISLA_DATA_GAP="$data_gap" \
-                        NOT_STISLA_DATA_GAP_JITTER="$data_gap_jitter" \
-                        NOT_STISLA_QUERY_STRIDE="$stride" \
+                        KEYSTONE_PROFILE="$profile" \
+                        KEYSTONE_N="$n" \
+                        KEYSTONE_QUERIES="$queries" \
+                        KEYSTONE_RUNS="$RUNS" \
+                        KEYSTONE_HIT_RATE_PCT="$hit_rate" \
+                        KEYSTONE_DATA_GAP="$data_gap" \
+                        KEYSTONE_DATA_GAP_JITTER="$data_gap_jitter" \
+                        KEYSTONE_QUERY_STRIDE="$stride" \
                         "$BENCH_BIN" > "$csv_path" 2>> "$RUN_LOG"; then
                         status="failed"
                     fi

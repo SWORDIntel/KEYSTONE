@@ -47,8 +47,8 @@ def main():
 
     fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(16, 6))
 
-    labels = ['Binary', 'StiSorter', 'Enhanced', 'Parallel', 'Fortran', 'Auto']
-    keys = ['binary_ns', 'not_stisla_ns', 'enhanced_ns', 'batch_parallel_ns', 'fortran_batch_ns', 'auto_batch_ns']
+    labels = ['Binary', 'KEYSTONE', 'Enhanced', 'Parallel', 'Fortran', 'Auto']
+    keys = ['binary_ns', 'keystone_ns', 'enhanced_ns', 'batch_parallel_ns', 'fortran_batch_ns', 'auto_batch_ns']
     colors = ['#2ca02c', '#ff7f0e', '#1f77b4', '#9467bd', '#d62728', '#8c564b']
 
     # Aggregate across all profiles into single averages
@@ -83,8 +83,8 @@ def main():
                     xytext=(0, 3), textcoords="offset points",
                     ha='center', va='bottom', fontsize=8)
 
-    speed_labels = ['StiSorter', 'Enhanced', 'Parallel', 'Fortran', 'Auto']
-    speed_keys = ['not_stisla_ns', 'enhanced_ns', 'batch_parallel_ns', 'fortran_batch_ns', 'auto_batch_ns']
+    speed_labels = ['KEYSTONE', 'Enhanced', 'Parallel', 'Fortran', 'Auto']
+    speed_keys = ['keystone_ns', 'enhanced_ns', 'batch_parallel_ns', 'fortran_batch_ns', 'auto_batch_ns']
     x2 = np.arange(len(speed_labels))
     speed_vals = [speedups.get(k, 0) for k in speed_keys]
     bars2 = ax2.bar(x2, speed_vals, width, color=colors[1:], alpha=0.8, edgecolor='black')
@@ -101,7 +101,7 @@ def main():
                     xytext=(0, 3), textcoords="offset points",
                     ha='center', va='bottom', fontsize=8)
 
-    plt.suptitle('StiSorter Benchmark Comparison', fontsize=14, fontweight='bold')
+    plt.suptitle('KEYSTONE Benchmark Comparison', fontsize=14, fontweight='bold')
     plt.tight_layout()
     plt.savefig(out_path, dpi=150, bbox_inches='tight')
     print(f"Saved benchmark chart to: {out_path}")

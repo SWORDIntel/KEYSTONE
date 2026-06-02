@@ -1,15 +1,15 @@
-#ifndef DSMIL_NOT_STISLA_WRAPPER_H
-#define DSMIL_NOT_STISLA_WRAPPER_H
+#ifndef DSMIL_KEYSTONE_WRAPPER_H
+#define DSMIL_KEYSTONE_WRAPPER_H
 
 #include <stdint.h>
 #include <stddef.h>
 #include <stdbool.h>
 
 /**
- * @file dsmil_not_stisla_wrapper.h
- * @brief DSMIL-specific wrapper for NOT_STISLA high-performance search algorithm
+ * @file dsmil_keystone_wrapper.h
+ * @brief DSMIL-specific wrapper for KEYSTONE high-performance search algorithm
  *
- * This wrapper provides a clean DSMIL-specific API for NOT_STISLA that integrates
+ * This wrapper provides a clean DSMIL-specific API for KEYSTONE that integrates
  * with DSMIL error handling, data types, and component patterns.
  */
 
@@ -133,10 +133,10 @@ typedef struct {
 } dsmil_search_index_t;
 
 /**
- * DSMIL search context - wraps NOT_STISLA anchor table with DSMIL-specific features
+ * DSMIL search context - wraps KEYSTONE anchor table with DSMIL-specific features
  */
 typedef struct dsmil_search_context {
-    void *not_stisla_table;           // NOT_STISLA anchor table
+    void *keystone_table;           // KEYSTONE anchor table
     bool avx2_available;              // AVX2 capability detected
     bool initialized;                 // Context properly initialized
     uint64_t search_operations;       // Statistics: total searches performed
@@ -160,7 +160,7 @@ typedef struct dsmil_search_context {
 /**
  * @brief Create a new DSMIL search context
  *
- * Initializes NOT_STISLA with AVX2 optimizations if available, otherwise
+ * Initializes KEYSTONE with AVX2 optimizations if available, otherwise
  * configures for fallback mode.
  *
  * @return Pointer to search context, or NULL on failure
@@ -229,7 +229,7 @@ void dsmil_search_index_destroy(dsmil_search_index_t *index);
 /**
  * @brief Search telemetry events by timestamp
  *
- * Uses NOT_STISLA to find telemetry events closest to the target timestamp.
+ * Uses KEYSTONE to find telemetry events closest to the target timestamp.
  * Events must be sorted by timestamp for optimal performance.
  *
  * @param ctx Search context
@@ -302,7 +302,7 @@ int dsmil_search_telemetry_by_device_time_range(
 /**
  * @brief Search security events by event ID
  *
- * Uses NOT_STISLA to find security events by their unique identifier.
+ * Uses KEYSTONE to find security events by their unique identifier.
  *
  * @param ctx Search context
  * @param events Array of security events
@@ -376,7 +376,7 @@ int dsmil_search_security_by_severity_time_range(
 /**
  * @brief Search log entries by log ID
  *
- * Uses NOT_STISLA to find log entries by their unique identifier.
+ * Uses KEYSTONE to find log entries by their unique identifier.
  *
  * @param ctx Search context
  * @param logs Array of log entries
@@ -445,7 +445,7 @@ int dsmil_search_logs_by_facility_time_range(
  * tar.zst Streaming Search Functions
  * ============================================================================ */
 
-#ifdef NOT_STISLA_ENABLE_TAR_ZST
+#ifdef KEYSTONE_ENABLE_TAR_ZST
 
 /**
  * @brief Search telemetry events from a .tar.zst archive member
@@ -502,7 +502,7 @@ int dsmil_search_batch_tar_zst(
     dsmil_telemetry_result_t *results
 );
 
-#endif /* NOT_STISLA_ENABLE_TAR_ZST */
+#endif /* KEYSTONE_ENABLE_TAR_ZST */
 
 /* ============================================================================
  * Utility Functions
@@ -543,10 +543,10 @@ int dsmil_search_reset_stats(dsmil_search_context_t *ctx);
 bool dsmil_search_avx2_enabled(const dsmil_search_context_t *ctx);
 
 /**
- * @brief Get NOT_STISLA version information
+ * @brief Get KEYSTONE version information
  *
  * @return Version string
  */
 const char* dsmil_search_get_version(void);
 
-#endif /* DSMIL_NOT_STISLA_WRAPPER_H */
+#endif /* DSMIL_KEYSTONE_WRAPPER_H */

@@ -44,7 +44,7 @@ void _nst_hints_extract_domain_context(_nst_numa_placement_hint_t* hint) {
     hint->preferred_node = 0;
     hint->latency_estimate = 12.5;
 
-#ifdef NOT_STISLA_ENABLE_PLATFORM_TUNING
+#ifdef KEYSTONE_ENABLE_PLATFORM_TUNING
 #ifdef _WIN32
     {
         char domain[64] = {0};

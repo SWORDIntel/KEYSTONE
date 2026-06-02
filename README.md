@@ -1,4 +1,4 @@
-# StiSorter
+# KEYSTONE
 
 [![C](https://img.shields.io/badge/C-11-blue.svg)](https://en.wikipedia.org/wiki/C11_(C_standard_revision))
 [![Fortran](https://img.shields.io/badge/Fortran-90+-purple.svg)](https://en.wikipedia.org/wiki/Fortran)
@@ -6,7 +6,7 @@
 [![License](https://img.shields.io/badge/License-AGPL--3.0-red.svg)](LICENSE)
 [![Platform](https://img.shields.io/badge/Platform-Linux-green.svg)](https://www.kernel.org/)
 
-High-performance interpolation search and batch lookup engine for sorted `int64_t` datasets. StiSorter combines anchor-guided interpolation search with runtime SIMD detection (AVX2 / AVX-512), OpenMP parallelism, an optional Fortran batch backend, and `.tar.zst` archive ingestion.
+High-performance interpolation search and batch lookup engine for sorted `int64_t` datasets. KEYSTONE combines anchor-guided interpolation search with runtime SIMD detection (AVX2 / AVX-512), OpenMP parallelism, an optional Fortran batch backend, and `.tar.zst` archive ingestion.
 
 ---
 
@@ -55,7 +55,7 @@ flowchart TB
 ./build.sh
 ```
 
-This produces `libstisorter.so` in the repository root with auto-detected AVX2/AVX-512, OpenMP, Fortran, and `tar.zst` support.
+This produces `libkeystone.so` in the repository root with auto-detected AVX2/AVX-512, OpenMP, Fortran, and `tar.zst` support.
 
 ### Build Tests & Benchmarks
 
@@ -91,7 +91,7 @@ Results are saved to:
 
 ```mermaid
 flowchart LR
-    Root[StiSorter Root] --> S[src/]
+    Root[KEYSTONE Root] --> S[src/]
     Root --> I[include/]
     Root --> T[tests/]
     Root --> B[benchmarks/]
@@ -99,14 +99,14 @@ flowchart LR
     Root --> F[fortran/]
     Root --> SC[scripts/]
 
-    S --> C1[not_stisla.c]
-    S --> C2[dsmil_not_stisla_wrapper.c]
+    S --> C1[keystone.c]
+    S --> C2[dsmil_keystone_wrapper.c]
     S --> C3[dsmil_telemetry_processor.c]
-    S --> C4[not_stisla_tar_zst.c]
+    S --> C4[keystone_tar_zst.c]
 
-    I --> H1[not_stisla.h]
+    I --> H1[keystone.h]
     I --> H2[dsmil_telemetry_processor.h]
-    I --> H3[dsmil_not_stisla_wrapper.h]
+    I --> H3[dsmil_keystone_wrapper.h]
 
     T --> E1[test_core_native]
     T --> E2[test_tar_zst]
@@ -116,8 +116,8 @@ flowchart LR
     B --> BM2[performance_proof]
     B --> VIZ[visualize_benchmarks.py]
 
-    F --> F90[not_stisla_batch.f90]
-    F --> FSO[libnot_stisla_batch.so]
+    F --> F90[keystone_batch.f90]
+    F --> FSO[libkeystone_batch.so]
 
     SC --> BN[build_native.sh]
     SC --> CMP[compare_search.c]
@@ -131,44 +131,44 @@ flowchart LR
 ### Single Search
 
 ```c
-#include "not_stisla.h"
+#include "keystone.h"
 
-not_stisla_anchor_table_t* table = not_stisla_anchor_table_create();
-not_stisla_result_t idx = not_stisla_search(data, n, key, table, 0);
-if (idx != NOT_STISLA_NOT_FOUND) { /* found at idx */ }
-not_stisla_anchor_table_destroy(table);
+keystone_anchor_table_t* table = keystone_anchor_table_create();
+keystone_result_t idx = keystone_search(data, n, key, table, 0);
+if (idx != KEYSTONE_NOT_FOUND) { /* found at idx */ }
+keystone_anchor_table_destroy(table);
 ```
 
 ### Enhanced / Tuned Search
 
 ```c
-not_stisla_config_t cfg;
-not_stisla_config_init(&cfg, NOT_STISLA_WORKLOAD_TELEMETRY);
-not_stisla_get_tuned_config(n, &cfg);
+keystone_config_t cfg;
+keystone_config_init(&cfg, KEYSTONE_WORKLOAD_TELEMETRY);
+keystone_get_tuned_config(n, &cfg);
 
-not_stisla_result_t idx = not_stisla_search_enhanced(data, n, key, table, &cfg);
+keystone_result_t idx = keystone_search_enhanced(data, n, key, table, &cfg);
 ```
 
 ### Batch Search
 
 ```c
-not_stisla_batch_item_t batch[num_queries];
+keystone_batch_item_t batch[num_queries];
 for (size_t i = 0; i < num_queries; ++i) batch[i].key = queries[i];
 
-size_t found = not_stisla_search_batch(data, n, batch, num_queries, table, 8, NULL);
+size_t found = keystone_search_batch(data, n, batch, num_queries, table, 8, NULL);
 ```
 
 ### Auto Backend Batch
 
 ```c
-not_stisla_parallel_config_t pc = { .num_threads = 8, .batch_chunk = 256 };
-size_t found = not_stisla_search_batch_auto(data, n, batch, num_queries, table, 8, &pc);
+keystone_parallel_config_t pc = { .num_threads = 8, .batch_chunk = 256 };
+size_t found = keystone_search_batch_auto(data, n, batch, num_queries, table, 8, &pc);
 ```
 
 ### tar.zst Archive Search
 
 ```c
-#include "dsmil_not_stisla_wrapper.h"
+#include "dsmil_keystone_wrapper.h"
 
 dsmil_search_context_t* ctx = dsmil_search_create();
 const char* members[] = {"telemetry.csv", "events.json"};
@@ -218,7 +218,7 @@ flowchart TD
 
 ```bash
 $ ./benchmark.sh
-Running StiSorter benchmark suite...
+Running KEYSTONE benchmark suite...
 Running profile: 100K_dense
 Running profile: 1M_dense
 Running profile: 1M_jitter
@@ -237,12 +237,12 @@ Sample output chart (`benchmark_comparison.png`):
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `NOT_STISLA_ENABLE_AVX2` | `auto` | Force-enable/disable AVX2 |
-| `NOT_STISLA_ENABLE_AVX512` | `0` | Force-enable AVX-512 |
-| `NOT_STISLA_ENABLE_OPENMP` | `1` | Enable OpenMP parallelism |
-| `NOT_STISLA_ENABLE_FORTRAN` | `1` | Build/link Fortran backend |
-| `NOT_STISLA_ENABLE_TAR_ZST` | `auto` | Enable tar.zst ingestion |
-| `NOT_STISLA_FORCE_SCALAR` | `0` | Force scalar-only build |
+| `KEYSTONE_ENABLE_AVX2` | `auto` | Force-enable/disable AVX2 |
+| `KEYSTONE_ENABLE_AVX512` | `0` | Force-enable AVX-512 |
+| `KEYSTONE_ENABLE_OPENMP` | `1` | Enable OpenMP parallelism |
+| `KEYSTONE_ENABLE_FORTRAN` | `1` | Build/link Fortran backend |
+| `KEYSTONE_ENABLE_TAR_ZST` | `auto` | Enable tar.zst ingestion |
+| `KEYSTONE_FORCE_SCALAR` | `0` | Force scalar-only build |
 
 ---
 
@@ -267,4 +267,4 @@ This project is published as a technical showcase and for home deployment if you
 
 ## Repository
 
-[https://github.com/SWORDIntel/StiSorter](https://github.com/SWORDIntel/StiSorter)
+[https://github.com/SWORDIntel/KEYSTONE](https://github.com/SWORDIntel/KEYSTONE)

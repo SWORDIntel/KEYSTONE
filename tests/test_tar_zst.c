@@ -1,10 +1,10 @@
 /**
- * NOT_STISLA tar.zst streaming search test suite
+ * KEYSTONE tar.zst streaming search test suite
  */
 
-#include "../include/not_stisla.h"
-#include "../include/not_stisla_tar_zst.h"
-#include "../include/dsmil_not_stisla_wrapper.h"
+#include "../include/keystone.h"
+#include "../include/keystone_tar_zst.h"
+#include "../include/dsmil_keystone_wrapper.h"
 #include "../include/dsmil_telemetry_processor.h"
 #include <stdio.h>
 #include <stdlib.h>
@@ -40,13 +40,13 @@ static void test_open_close(void) {
         return;
     }
 
-    not_stisla_tar_zst_t* tz = not_stisla_tar_zst_open(ARCHIVE_PATH, NULL);
+    keystone_tar_zst_t* tz = keystone_tar_zst_open(ARCHIVE_PATH, NULL);
     if (!tz) {
         test_fail(name, "failed to open archive");
         return;
     }
 
-    not_stisla_tar_zst_close(tz);
+    keystone_tar_zst_close(tz);
     test_pass(name);
 }
 
@@ -57,7 +57,7 @@ static void test_iterate_members(void) {
         return;
     }
 
-    not_stisla_tar_zst_t* tz = not_stisla_tar_zst_open(ARCHIVE_PATH, NULL);
+    keystone_tar_zst_t* tz = keystone_tar_zst_open(ARCHIVE_PATH, NULL);
     if (!tz) {
         test_fail(name, "failed to open archive");
         return;
@@ -71,7 +71,7 @@ static void test_iterate_members(void) {
     for (;;) {
         char* member_name = NULL;
         size_t member_name_len = 0;
-        int r = not_stisla_tar_zst_next_member(tz, &member_name, &member_name_len);
+        int r = keystone_tar_zst_next_member(tz, &member_name, &member_name_len);
         if (r <= 0) break;
         total++;
 
@@ -89,7 +89,7 @@ static void test_iterate_members(void) {
         }
     }
 
-    not_stisla_tar_zst_close(tz);
+    keystone_tar_zst_close(tz);
 
     if (total < 3) {
         test_fail(name, "expected at least 3 members");
@@ -109,23 +109,23 @@ static void test_search_text_member(void) {
         return;
     }
 
-    not_stisla_tar_zst_t* tz = not_stisla_tar_zst_open(ARCHIVE_PATH, NULL);
+    keystone_tar_zst_t* tz = keystone_tar_zst_open(ARCHIVE_PATH, NULL);
     if (!tz) {
         test_fail(name, "failed to open archive");
         return;
     }
 
     /* The text file contains even numbers 0, 2, 4, ..., 2000 */
-    not_stisla_config_t config;
-    not_stisla_config_init(&config, NOT_STISLA_WORKLOAD_IDS);
+    keystone_config_t config;
+    keystone_config_init(&config, KEYSTONE_WORKLOAD_IDS);
 
-    not_stisla_result_t result = not_stisla_tar_zst_search_member(
+    keystone_result_t result = keystone_tar_zst_search_member(
         tz, "numbers.txt", 1000, NULL, &config
     );
 
-    not_stisla_tar_zst_close(tz);
+    keystone_tar_zst_close(tz);
 
-    if (result == NOT_STISLA_NOT_FOUND) {
+    if (result == KEYSTONE_NOT_FOUND) {
         test_fail(name, "key 1000 not found");
         return;
     }
@@ -139,8 +139,8 @@ static void test_search_csv_member(void) {
         return;
     }
 
-    not_stisla_tar_zst_options_t opts = {
-        .format = NOT_STISLA_TAR_ZST_FORMAT_CSV,
+    keystone_tar_zst_options_t opts = {
+        .format = KEYSTONE_TAR_ZST_FORMAT_CSV,
         .skip_header = 1,
         .chunk_size = 4096,
         .arena_slab_size = 65536,
@@ -148,23 +148,23 @@ static void test_search_csv_member(void) {
         .enable_pipeline = 0
     };
 
-    not_stisla_tar_zst_t* tz = not_stisla_tar_zst_open(ARCHIVE_PATH, &opts);
+    keystone_tar_zst_t* tz = keystone_tar_zst_open(ARCHIVE_PATH, &opts);
     if (!tz) {
         test_fail(name, "failed to open archive");
         return;
     }
 
     /* The CSV file contains multiples of 3: 0, 3, 6, ..., 3000 */
-    not_stisla_config_t config;
-    not_stisla_config_init(&config, NOT_STISLA_WORKLOAD_IDS);
+    keystone_config_t config;
+    keystone_config_init(&config, KEYSTONE_WORKLOAD_IDS);
 
-    not_stisla_result_t result = not_stisla_tar_zst_search_member(
+    keystone_result_t result = keystone_tar_zst_search_member(
         tz, "numbers.csv", 1500, NULL, &config
     );
 
-    not_stisla_tar_zst_close(tz);
+    keystone_tar_zst_close(tz);
 
-    if (result == NOT_STISLA_NOT_FOUND) {
+    if (result == KEYSTONE_NOT_FOUND) {
         test_fail(name, "key 1500 not found");
         return;
     }
@@ -178,8 +178,8 @@ static void test_search_json_member(void) {
         return;
     }
 
-    not_stisla_tar_zst_options_t opts = {
-        .format = NOT_STISLA_TAR_ZST_FORMAT_JSON,
+    keystone_tar_zst_options_t opts = {
+        .format = KEYSTONE_TAR_ZST_FORMAT_JSON,
         .chunk_size = 4096,
         .arena_slab_size = 65536,
         .zstd_workers = 0,
@@ -187,23 +187,23 @@ static void test_search_json_member(void) {
         .skip_header = 0
     };
 
-    not_stisla_tar_zst_t* tz = not_stisla_tar_zst_open(ARCHIVE_PATH, &opts);
+    keystone_tar_zst_t* tz = keystone_tar_zst_open(ARCHIVE_PATH, &opts);
     if (!tz) {
         test_fail(name, "failed to open archive");
         return;
     }
 
     /* The JSON file contains multiples of 5: 0, 5, 10, ..., 5000 */
-    not_stisla_config_t config;
-    not_stisla_config_init(&config, NOT_STISLA_WORKLOAD_IDS);
+    keystone_config_t config;
+    keystone_config_init(&config, KEYSTONE_WORKLOAD_IDS);
 
-    not_stisla_result_t result = not_stisla_tar_zst_search_member(
+    keystone_result_t result = keystone_tar_zst_search_member(
         tz, "numbers.json", 2500, NULL, &config
     );
 
-    not_stisla_tar_zst_close(tz);
+    keystone_tar_zst_close(tz);
 
-    if (result == NOT_STISLA_NOT_FOUND) {
+    if (result == KEYSTONE_NOT_FOUND) {
         test_fail(name, "key 2500 not found");
         return;
     }
@@ -217,27 +217,27 @@ static void test_stats_consistency(void) {
         return;
     }
 
-    not_stisla_tar_zst_t* tz = not_stisla_tar_zst_open(ARCHIVE_PATH, NULL);
+    keystone_tar_zst_t* tz = keystone_tar_zst_open(ARCHIVE_PATH, NULL);
     if (!tz) {
         test_fail(name, "failed to open archive");
         return;
     }
 
-    not_stisla_config_t config;
-    not_stisla_config_init(&config, NOT_STISLA_WORKLOAD_IDS);
+    keystone_config_t config;
+    keystone_config_init(&config, KEYSTONE_WORKLOAD_IDS);
 
     /* Search multiple members */
-    not_stisla_tar_zst_search_member(tz, "numbers.txt", 500, NULL, &config);
-    not_stisla_tar_zst_search_member(tz, "numbers.csv", 501, NULL, &config);
+    keystone_tar_zst_search_member(tz, "numbers.txt", 500, NULL, &config);
+    keystone_tar_zst_search_member(tz, "numbers.csv", 501, NULL, &config);
 
-    not_stisla_tar_zst_stats_t stats;
-    if (not_stisla_tar_zst_get_stats(tz, &stats) != 0) {
-        not_stisla_tar_zst_close(tz);
+    keystone_tar_zst_stats_t stats;
+    if (keystone_tar_zst_get_stats(tz, &stats) != 0) {
+        keystone_tar_zst_close(tz);
         test_fail(name, "get_stats failed");
         return;
     }
 
-    not_stisla_tar_zst_close(tz);
+    keystone_tar_zst_close(tz);
 
     if (stats.members_read < 2) {
         test_fail(name, "expected at least 2 members read");
@@ -253,9 +253,9 @@ static void test_stats_consistency(void) {
 static void test_error_handling(void) {
     const char* name = "error_handling";
 
-    not_stisla_tar_zst_t* tz = not_stisla_tar_zst_open("/nonexistent/path.tar.zst", NULL);
+    keystone_tar_zst_t* tz = keystone_tar_zst_open("/nonexistent/path.tar.zst", NULL);
     if (tz) {
-        not_stisla_tar_zst_close(tz);
+        keystone_tar_zst_close(tz);
         test_fail(name, "should have failed for nonexistent file");
         return;
     }
@@ -269,40 +269,40 @@ static void test_indexed_search(void) {
         return;
     }
 
-    not_stisla_tar_zst_t* tz = not_stisla_tar_zst_open(ARCHIVE_PATH, NULL);
+    keystone_tar_zst_t* tz = keystone_tar_zst_open(ARCHIVE_PATH, NULL);
     if (!tz) {
         test_fail(name, "failed to open archive");
         return;
     }
 
-    if (not_stisla_tar_zst_build_index(tz) != 0) {
-        not_stisla_tar_zst_close(tz);
+    if (keystone_tar_zst_build_index(tz) != 0) {
+        keystone_tar_zst_close(tz);
         test_fail(name, "build_index failed");
         return;
     }
 
-    not_stisla_config_t config;
-    not_stisla_config_init(&config, NOT_STISLA_WORKLOAD_IDS);
+    keystone_config_t config;
+    keystone_config_init(&config, KEYSTONE_WORKLOAD_IDS);
 
     /* Search for a key that exists (500 is in numbers.txt) */
-    not_stisla_result_t r1 = not_stisla_tar_zst_search_indexed(
+    keystone_result_t r1 = keystone_tar_zst_search_indexed(
         tz, "numbers.txt", 500, NULL, &config);
-    if (r1 == NOT_STISLA_NOT_FOUND) {
-        not_stisla_tar_zst_close(tz);
+    if (r1 == KEYSTONE_NOT_FOUND) {
+        keystone_tar_zst_close(tz);
         test_fail(name, "indexed search for 500 failed");
         return;
     }
 
     /* Search for a key that does not exist (should be Bloom-rejected) */
-    not_stisla_result_t r2 = not_stisla_tar_zst_search_indexed(
+    keystone_result_t r2 = keystone_tar_zst_search_indexed(
         tz, "numbers.txt", 999999, NULL, &config);
-    if (r2 != NOT_STISLA_NOT_FOUND) {
-        not_stisla_tar_zst_close(tz);
+    if (r2 != KEYSTONE_NOT_FOUND) {
+        keystone_tar_zst_close(tz);
         test_fail(name, "Bloom should have rejected 999999");
         return;
     }
 
-    not_stisla_tar_zst_close(tz);
+    keystone_tar_zst_close(tz);
     test_pass(name);
 }
 
@@ -313,7 +313,7 @@ static void test_extract_member(void) {
         return;
     }
 
-    not_stisla_tar_zst_t* tz = not_stisla_tar_zst_open(ARCHIVE_PATH, NULL);
+    keystone_tar_zst_t* tz = keystone_tar_zst_open(ARCHIVE_PATH, NULL);
     if (!tz) {
         test_fail(name, "failed to open archive");
         return;
@@ -321,27 +321,27 @@ static void test_extract_member(void) {
 
     int64_t* keys = NULL;
     size_t count = 0;
-    if (not_stisla_tar_zst_extract_member(tz, "numbers.txt",
+    if (keystone_tar_zst_extract_member(tz, "numbers.txt",
                                              &keys, &count) != 0) {
-        not_stisla_tar_zst_close(tz);
+        keystone_tar_zst_close(tz);
         test_fail(name, "extract_member failed");
         return;
     }
 
     if (!keys || count == 0) {
-        not_stisla_tar_zst_close(tz);
+        keystone_tar_zst_close(tz);
         test_fail(name, "no keys extracted");
         return;
     }
 
     /* numbers.txt contains even numbers 0, 2, 4, ..., 2000 */
     if (keys[0] != 0 || keys[count - 1] != 2000) {
-        not_stisla_tar_zst_close(tz);
+        keystone_tar_zst_close(tz);
         test_fail(name, "extracted key range mismatch");
         return;
     }
 
-    not_stisla_tar_zst_close(tz);
+    keystone_tar_zst_close(tz);
     test_pass(name);
 }
 
@@ -423,7 +423,7 @@ int main(int argc, char** argv) {
     (void)argc;
     (void)argv;
 
-    printf("NOT_STISLA tar.zst streaming search test suite\n");
+    printf("KEYSTONE tar.zst streaming search test suite\n");
     printf("==============================================\n\n");
 
     test_open_close();

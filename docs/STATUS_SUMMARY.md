@@ -1,4 +1,4 @@
-# NOT_STISLA Status Summary
+# KEYSTONE Status Summary
 
 Condensed from DYNAMIC_HOT_PATH_PLAN, FORTRAN_BACKEND_PLAN, IMPROVEMENT_PLAN, OPTIMIZATION_SUMMARY, and PERFORMANCE_ROADMAP.
 
@@ -12,23 +12,23 @@ Condensed from DYNAMIC_HOT_PATH_PLAN, FORTRAN_BACKEND_PLAN, IMPROVEMENT_PLAN, OP
 - Software prefetching (L1 `_MM_HINT_T0`, L2 `_MM_HINT_T1`) for medium/large arrays.
 
 ### Memory
-- `not_stisla_optimize_array_memory()` — transparent huge-page hints via `madvise(MADV_HUGEPAGE)`.
+- `keystone_optimize_array_memory()` — transparent huge-page hints via `madvise(MADV_HUGEPAGE)`.
 - Huge-page gating by size threshold (>1MB); non-fatal on failure.
 - Memory ramp runner (`scripts/run_memory_ramp.sh`) with bounded RAM cap (`MemAvailable` fraction).
 - Zero major page faults in pilot up to 128M rows.
 
 ### Batch & Auto-Selection
-- `not_stisla_search_batch_auto()` — dynamic scalar vs C OpenMP selector.
+- `keystone_search_batch_auto()` — dynamic scalar vs C OpenMP selector.
 - Calibration cache keyed by CPU feature mask, array-size bucket, query-count bucket, thread count.
 - Warmup-excluded median/p95 sampling per candidate path.
 - Static fallback threshold (~16K queries on AVX2 host); auto selector can override with measured timing.
-- p95 exposed in public `not_stisla_backend_decision_t`.
+- p95 exposed in public `keystone_backend_decision_t`.
 - Benchmark matrix runner (`scripts/run_perf_matrix.sh`) with configurable size/query/hit-rate/gap/stride sweeps.
 
 ### Fortran Backend
-- `fortran/not_stisla_batch.f90` exports `not_stisla_batch_search_i64`.
-- C adapter `not_stisla_search_batch_fortran` with `int64_t` ABI.
-- Opt-in build via `NOT_STISLA_ENABLE_FORTRAN=1`.
+- `fortran/keystone_batch.f90` exports `keystone_batch_search_i64`.
+- C adapter `keystone_search_batch_fortran` with `int64_t` ABI.
+- Opt-in build via `KEYSTONE_ENABLE_FORTRAN=1`.
 - Narrow auto-route exception: 8,192 dense sorted stride-1 queries routed to Fortran when faster.
 
 ### Testing & Benchmarks
@@ -57,7 +57,7 @@ Condensed from DYNAMIC_HOT_PATH_PLAN, FORTRAN_BACKEND_PLAN, IMPROVEMENT_PLAN, OP
 - True OS cold-cache testing (behind explicit opt-in because dropping caches affects the whole host).
 
 ### Architecture Candidates (deferred)
-- **AVX-512**: Split into isolated object (`src/not_stisla_avx512.c`), compile only with AVX-512 flags, validate on real AVX-512 hardware.
+- **AVX-512**: Split into isolated object (`src/keystone_avx512.c`), compile only with AVX-512 flags, validate on real AVX-512 hardware.
 - **AMX**: Only investigate after AVX-512 is measured; requires a real tiled integer search design.
 
 ### Profiling & Measurement
