@@ -1,12 +1,74 @@
-# KEYSTONE
+<div align="center">
+
+# BLACKLEDGER
+
+### Precision indexing and high-speed lookup infrastructure for sorted `int64_t` datasets.
 
 [![C](https://img.shields.io/badge/C-11-blue.svg)](https://en.wikipedia.org/wiki/C11_(C_standard_revision))
-[![Fortran](https://img.shields.io/badge/Fortran-90+-purple.svg)](https://en.wikipedia.org/wiki/Fortran)
+[![Fortran](https://img.shields.io/badge/Fortran-90%2B-purple.svg)](https://en.wikipedia.org/wiki/Fortran)
 [![Python](https://img.shields.io/badge/Python-3-yellow.svg)](https://www.python.org/)
+[![SIMD](https://img.shields.io/badge/SIMD-AVX2%20%7C%20AVX--512-black.svg)](https://en.wikipedia.org/wiki/Advanced_Vector_Extensions)
+[![Parallel](https://img.shields.io/badge/Parallel-OpenMP-green.svg)](https://www.openmp.org/)
+[![Archives](https://img.shields.io/badge/Ingestion-tar.zst-orange.svg)](https://facebook.github.io/zstd/)
+[![Platform](https://img.shields.io/badge/Platform-Linux-success.svg)](https://www.kernel.org/)
 [![License](https://img.shields.io/badge/License-AGPL--3.0-red.svg)](LICENSE)
-[![Platform](https://img.shields.io/badge/Platform-Linux-green.svg)](https://www.kernel.org/)
 
-High-performance interpolation search and batch lookup engine for sorted `int64_t` datasets. KEYSTONE combines anchor-guided interpolation search with runtime SIMD detection (AVX2 / AVX-512), OpenMP parallelism, an optional Fortran batch backend, and `.tar.zst` archive ingestion.
+**BLACKLEDGER** is a high-performance database indexing and lookup engine built for precise, repeatable retrieval over sorted 64-bit integer datasets.
+
+It combines anchor-guided interpolation search, adaptive backend selection, SIMD acceleration, OpenMP parallelism, an optional Fortran batch engine, and compressed archive ingestion into a single practical system for serious data infrastructure.
+
+</div>
+
+---
+
+## Mission
+
+Modern databases rarely fail because storage is unavailable. They fail because lookup paths drift, records fragment, indexes become inconsistent, and high-volume datasets become expensive to search reliably.
+
+BLACKLEDGER addresses that layer directly.
+
+It is designed for systems where record identity, index stability, and lookup speed matter at the same time. Instead of treating indexing as a side effect of storage, BLACKLEDGER treats precise indexed retrieval as the core primitive.
+
+---
+
+## What BLACKLEDGER Is
+
+BLACKLEDGER is a functional indexing and lookup engine for sorted `int64_t` datasets. It sits close to the data layer, supporting fast search, batch lookup, telemetry processing, archive-aware ingestion, and performance validation.
+
+It is not a decorative wrapper around a database. It is a low-level search component designed for practical integration into larger systems that need predictable record access.
+
+| Capability | Purpose |
+|---|---|
+| **Anchor-guided interpolation search** | Reduces search work by using learned anchor points across sorted data. |
+| **Single-key lookup** | Supports precise direct search for individual records. |
+| **Batch lookup** | Handles high-volume query workloads efficiently. |
+| **Runtime backend selection** | Chooses the most appropriate search path based on CPU features and workload shape. |
+| **SIMD acceleration** | Uses AVX2 and AVX-512 paths where available. |
+| **OpenMP parallelism** | Scales batch workloads across CPU threads. |
+| **Fortran batch backend** | Provides an optional high-throughput backend for numerical batch processing. |
+| **`.tar.zst` ingestion** | Supports compressed archive workflows and member offset indexing. |
+| **Benchmark suite** | Measures latency, throughput, and backend behavior across dataset profiles. |
+| **Test coverage** | Validates native search, auto backend selection, Fortran support, telemetry processing, archive handling, performance fixes, and enhanced lookup behavior. |
+
+---
+
+## Why It Matters
+
+High-speed lookup is easy to claim and difficult to prove. Real systems need more than a fast happy path.
+
+BLACKLEDGER is built around the problems that appear when datasets become large, query volume increases, and records must remain stable across repeated processing runs.
+
+It is useful where the cost of bad indexing is operationally significant:
+
+- stale or unstable lookup positions;
+- slow batch search over large sorted datasets;
+- duplicated lookup logic across services;
+- poor visibility into backend performance;
+- inconsistent ingestion from compressed archives;
+- weak testability around search behavior;
+- performance claims without reproducible benchmarks.
+
+BLACKLEDGER provides a focused answer: a compact, benchmarkable, database-adjacent indexing engine with multiple execution backends and a clear performance model.
 
 ---
 
@@ -15,256 +77,315 @@ High-performance interpolation search and batch lookup engine for sorted `int64_
 ```mermaid
 flowchart TB
     subgraph Search["Search Pipeline"]
-        Q[Query Key] --> Auto{Auto Backend}
-        Auto -->|Small / Scalar| S[Scalar Interpolation]
-        Auto -->|AVX2| A2[AVX2 Batch]
-        Auto -->|AVX-512| A5[AVX-512 Batch]
-        Auto -->|OpenMP| MP[Parallel Batch]
-        Auto -->|Fortran| FT[Fortran Batch]
-        S --> AT[Anchor Table]
+        Q["Query Key / Query Batch"] --> Auto{"Runtime Backend Selector"}
+        Auto -->|Small Workloads| S["Scalar C Interpolation"]
+        Auto -->|Vector-Capable CPU| A2["AVX2 Batch Path"]
+        Auto -->|Wide Vector CPU| A5["AVX-512 Batch Path"]
+        Auto -->|Large Batch| MP["OpenMP Parallel Path"]
+        Auto -->|Numerical Batch Backend| FT["Fortran Batch Path"]
+        S --> AT["Anchor Table"]
         A2 --> AT
         A5 --> AT
         MP --> AT
         FT --> AT
-        AT --> R[Result Index]
+        AT --> R["Result Index"]
     end
 
-    subgraph Ingestion["Data Ingestion"]
-        RAW[Raw CSV/JSON/Text] --> TZST[.tar.zst Archive]
-        TZST --> TP[Telemetry Processor]
-        TP --> IDX[Member Offset Index]
+    subgraph Ingestion["Archive and Telemetry Ingestion"]
+        RAW["Raw CSV / JSON / Text"] --> TZST[".tar.zst Archive"]
+        TZST --> TP["Telemetry Processor"]
+        TP --> IDX["Member Offset Index"]
         IDX --> AT
     end
 
-    subgraph Config["Runtime Tuning"]
-        CPU[CPU Feature Detect] --> Auto
-        WL[Workload Type] --> CFG[Config Selector]
-        CFG --> S
-        CFG --> A2
-        CFG --> A5
+    subgraph Tuning["Runtime Tuning"]
+        CPU["CPU Feature Detection"] --> Auto
+        WL["Workload Shape"] --> CFG["Configuration Selector"]
+        CFG --> Auto
     end
 ```
 
 ---
 
-## Quick Start
-
-### Build the Library
-
-```bash
-./build.sh
-```
-
-This produces `libkeystone.so` in the repository root with auto-detected AVX2/AVX-512, OpenMP, Fortran, and `tar.zst` support.
-
-### Build Tests & Benchmarks
-
-```bash
-make clean && make all
-```
-
-### Run the Benchmark Suite
-
-```bash
-./benchmark.sh
-```
-
-Results are saved to:
-- `benchmark_results.csv` — raw per-profile measurements
-- `benchmark_comparison.png` — aggregated latency & speedup chart
-
-### Run Tests
-
-```bash
-./bin/test_core_native
-./bin/test_auto_backend
-./bin/test_fortran_backend
-./bin/test_telemetry_processor_perf
-./bin/test_tar_zst
-./bin/test_performance_fix
-./bin/test_enhanced
-```
-
----
-
-## Project Layout
-
-```mermaid
-flowchart LR
-    Root[KEYSTONE Root] --> S[src/]
-    Root --> I[include/]
-    Root --> T[tests/]
-    Root --> B[benchmarks/]
-    Root --> D[docs/]
-    Root --> F[fortran/]
-    Root --> SC[scripts/]
-
-    S --> C1[keystone.c]
-    S --> C2[dsmil_keystone_wrapper.c]
-    S --> C3[dsmil_telemetry_processor.c]
-    S --> C4[keystone_tar_zst.c]
-
-    I --> H1[keystone.h]
-    I --> H2[dsmil_telemetry_processor.h]
-    I --> H3[dsmil_keystone_wrapper.h]
-
-    T --> E1[test_core_native]
-    T --> E2[test_tar_zst]
-    T --> E3[test_auto_backend]
-
-    B --> BM1[dsmil_benchmark]
-    B --> BM2[performance_proof]
-    B --> VIZ[visualize_benchmarks.py]
-
-    F --> F90[keystone_batch.f90]
-    F --> FSO[libkeystone_batch.so]
-
-    SC --> BN[build_native.sh]
-    SC --> CMP[compare_search.c]
-    SC --> CHART[generate_benchmark_chart.py]
-```
-
----
-
-## Core API
-
-### Single Search
-
-```c
-#include "keystone.h"
-
-keystone_anchor_table_t* table = keystone_anchor_table_create();
-keystone_result_t idx = keystone_search(data, n, key, table, 0);
-if (idx != KEYSTONE_NOT_FOUND) { /* found at idx */ }
-keystone_anchor_table_destroy(table);
-```
-
-### Enhanced / Tuned Search
-
-```c
-keystone_config_t cfg;
-keystone_config_init(&cfg, KEYSTONE_WORKLOAD_TELEMETRY);
-keystone_get_tuned_config(n, &cfg);
-
-keystone_result_t idx = keystone_search_enhanced(data, n, key, table, &cfg);
-```
-
-### Batch Search
-
-```c
-keystone_batch_item_t batch[num_queries];
-for (size_t i = 0; i < num_queries; ++i) batch[i].key = queries[i];
-
-size_t found = keystone_search_batch(data, n, batch, num_queries, table, 8, NULL);
-```
-
-### Auto Backend Batch
-
-```c
-keystone_parallel_config_t pc = { .num_threads = 8, .batch_chunk = 256 };
-size_t found = keystone_search_batch_auto(data, n, batch, num_queries, table, 8, &pc);
-```
-
-### tar.zst Archive Search
-
-```c
-#include "dsmil_keystone_wrapper.h"
-
-dsmil_search_context_t* ctx = dsmil_search_create();
-const char* members[] = {"telemetry.csv", "events.json"};
-int ok = dsmil_search_batch_tar_zst(ctx, "data.tar.zst", members, 2, keys, num_keys, results);
-dsmil_search_destroy(ctx);
-```
-
----
-
-## Backend Selection
+## Backend Selection Model
 
 ```mermaid
 flowchart TD
-    Start[Batch Query] --> CheckSize{Array Size?}
-    CheckSize -->|Small| Scalar[Scalar C]
-    CheckSize -->|Large| CheckSIMD{CPU Features?}
+    Start["Incoming Lookup Workload"] --> Mode{"Single or Batch?"}
+    Mode -->|Single| Scalar["Scalar Interpolation Search"]
+    Mode -->|Batch| Size{"Dataset and Batch Size"}
 
-    CheckSIMD -->|AVX-512| AVX5[AVX-512 C]
-    CheckSIMD -->|AVX2| AVX2[AVX2 C]
-    CheckSIMD -->|None| Scalar
+    Size -->|Small / Low Overhead Preferred| Scalar
+    Size -->|Large / Repeated Queries| CPU{"CPU Capabilities"}
 
-    CheckSIMD -->|OpenMP + Large| OMP[OpenMP Parallel]
-    CheckSIMD -->|Fortran Avail| FOR[Fortran Batch]
+    CPU -->|AVX-512 Available| AVX512["AVX-512 Batch Backend"]
+    CPU -->|AVX2 Available| AVX2["AVX2 Batch Backend"]
+    CPU -->|No SIMD Backend| Scalar
 
-    Scalar --> Anchor[Anchor Table / Adaptive Learning]
-    AVX5 --> Anchor
+    CPU -->|Parallel Workload| OMP["OpenMP Parallel Execution"]
+    CPU -->|Fortran Backend Available| FORTRAN["Fortran Batch Execution"]
+
+    Scalar --> Anchor["Anchor Table / Adaptive Learning"]
+    AVX512 --> Anchor
     AVX2 --> Anchor
     OMP --> Anchor
-    FOR --> Anchor
+    FORTRAN --> Anchor
+    Anchor --> Result["Stable Result Index"]
 ```
+
+---
+
+## Data Flow
+
+```mermaid
+flowchart LR
+    Source["Source Dataset"] --> Normalize["Sorted int64_t Keyspace"]
+    Normalize --> Anchor["Anchor-Guided Search Layer"]
+    Anchor --> Backend["Selected Execution Backend"]
+    Backend --> Index["Result Index"]
+    Index --> Consumer["Database / Telemetry / Analysis Consumer"]
+
+    Archive["Compressed Archive"] --> Member["Member Offset Index"]
+    Member --> Anchor
+
+    Bench["Benchmark Harness"] --> Backend
+    Tests["Validation Suite"] --> Anchor
+```
+
+---
+
+## System Profile
+
+| Layer | Function |
+|---|---|
+| **Core search engine** | Performs anchor-guided interpolation search over sorted integer data. |
+| **Adaptive backend layer** | Routes workloads across scalar, SIMD, OpenMP, and Fortran-capable paths. |
+| **Anchor table** | Maintains learned search anchors to improve repeated lookup behavior. |
+| **Batch processing layer** | Executes large query sets efficiently across available acceleration paths. |
+| **Telemetry processor** | Supports structured ingestion and indexed lookup workflows for telemetry-style data. |
+| **Archive interface** | Enables compressed `.tar.zst` workflows without treating archive handling as an afterthought. |
+| **Benchmark harness** | Produces measurable performance evidence rather than vague speed claims. |
+| **Validation suite** | Confirms core behavior, enhanced search, backend selection, archive support, and performance fixes. |
 
 ---
 
 ## Feature Matrix
 
-| Feature | C Scalar | C AVX2 | C AVX-512 | OpenMP | Fortran | tar.zst |
-|---------|----------|--------|-----------|--------|---------|---------|
-| Single search | ✅ | ✅ | ✅ | — | — | — |
-| Batch search | ✅ | ✅ | ✅ | ✅ | ✅ | — |
-| Auto backend | ✅ | ✅ | ✅ | ✅ | ✅ | — |
-| Anchor learning | ✅ | ✅ | ✅ | ✅ | ✅ | — |
-| Archive ingestion | — | — | — | — | — | ✅ |
+| Feature | Scalar C | AVX2 | AVX-512 | OpenMP | Fortran | `.tar.zst` |
+|---|---:|---:|---:|---:|---:|---:|
+| Single search | Yes | Yes | Yes | No | No | No |
+| Batch search | Yes | Yes | Yes | Yes | Yes | No |
+| Auto backend selection | Yes | Yes | Yes | Yes | Yes | No |
+| Anchor learning | Yes | Yes | Yes | Yes | Yes | No |
+| Runtime tuning | Yes | Yes | Yes | Yes | Yes | No |
+| Archive ingestion | No | No | No | No | No | Yes |
+| Member offset indexing | No | No | No | No | No | Yes |
+| Benchmark validation | Yes | Yes | Yes | Yes | Yes | Yes |
+| Linux support | Yes | Yes | Yes | Yes | Yes | Yes |
 
 ---
 
-## Benchmark Example
+## Practical Use Cases
 
-```bash
-$ ./benchmark.sh
-Running KEYSTONE benchmark suite...
-Running profile: 100K_dense
-Running profile: 1M_dense
-Running profile: 1M_jitter
-Running profile: 10M_dense
-Generating benchmark_comparison.png...
-Saved benchmark chart to: benchmark_comparison.png
+### Database Index Acceleration
+
+BLACKLEDGER is suitable for systems that need fast lookup across large sorted integer keyspaces, especially where keys map into record offsets, entity identifiers, telemetry IDs, event IDs, or compressed member indexes.
+
+### Canonical Record Retrieval
+
+When records are normalized into stable integer identifiers, BLACKLEDGER can act as the lookup layer that keeps retrieval fast and repeatable.
+
+### Telemetry and Event Search
+
+Telemetry systems often generate large ordered datasets that must be searched repeatedly. BLACKLEDGER is designed for that access pattern: high-volume lookup, repeatable index resolution, and measurable backend performance.
+
+### Archive-Aware Data Processing
+
+Compressed archive workflows are common in telemetry, exports, backups, and evidence packages. BLACKLEDGER includes `.tar.zst` ingestion support so archive processing can remain close to the indexed lookup model.
+
+### Benchmark-Driven Optimization
+
+The project includes performance tooling intended to compare backend behavior across dense, large, and jittered dataset profiles. This makes it suitable as both functional software and a performance engineering showcase.
+
+### Systems Programming Demonstration
+
+BLACKLEDGER demonstrates practical low-level engineering across C11, optional Fortran, Python-based benchmark visualization, SIMD-aware execution, OpenMP parallelism, compressed archive ingestion, and structured validation.
+
+---
+
+## Performance Orientation
+
+BLACKLEDGER is designed around a simple premise: search performance should be measurable, backend-aware, and reproducible.
+
+The benchmark suite is intended to produce concrete latency and speedup comparisons across workload profiles, including dense datasets, larger million-scale datasets, jittered distributions, and backend-specific behavior.
+
+| Performance Concern | BLACKLEDGER Response |
+|---|---|
+| **Small lookup overhead** | Scalar interpolation remains available where vector or parallel overhead would be wasteful. |
+| **Large batch volume** | SIMD, OpenMP, and Fortran paths provide acceleration options for heavier workloads. |
+| **CPU variability** | Runtime feature detection supports backend selection based on available hardware. |
+| **Repeated lookup behavior** | Anchor learning helps reduce repeated search cost across sorted keyspaces. |
+| **Benchmark credibility** | Dedicated benchmark outputs support reviewable performance claims. |
+
+---
+
+## Repository Structure
+
+```mermaid
+flowchart LR
+    Root["BLACKLEDGER Root"] --> SRC["src/"]
+    Root --> INC["include/"]
+    Root --> TEST["tests/"]
+    Root --> BENCH["benchmarks/"]
+    Root --> DOCS["docs/"]
+    Root --> FORT["fortran/"]
+    Root --> SCRIPTS["scripts/"]
+
+    SRC --> Core["Core Search Engine"]
+    SRC --> Wrapper["Integration Wrapper"]
+    SRC --> Telemetry["Telemetry Processor"]
+    SRC --> Archive["tar.zst Interface"]
+
+    INC --> PublicAPI["Public Headers"]
+    INC --> TelemetryAPI["Telemetry Headers"]
+    INC --> WrapperAPI["Wrapper Headers"]
+
+    TEST --> NativeTest["Native Core Tests"]
+    TEST --> BackendTest["Backend Selection Tests"]
+    TEST --> ArchiveTest["Archive Tests"]
+    TEST --> PerfTest["Performance Tests"]
+
+    BENCH --> Harness["Benchmark Harness"]
+    BENCH --> Proof["Performance Proofing"]
+    BENCH --> Charts["Visualization Tools"]
+
+    FORT --> FBackend["Fortran Batch Backend"]
 ```
 
-Sample output chart (`benchmark_comparison.png`):
-- **Left**: Average latency per backend (ns/op, log scale)
-- **Right**: Average speedup vs binary search
+---
+
+## Technical Showcase Value
+
+BLACKLEDGER is intended to be read as serious software, not a throwaway benchmark experiment.
+
+It showcases:
+
+- low-level search engine design;
+- deterministic lookup over sorted 64-bit keyspaces;
+- adaptive backend dispatch;
+- SIMD-aware systems programming;
+- OpenMP batch parallelism;
+- optional Fortran integration;
+- compressed archive ingestion;
+- telemetry-oriented data handling;
+- benchmark-driven engineering;
+- testable performance claims;
+- practical database-adjacent design.
+
+This makes it suitable for portfolio review, technical demonstration, internal tooling, research infrastructure, and performance-sensitive database support work.
 
 ---
 
-## Environment Variables
+## Intended Users
 
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `KEYSTONE_ENABLE_AVX2` | `auto` | Force-enable/disable AVX2 |
-| `KEYSTONE_ENABLE_AVX512` | `0` | Force-enable AVX-512 |
-| `KEYSTONE_ENABLE_OPENMP` | `1` | Enable OpenMP parallelism |
-| `KEYSTONE_ENABLE_FORTRAN` | `1` | Build/link Fortran backend |
-| `KEYSTONE_ENABLE_TAR_ZST` | `auto` | Enable tar.zst ingestion |
-| `KEYSTONE_FORCE_SCALAR` | `0` | Force scalar-only build |
+BLACKLEDGER is intended for technical users who care about lookup correctness, runtime behavior, and database-adjacent performance.
+
+| User Type | Why It Fits |
+|---|---|
+| **Database engineers** | Useful for fast lookup layers and stable integer keyspaces. |
+| **Systems programmers** | Demonstrates C11, SIMD, OpenMP, Fortran integration, and archive handling. |
+| **Security researchers** | Useful for telemetry, indicator stores, evidence indexes, and high-volume lookup datasets. |
+| **Data engineers** | Supports repeatable indexing before downstream processing or enrichment. |
+| **Performance engineers** | Provides benchmarkable backend behavior across workload shapes. |
+| **Research teams** | Works as a compact foundation for indexed retrieval experiments. |
+
+---
+
+## Quality Model
+
+| Goal | Standard |
+|---|---|
+| **Correctness** | Lookup behavior should remain predictable across supported backends. |
+| **Repeatability** | The same sorted dataset and key should resolve consistently. |
+| **Performance visibility** | Backend performance should be measurable rather than assumed. |
+| **Backend flexibility** | Scalar, SIMD, parallel, and Fortran paths should serve different workload profiles. |
+| **Archive practicality** | Compressed ingestion should integrate with the lookup model rather than exist as a detached helper. |
+| **Operational usefulness** | The system should be practical for real database, telemetry, and analysis workflows. |
 
 ---
 
 ## Requirements
 
-- **Compiler**: GCC or Clang with C11 support
-- **Optional**: `gfortran` (Fortran backend)
-- **Optional**: `libarchive` + `libzstd` (tar.zst support)
-- **Optional**: `pkg-config` (tar.zst auto-detection)
-- **Python**: `numpy`, `matplotlib` (benchmark chart generation)
+| Area | Requirement |
+|---|---|
+| **Operating system** | Linux |
+| **Primary compiler** | GCC or Clang with C11 support |
+| **Optional numerical backend** | Fortran 90+ capable compiler |
+| **Optional archive support** | `libarchive` and `libzstd` |
+| **Optional build detection** | `pkg-config` |
+| **Benchmark visualization** | Python 3 with numerical and plotting support |
+| **Parallel acceleration** | OpenMP-capable compiler/runtime |
+| **Vector acceleration** | AVX2 or AVX-512 capable CPU where available |
+
+---
+
+## Security and Data Handling
+
+BLACKLEDGER is designed for datasets that may be operationally sensitive. Treat inputs, benchmark outputs, generated indexes, and archive contents according to the sensitivity of the source material.
+
+Recommended handling posture:
+
+- do not commit private datasets or generated operational indexes;
+- keep production database credentials outside the repository;
+- validate archive contents before processing untrusted inputs;
+- separate benchmark datasets from real operational data;
+- preserve audit trails where indexed records support legal, investigative, or high-trust decisions;
+- treat indexing errors as data integrity failures, not cosmetic defects.
+
+---
+
+## What BLACKLEDGER Is Not
+
+BLACKLEDGER is not a general spreadsheet sorter, dashboard framework, ORM, database replacement, or broad ETL platform.
+
+It is a focused indexing and lookup component for sorted integer datasets. Its strength is precision, backend-aware performance, and suitability for integration into larger database and telemetry systems.
+
+---
+
+## Roadmap
+
+Planned development areas:
+
+- stronger benchmark reporting;
+- richer backend comparison output;
+- expanded archive ingestion profiles;
+- improved telemetry processor documentation;
+- additional workload profiles for sparse and skewed datasets;
+- clearer integration guidance for database-backed systems;
+- richer validation around index stability;
+- packaging improvements;
+- expanded platform notes;
+- deeper documentation for anchor behavior and tuning.
 
 ---
 
 ## License
 
-**AGPL-3.0-or-later. This is strong copyleft. See [LICENSE](LICENSE) before any commercial use.**
+**AGPL-3.0-or-later. This is strong copyleft. See [LICENSE](LICENSE) before use, modification, redistribution, hosting, or derivative work.**
 
-This project is published as a technical showcase and for home deployment if you so wish, bear me in mind if you want a world class database driving your fancy new framework. Failure to comply will be treated as copyright infringement and pursued to the full extent of the law.
+Network use, redistribution, modification, and derivative use carry obligations. Do not treat this repository as permissive code.
 
+If your intended use is proprietary, closed-source, commercial, hosted, or otherwise incompatible with AGPL compliance, obtain written permission or a separate license from the repository owner first.
+
+Unlicensed use outside the terms of the repository license is not authorized. Respect the license, attribute properly, and do not repackage the work as your own.
+
+For commercial or proprietary licensing discussions, contact the repository owner.
 
 ---
 
-## Repository
+<div align="center">
 
-[https://github.com/SWORDIntel/KEYSTONE](https://github.com/SWORDIntel/KEYSTONE)
+**BLACKLEDGER**  
+Precision indexing. Adaptive lookup. Database discipline.
+
+</div>
