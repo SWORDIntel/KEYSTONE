@@ -15,9 +15,61 @@
 
 **KEYSTONE** is a high-performance database indexing and lookup engine built for precise, repeatable retrieval over sorted 64-bit integer datasets.
 
-It combines anchor-guided interpolation search, adaptive backend selection, SIMD acceleration, OpenMP parallelism, an optional Fortran batch engine, and compressed archive ingestion into a single practical system for serious data infrastructure.
+It combines anchor-guided interpolation search, adaptive backend selection, SIMD-assisted local scans, optional OpenMP parallelism, an optional Fortran batch engine, and compressed archive ingestion into a single practical system for serious data infrastructure.
 
 </div>
+
+---
+
+## Current Status
+
+KEYSTONE is a working native C library and benchmark suite, not just a design note.
+
+| Area | Status |
+|---|---|
+| Core sorted `int64_t` lookup | Implemented and tested |
+| Anchor-guided interpolation search | Implemented and tested |
+| Batch lookup | Implemented and tested |
+| Runtime backend calibration and decision reporting | Implemented and tested |
+| OpenMP batch path | Available when built with OpenMP |
+| Fortran batch backend | Optional; enabled when requested or when the local toolchain supports it |
+| `.tar.zst` archive search | Optional; enabled when `libarchive` and `libzstd` are available |
+| AVX2 small-window scan | Implemented for native x86 builds with AVX2 |
+| AVX-512 path | Build-gated and hardware-dependent; treat as experimental until measured on target silicon |
+
+The default workflow is intentionally native: build on the machine, container image, or CPU family where the code will run, then measure there.
+
+---
+
+## Quick Start
+
+```bash
+make clean
+make test
+```
+
+`make test` builds and runs the available test binaries for the current host. Optional components are included when their local dependencies are present.
+
+For a scalar-only comparison build:
+
+```bash
+make clean
+KEYSTONE_ENABLE_FORTRAN=0 KEYSTONE_ENABLE_TAR_ZST=0 KEYSTONE_FORCE_SCALAR=1 make test
+```
+
+For build-only verification:
+
+```bash
+make tests
+```
+
+For benchmarks:
+
+```bash
+make benchmarks
+./benchmarks/dsmil_benchmark
+./benchmarks/performance_proof
+```
 
 ---
 
@@ -42,9 +94,9 @@ It is not a decorative wrapper around a database. It is a low-level search compo
 | **Anchor-guided interpolation search** | Reduces search work by using learned anchor points across sorted data. |
 | **Single-key lookup** | Supports precise direct search for individual records. |
 | **Batch lookup** | Handles high-volume query workloads efficiently. |
-| **Runtime backend selection** | Chooses the most appropriate search path based on CPU features and workload shape. |
-| **SIMD acceleration** | Uses AVX2 and AVX-512 paths where available. |
-| **OpenMP parallelism** | Scales batch workloads across CPU threads. |
+| **Runtime backend calibration** | Measures viable local backends on first use, caches the fastest decision, and reports the selected path. |
+| **SIMD-assisted search windows** | Uses compiled AVX2 and build-gated AVX-512 scan paths where available. |
+| **OpenMP parallelism** | Scales batch workloads across CPU threads when built with OpenMP. |
 | **Fortran batch backend** | Provides an optional high-throughput backend for numerical batch processing. |
 | **`.tar.zst` ingestion** | Supports compressed archive workflows and member offset indexing. |
 | **Benchmark suite** | Measures latency, throughput, and backend behavior across dataset profiles. |
@@ -77,15 +129,15 @@ KEYSTONE provides a focused answer: a compact, benchmarkable, database-adjacent 
 ```mermaid
 flowchart TB
     subgraph Search["Search Pipeline"]
-        Q["Query Key / Query Batch"] --> Auto{"Runtime Backend Selector"}
-        Auto -->|Small Workloads| S["Scalar C Interpolation"]
-        Auto -->|Vector-Capable CPU| A2["AVX2 Batch Path"]
-        Auto -->|Wide Vector CPU| A5["AVX-512 Batch Path"]
-        Auto -->|Large Batch| MP["OpenMP Parallel Path"]
-        Auto -->|Numerical Batch Backend| FT["Fortran Batch Path"]
+        Q["Query Key / Query Batch"] --> Auto{"Runtime Backend Calibrator"}
+        Auto -->|Single / Small Workloads| S["Scalar Anchor Search"]
+        Auto -->|Sorted Query Batch| CB["Optimized C Batch"]
+        Auto -->|Large Batch + OpenMP| MP["C OpenMP Batch"]
+        Auto -->|Dense Numerical Batch| FT["Optional Fortran Batch"]
+        S --> SIMD["SIMD-Assisted Local Scan<br/>AVX2 / AVX-512 when compiled and available"]
         S --> AT["Anchor Table"]
-        A2 --> AT
-        A5 --> AT
+        CB --> AT
+        SIMD --> AT
         MP --> AT
         FT --> AT
         AT --> R["Result Index"]
@@ -100,8 +152,8 @@ flowchart TB
 
     subgraph Tuning["Runtime Tuning"]
         CPU["CPU Feature Detection"] --> Auto
-        WL["Workload Shape"] --> CFG["Configuration Selector"]
-        CFG --> Auto
+        WL["Workload Shape"] --> Auto
+        CAL["First-Use Local Timing Cache"] --> Auto
     end
 ```
 
@@ -116,20 +168,18 @@ flowchart TD
     Mode -->|Batch| Size{"Dataset and Batch Size"}
 
     Size -->|Small / Low Overhead Preferred| Scalar
-    Size -->|Large / Repeated Queries| CPU{"CPU Capabilities"}
+    Size -->|Sorted Batch| CB["Optimized C Merge-Walk Batch"]
+    Size -->|Large / Repeated Queries| CPU{"Build + Workload Capabilities"}
 
-    CPU -->|AVX-512 Available| AVX512["AVX-512 Batch Backend"]
-    CPU -->|AVX2 Available| AVX2["AVX2 Batch Backend"]
-    CPU -->|No SIMD Backend| Scalar
+    CPU -->|OpenMP Built + Enough Queries| OMP["C OpenMP Batch Execution"]
+    CPU -->|Fortran Built + Dense Sorted Shape| FORTRAN["Fortran Batch Execution"]
+    CPU -->|Otherwise| CB
 
-    CPU -->|Parallel Workload| OMP["OpenMP Parallel Execution"]
-    CPU -->|Fortran Backend Available| FORTRAN["Fortran Batch Execution"]
-
+    OMP --> Cal["Measured Local Calibration"]
+    FORTRAN --> Cal
+    CB --> Cal
     Scalar --> Anchor["Anchor Table / Adaptive Learning"]
-    AVX512 --> Anchor
-    AVX2 --> Anchor
-    OMP --> Anchor
-    FORTRAN --> Anchor
+    Cal --> Anchor
     Anchor --> Result["Stable Result Index"]
 ```
 
@@ -159,7 +209,7 @@ flowchart LR
 | Layer | Function |
 |---|---|
 | **Core search engine** | Performs anchor-guided interpolation search over sorted integer data. |
-| **Adaptive backend layer** | Routes workloads across scalar, SIMD, OpenMP, and Fortran-capable paths. |
+| **Adaptive backend layer** | Calibrates and routes workloads across scalar, optimized C batch, optional OpenMP, and optional Fortran paths. |
 | **Anchor table** | Maintains learned search anchors to improve repeated lookup behavior. |
 | **Batch processing layer** | Executes large query sets efficiently across available acceleration paths. |
 | **Telemetry processor** | Supports structured ingestion and indexed lookup workflows for telemetry-style data. |
@@ -171,17 +221,17 @@ flowchart LR
 
 ## Feature Matrix
 
-| Feature | Scalar C | AVX2 | AVX-512 | OpenMP | Fortran | `.tar.zst` |
+| Feature | Scalar / Anchor C | Optimized C Batch | SIMD Local Scan | OpenMP Batch | Fortran Batch | `.tar.zst` |
 |---|---:|---:|---:|---:|---:|---:|
-| Single search | Yes | Yes | Yes | No | No | No |
-| Batch search | Yes | Yes | Yes | Yes | Yes | No |
-| Auto backend selection | Yes | Yes | Yes | Yes | Yes | No |
-| Anchor learning | Yes | Yes | Yes | Yes | Yes | No |
-| Runtime tuning | Yes | Yes | Yes | Yes | Yes | No |
+| Single search | Yes | No | Yes, inside local windows | No | No | No |
+| Batch search | Yes | Yes | Indirect | Optional | Optional | No |
+| Auto backend calibration | Yes | Yes | Build/runtime detected | Optional measured candidate | Optional measured candidate | No |
+| Anchor learning | Yes | No for merge-walk batch | Yes through scalar path | Per-thread clone path | No | No |
+| Runtime tuning | Yes | Yes | Build/runtime gated | Build gated | Build gated | No |
 | Archive ingestion | No | No | No | No | No | Yes |
 | Member offset indexing | No | No | No | No | No | Yes |
-| Benchmark validation | Yes | Yes | Yes | Yes | Yes | Yes |
-| Linux support | Yes | Yes | Yes | Yes | Yes | Yes |
+| Benchmark validation | Yes | Yes | Partial / host-specific | Yes when built | Yes when built | Yes |
+| Linux support | Yes | Yes | Host-dependent | Compiler/runtime-dependent | Toolchain-dependent | Dependency-dependent |
 
 ---
 
@@ -209,7 +259,7 @@ The project includes performance tooling intended to compare backend behavior ac
 
 ### Systems Programming Demonstration
 
-KEYSTONE demonstrates practical low-level engineering across C11, optional Fortran, Python-based benchmark visualization, SIMD-aware execution, OpenMP parallelism, compressed archive ingestion, and structured validation.
+KEYSTONE demonstrates practical low-level engineering across C11, optional Fortran, Python-based benchmark visualization, SIMD-aware execution, optional OpenMP parallelism, compressed archive ingestion, and structured validation.
 
 ---
 
@@ -222,10 +272,16 @@ The benchmark suite is intended to produce concrete latency and speedup comparis
 | Performance Concern | KEYSTONE Response |
 |---|---|
 | **Small lookup overhead** | Scalar interpolation remains available where vector or parallel overhead would be wasteful. |
-| **Large batch volume** | SIMD, OpenMP, and Fortran paths provide acceleration options for heavier workloads. |
-| **CPU variability** | Runtime feature detection supports backend selection based on available hardware. |
+| **Large batch volume** | Optimized C batch, OpenMP, and optional Fortran paths provide acceleration options for heavier workloads. |
+| **CPU variability** | Runtime feature detection plus first-use timing calibration supports backend selection based on resident hardware. |
 | **Repeated lookup behavior** | Anchor learning helps reduce repeated search cost across sorted keyspaces. |
 | **Benchmark credibility** | Dedicated benchmark outputs support reviewable performance claims. |
+
+### Benchmark Posture
+
+Performance numbers are meaningful only with the host CPU, compiler flags, feature toggles, dataset shape, query hit rate, and warmup policy attached. Treat checked-in benchmark reports as examples of measurement style, not universal guarantees.
+
+For serious comparison, run the benchmark matrix on the target machine and keep the generated CSV/output with the exact build command.
 
 ---
 
@@ -274,7 +330,7 @@ It showcases:
 - deterministic lookup over sorted 64-bit keyspaces;
 - adaptive backend dispatch;
 - SIMD-aware systems programming;
-- OpenMP batch parallelism;
+- optional OpenMP batch parallelism;
 - optional Fortran integration;
 - compressed archive ingestion;
 - telemetry-oriented data handling;
@@ -329,6 +385,39 @@ KEYSTONE is intended for technical users who care about lookup correctness, runt
 
 ---
 
+## Native Tuning Model
+
+KEYSTONE is intentionally built as a native, silicon-tuned component. The
+default Makefile uses `-O3 -march=native` and enables resident CPU paths such as
+AVX2, optional AVX-512, OpenMP, Fortran, and `.tar.zst` support when the local
+toolchain and libraries allow it.
+
+That means the preferred deployment model is to build KEYSTONE on the machine,
+container image, or target CPU family where it will run. It is not trying to
+produce one lowest-common-denominator binary for every host. For reproducible
+comparisons, pin the build flags and optional feature switches explicitly:
+
+```bash
+make clean
+KEYSTONE_ENABLE_FORTRAN=0 KEYSTONE_ENABLE_TAR_ZST=0 KEYSTONE_FORCE_SCALAR=1 make test
+```
+
+For the normal native path:
+
+```bash
+make test
+```
+
+To build without executing tests:
+
+```bash
+make tests
+```
+
+This native posture is deliberate. KEYSTONE favors accurate local dispatch and reproducible local measurement over a single portable binary that hides the silicon-specific behavior.
+
+---
+
 ## Security and Data Handling
 
 KEYSTONE is designed for datasets that may be operationally sensitive. Treat inputs, benchmark outputs, generated indexes, and archive contents according to the sensitivity of the source material.
@@ -376,6 +465,8 @@ Planned development areas:
 Network use, redistribution, modification, and derivative use carry obligations. Do not treat this repository as permissive code.
 
 If your intended use is proprietary, closed-source, commercial, hosted, or otherwise incompatible with AGPL compliance, obtain written permission or a separate license from the repository owner first.
+
+KEYSTONE does not include covert license telemetry or phone-home enforcement. Compliance is enforced through the AGPL license terms, copyright ownership, visible notices, and separate commercial licensing where appropriate.
 
 Unlicensed use outside the terms of the repository license is not authorized. Respect the license, attribute properly, and do not repackage the work as your own.
 

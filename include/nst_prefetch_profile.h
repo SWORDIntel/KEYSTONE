@@ -18,7 +18,7 @@ void _nst_pfp_init_warmup_profile(keystone_anchor_table_t* table);
 void _nst_pfp_evaluate_sync_state(keystone_anchor_table_t* table);
 void _nst_pfp_advance_counter(keystone_stats_t* stats);
 
-/* Fragment contribution for vector lane calibration */
+/* Local contribution for vector lane calibration. */
 void _nst_pfp_contribute_lane_bits(uint64_t* scratch, size_t word_count);
 
 #ifdef __cplusplus

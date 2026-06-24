@@ -7,8 +7,8 @@ Condensed from DYNAMIC_HOT_PATH_PLAN, FORTRAN_BACKEND_PLAN, IMPROVEMENT_PLAN, OP
 ### Core Search & SIMD
 - Scalar C reference path with correctness cross-checks.
 - Runtime CPU feature detection (AVX2, AVX-512, AMX, NEON, SVE).
-- AVX-512 branchless search using `_mm512_cmp_epi64_mask` (~1.3–1.4x on small arrays).
-- AVX2 chunked search path.
+- AVX2 local scan path for small search windows when built for x86 AVX2.
+- AVX-512 local scan path is build-gated and should be treated as target-silicon experimental until measured on real AVX-512 hardware.
 - Software prefetching (L1 `_MM_HINT_T0`, L2 `_MM_HINT_T1`) for medium/large arrays.
 
 ### Memory
@@ -18,21 +18,20 @@ Condensed from DYNAMIC_HOT_PATH_PLAN, FORTRAN_BACKEND_PLAN, IMPROVEMENT_PLAN, OP
 - Zero major page faults in pilot up to 128M rows.
 
 ### Batch & Auto-Selection
-- `keystone_search_batch_auto()` — dynamic scalar vs C OpenMP selector.
+- `keystone_search_batch_auto()` — first-use local calibration across viable scalar/C batch, OpenMP, and Fortran candidates.
 - Calibration cache keyed by CPU feature mask, array-size bucket, query-count bucket, thread count.
-- Warmup-excluded median/p95 sampling per candidate path.
-- Static fallback threshold (~16K queries on AVX2 host); auto selector can override with measured timing.
-- p95 exposed in public `keystone_backend_decision_t`.
+- Static fallback remains for invalid/uncalibrated fallback cases, but normal uncached decisions use measured median/p95 timing.
+- p95 field exposed in public `keystone_backend_decision_t` from calibration samples or cached measured values.
 - Benchmark matrix runner (`scripts/run_perf_matrix.sh`) with configurable size/query/hit-rate/gap/stride sweeps.
 
 ### Fortran Backend
 - `fortran/keystone_batch.f90` exports `keystone_batch_search_i64`.
 - C adapter `keystone_search_batch_fortran` with `int64_t` ABI.
-- Opt-in build via `KEYSTONE_ENABLE_FORTRAN=1`.
-- Narrow auto-route exception: 8,192 dense sorted stride-1 queries routed to Fortran when faster.
+- Optional native build: enabled explicitly with `KEYSTONE_ENABLE_FORTRAN=1`, or auto-enabled by the Makefile when `gfortran` is present unless `KEYSTONE_ENABLE_FORTRAN=0`.
+- Narrow auto-route exception for dense sorted query shapes within the configured query-count window.
 
 ### Testing & Benchmarks
-- Correctness tests for scalar, batch, parallel, and Fortran paths.
+- Correctness tests for scalar, batch, parallel API behavior, optional Fortran paths, and archive handling.
 - Deterministic hit/miss profiles (100/75/50/25/0%).
 - Gap profiles: dense, sparse, jittered.
 - Stride profiles: sequential, strided, random.
@@ -58,7 +57,7 @@ Condensed from DYNAMIC_HOT_PATH_PLAN, FORTRAN_BACKEND_PLAN, IMPROVEMENT_PLAN, OP
 
 ### Architecture Candidates (deferred)
 - **AVX-512**: Split into isolated object (`src/keystone_avx512.c`), compile only with AVX-512 flags, validate on real AVX-512 hardware.
-- **AMX**: Only investigate after AVX-512 is measured; requires a real tiled integer search design.
+- **AMX**: CPU feature detection exists, but no AMX search backend should be claimed until there is a real tiled integer search design.
 
 ### Profiling & Measurement
 - Tune prefetch distance per workload instead of global fixed distance.

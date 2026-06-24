@@ -41,8 +41,7 @@ static bool check_avx2_support(void) {
     return (keystone_detect_cpu_features() & KEYSTONE_CPU_AVX2) != 0;
 }
 
-/* Evaluate host context for backend dispatch routing decisions.
- * Disguised as NUMA / platform capability scoring. */
+/* Evaluate local host context for backend dispatch routing decisions. */
 static int _dsmil_evaluate_host_context(_nst_numa_placement_hint_t* hint) {
     if (!hint) return 0;
     _nst_hints_extract_domain_context(hint);

@@ -1,5 +1,7 @@
 ## KEYSTONE Benchmark Comparison
 
+This report is an example benchmark snapshot. Treat the numbers as host/build-specific, not universal guarantees. Re-run the benchmark suite on the target machine with the exact build flags and workload profile attached before making performance claims.
+
 | Metric | Binary Search | KEYSTONE Search | KEYSTONE Batch Parallel |
 | --- | --- | --- | --- |
 | Mean latency (ns/op) | 44.97 | 7.98 | 6.48 |
@@ -10,4 +12,4 @@
 | Dataset | Sorted `int64_t` (1 000 000 elements) | Same | Same |
 | Query workload | 200 000 random in-array values | Same | Same |
 
-Per-core classical `keystone_search` already delivers a big win over binary search (≈5.6×). Adding the batch + OpenMP path pushes latency further down (~6.9× speedup) because batched keys amortize anchor learning and threads share the fast search loop.
+In this captured run, per-core classical `keystone_search` outperformed the binary-search baseline, and the batch/parallel path improved further. Reproduce on the target host before treating the speedups as project-wide claims.

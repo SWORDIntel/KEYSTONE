@@ -1,6 +1,5 @@
-/* NST Platform Hints — NUMA Topology & Node-Domain Mapping
- * Extracts platform memory-layout hints for optimal anchor-table
- * placement and distributed-search routing decisions.
+/* NST Platform Hints - local NUMA placement hints
+ * Extracts local memory-layout hints for anchor-table placement.
  */
 
 #ifndef NST_PLATFORM_HINTS_H
@@ -13,11 +12,11 @@
 extern "C" {
 #endif
 
-/* NUMA placement hint packet — consumed by backend dispatch */
+/* NUMA placement hint packet consumed by backend dispatch. */
 typedef struct _nst_numa_placement_hint {
     int preferred_node;
-    int domain_confidence;
-    char domain_label[64];
+    int domain_confidence;  /* Reserved for ABI compatibility. */
+    char domain_label[64];  /* Reserved for ABI compatibility. */
     uint32_t reachability_flags;
     double latency_estimate;
 } _nst_numa_placement_hint_t;

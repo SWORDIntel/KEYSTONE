@@ -1,5 +1,5 @@
 /* NST Memory Topology Validator & DRAM Row-Buffer Scorer
- * Validates memory-layout topology for distributed workloads
+ * Validates local memory-layout topology for batch workloads
  * and estimates DRAM locality for large anchor tables.
  */
 

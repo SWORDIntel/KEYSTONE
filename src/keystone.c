@@ -1358,6 +1358,7 @@ static _Atomic int g_last_backend_decision_valid = 0;
 #define KEYSTONE_AUTO_FORTRAN_MIN_ITEMS 4096
 #define KEYSTONE_AUTO_FORTRAN_MAX_ITEMS 16384
 #define KEYSTONE_AUTO_FORTRAN_MAX_AVG_STEP 4.0L
+#define KEYSTONE_AUTO_CALIBRATION_RUNS 3
 
 enum {
     KEYSTONE_AUTO_QUERY_GENERAL = 0,
@@ -1591,6 +1592,181 @@ static keystone_backend_t keystone_static_auto_backend(size_t n,
     return KEYSTONE_BACKEND_C_OPENMP;
 }
 
+typedef struct keystone_backend_measurement {
+    keystone_backend_t backend;
+    double median_ns_per_key;
+    double p95_ns_per_key;
+    size_t found;
+    int valid;
+} keystone_backend_measurement_t;
+
+static size_t keystone_run_auto_backend_candidate(
+    keystone_backend_t backend,
+    const int64_t* arr,
+    size_t n,
+    keystone_batch_item_t* items,
+    size_t num_items,
+    size_t tol,
+    const keystone_parallel_config_t* config
+) {
+    if (backend == KEYSTONE_BACKEND_C_OPENMP) {
+        return keystone_search_parallel(arr, n, items, num_items, NULL, tol, config);
+    }
+    if (backend == KEYSTONE_BACKEND_FORTRAN) {
+        return keystone_search_batch_fortran(arr, n, items, num_items);
+    }
+    return keystone_search_batch_c_optimized(arr, n, items, num_items, NULL, tol);
+}
+
+static void keystone_sort_three_doubles(double values[KEYSTONE_AUTO_CALIBRATION_RUNS]) {
+    for (size_t i = 1; i < KEYSTONE_AUTO_CALIBRATION_RUNS; ++i) {
+        double v = values[i];
+        size_t j = i;
+        while (j > 0 && values[j - 1] > v) {
+            values[j] = values[j - 1];
+            --j;
+        }
+        values[j] = v;
+    }
+}
+
+static int keystone_measure_auto_backend(
+    keystone_backend_t backend,
+    const int64_t* arr,
+    size_t n,
+    const keystone_batch_item_t* original_items,
+    size_t num_items,
+    size_t tol,
+    const keystone_parallel_config_t* config,
+    size_t expected_found,
+    keystone_backend_measurement_t* measurement
+) {
+    if (!measurement) {
+        return 0;
+    }
+
+    measurement->backend = backend;
+    measurement->median_ns_per_key = 0.0;
+    measurement->p95_ns_per_key = 0.0;
+    measurement->found = 0;
+    measurement->valid = 0;
+
+    keystone_batch_item_t* scratch = malloc(num_items * sizeof(keystone_batch_item_t));
+    if (!scratch) {
+        return 0;
+    }
+
+    double samples[KEYSTONE_AUTO_CALIBRATION_RUNS] = {0.0, 0.0, 0.0};
+    size_t found = 0;
+
+    for (size_t run = 0; run < KEYSTONE_AUTO_CALIBRATION_RUNS; ++run) {
+        memcpy(scratch, original_items, num_items * sizeof(keystone_batch_item_t));
+        const uint64_t start_ns = keystone_now_ns();
+        found = keystone_run_auto_backend_candidate(
+            backend,
+            arr,
+            n,
+            scratch,
+            num_items,
+            tol,
+            config
+        );
+        const uint64_t end_ns = keystone_now_ns();
+
+        if (expected_found != SIZE_MAX && found != expected_found) {
+            free(scratch);
+            return 0;
+        }
+
+        samples[run] = keystone_elapsed_ns_per_key(start_ns, end_ns, num_items);
+        if (samples[run] <= 0.0) {
+            free(scratch);
+            return 0;
+        }
+    }
+
+    free(scratch);
+
+    keystone_sort_three_doubles(samples);
+    measurement->median_ns_per_key = samples[KEYSTONE_AUTO_CALIBRATION_RUNS / 2];
+    measurement->p95_ns_per_key = samples[KEYSTONE_AUTO_CALIBRATION_RUNS - 1];
+    measurement->found = found;
+    measurement->valid = 1;
+    return 1;
+}
+
+static keystone_backend_measurement_t keystone_calibrate_auto_backend(
+    const int64_t* arr,
+    size_t n,
+    const keystone_batch_item_t* items,
+    size_t num_items,
+    size_t tol,
+    const keystone_parallel_config_t* config,
+    int thread_count,
+    int query_shape
+) {
+    keystone_backend_measurement_t best = {
+        KEYSTONE_BACKEND_SCALAR,
+        0.0,
+        0.0,
+        0,
+        0
+    };
+    keystone_backend_measurement_t current;
+
+    if (!keystone_measure_auto_backend(
+            KEYSTONE_BACKEND_SCALAR,
+            arr,
+            n,
+            items,
+            num_items,
+            tol,
+            config,
+            SIZE_MAX,
+            &best)) {
+        best.backend = keystone_static_auto_backend(n, num_items, config, thread_count, query_shape);
+        return best;
+    }
+
+#ifdef _OPENMP
+    if (!keystone_auto_scalar_fast_path(num_items, config, thread_count) &&
+        n >= KEYSTONE_AUTO_PARALLEL_MIN_ARRAY &&
+        keystone_measure_auto_backend(
+            KEYSTONE_BACKEND_C_OPENMP,
+            arr,
+            n,
+            items,
+            num_items,
+            tol,
+            config,
+            best.found,
+            &current) &&
+        current.median_ns_per_key < best.median_ns_per_key) {
+        best = current;
+    }
+#else
+    (void)current;
+#endif
+
+    if (query_shape == KEYSTONE_AUTO_QUERY_FORTRAN_MERGE &&
+        keystone_fortran_backend_available() &&
+        keystone_measure_auto_backend(
+            KEYSTONE_BACKEND_FORTRAN,
+            arr,
+            n,
+            items,
+            num_items,
+            tol,
+            config,
+            best.found,
+            &current) &&
+        current.median_ns_per_key < best.median_ns_per_key) {
+        best = current;
+    }
+
+    return best;
+}
+
 size_t keystone_search_batch_auto(const int64_t* arr,
                                     size_t n,
                                     keystone_batch_item_t* items,
@@ -1648,7 +1824,19 @@ size_t keystone_search_batch_auto(const int64_t* arr,
         cached_ns_per_key = cached_decision.estimated_ns_per_key;
         cached_p95_ns_per_key = cached_decision.p95_ns_per_key;
     } else {
-        selected_backend = keystone_static_auto_backend(n, num_items, config, thread_count, query_shape);
+        keystone_backend_measurement_t measured = keystone_calibrate_auto_backend(
+            arr,
+            n,
+            items,
+            num_items,
+            tol,
+            config,
+            thread_count,
+            query_shape
+        );
+        selected_backend = measured.backend;
+        cached_ns_per_key = measured.median_ns_per_key;
+        cached_p95_ns_per_key = measured.p95_ns_per_key;
         keystone_store_backend_cache(
             cpu_features,
             array_size_bucket,

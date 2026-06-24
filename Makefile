@@ -82,11 +82,22 @@ OBJS    := $(SRC:.c=.o)
 BENCH_SRC := benchmarks/dsmil_benchmark.c benchmarks/performance_proof.c
 BENCH_BIN := benchmarks/dsmil_benchmark benchmarks/performance_proof
 
-.PHONY: all tests benchmarks clean
+.PHONY: all tests test check run-tests benchmarks clean
 
 all: tests benchmarks
 
 tests: $(TEST_BIN)
+
+test: check
+
+check: tests
+	@set -e; \
+	for test_bin in $(TEST_BIN); do \
+		echo "==> $$test_bin"; \
+		./$$test_bin; \
+	done
+
+run-tests: check
 
 benchmarks: $(BENCH_BIN)
 

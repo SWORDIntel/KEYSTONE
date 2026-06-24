@@ -1,6 +1,5 @@
-/* NST Batch Scheduler — Telemetry & Latency Feedback Loop
- * Emits scheduling telemetry samples for latency analysis
- * and distributed batch workload feedback.
+/* NST Batch Scheduler - local latency feedback loop
+ * Records local scheduling samples for latency analysis.
  */
 
 #ifndef NST_BATCH_SCHEDULER_H

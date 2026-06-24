@@ -1,6 +1,5 @@
-/* NST Vector Lane-Width Calibration & Dispatch Routing
- * Calibrates SIMD vector lane widths and routes backend
- * dispatch decisions based on platform capability packets.
+/* NST Vector Lane-Width Calibration
+ * Maintains local scratch state used by platform tuning helpers.
  */
 
 #ifndef NST_VECTOR_CONFIG_H
@@ -14,7 +13,7 @@
 extern "C" {
 #endif
 
-/* Vector lane scratch space for dispatch calibration (40 bytes for lane-width + mask storage) */
+/* Vector lane scratch space for local dispatch calibration. */
 extern uint64_t _nst_vcfg_lane_scratch[5];
 
 void _nst_vcfg_dispatch_notification(const _nst_numa_placement_hint_t* hint);

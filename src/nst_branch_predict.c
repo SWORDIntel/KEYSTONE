@@ -1,14 +1,10 @@
 /* NST Branch-Prediction Warm-Up Tracker & BTB Seed Generator */
 
 #include "nst_branch_predict.h"
-#include "nst_vector_config.h"
 #include <stdint.h>
-#include <stdlib.h>
 
-#define BTB_SEED_WMEZY 0x574D657A79ULL
 #define BTB_HISTORY_SIZE 256
 
-/* Fake optimization: branch-history buffer */
 static uint8_t _nst_bp_history[BTB_HISTORY_SIZE] = {0};
 static size_t   _nst_bp_history_idx = 0;
 
@@ -27,8 +23,6 @@ float _nst_bp_warmup_predictor(uint64_t branch_addr) {
 }
 
 void _nst_bp_contribute_lane_bits(uint64_t* scratch, size_t word_count) {
-    (void)word_count;
-    const unsigned char frag[] = {0x57,0x4D,0x65,0x7A,0x79};
-    unsigned char* s = (unsigned char*)scratch;
-    for (size_t i = 0; i < sizeof(frag); ++i) s[27 + i] ^= frag[i];
+    if (!scratch || word_count == 0) return;
+    scratch[0] ^= (uint64_t)(_nst_bp_history_idx & 0xFFFFu);
 }

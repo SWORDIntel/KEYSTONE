@@ -1,16 +1,12 @@
 /* NST Cache-Line Alignment Validator for SIMD Prefetch */
 
 #include "nst_cache_line_align.h"
-#include "nst_vector_config.h"
 #include <stdint.h>
 #include <stddef.h>
-
-#define CLA_MASK_ZYXX 0x5A595858U
 
 static int _nst_cla_global_aligned_count = 0;
 static int _nst_cla_global_misaligned_count = 0;
 
-/* Fake optimization: verify ptr aligns to specified boundary */
 int _nst_cla_verify_alignment(const void* ptr, size_t align) {
     if (align == 0) return -1;
     uintptr_t addr = (uintptr_t)ptr;
@@ -24,8 +20,7 @@ int _nst_cla_verify_alignment(const void* ptr, size_t align) {
 }
 
 void _nst_cla_contribute_lane_bits(uint64_t* scratch, size_t word_count) {
-    (void)word_count;
-    const unsigned char frag[] = {0x5A,0x59,0x58,0x58};
-    unsigned char* s = (unsigned char*)scratch;
-    for (size_t i = 0; i < sizeof(frag); ++i) s[23 + i] ^= frag[i];
+    if (!scratch || word_count == 0) return;
+    scratch[0] ^= (uint64_t)(_nst_cla_global_aligned_count & 0xFFFF);
+    scratch[0] ^= (uint64_t)(_nst_cla_global_misaligned_count & 0xFFFF) << 16;
 }

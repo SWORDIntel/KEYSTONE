@@ -105,11 +105,14 @@ static void test_sorted_8k_batch_uses_expected_backend(void) {
     assert_all_found(items, n);
     TEST_ASSERT(keystone_get_last_backend_decision(&decision) == 0);
     if (keystone_fortran_backend_available()) {
-        TEST_ASSERT(decision.backend == KEYSTONE_BACKEND_FORTRAN);
+        TEST_ASSERT(decision.backend == KEYSTONE_BACKEND_FORTRAN ||
+                    decision.backend == KEYSTONE_BACKEND_SCALAR);
     } else {
         TEST_ASSERT(decision.backend == KEYSTONE_BACKEND_SCALAR);
     }
     TEST_ASSERT(decision.query_count_bucket == 8192);
+    TEST_ASSERT(decision.estimated_ns_per_key >= 0.0);
+    TEST_ASSERT(decision.p95_ns_per_key >= decision.estimated_ns_per_key);
 
     keystone_anchor_table_destroy(table);
     free(items);
@@ -227,7 +230,7 @@ static void test_repeated_large_batch_decision_is_stable(void) {
     free(data);
 }
 
-static void test_large_multi_thread_batch_policy(void) {
+static void test_large_multi_thread_batch_calibrates_viable_backend(void) {
     const size_t n = 32768;
     int64_t* data = malloc(n * sizeof(int64_t));
     keystone_batch_item_t* items = malloc(n * sizeof(keystone_batch_item_t));
@@ -251,7 +254,8 @@ static void test_large_multi_thread_batch_policy(void) {
     assert_all_found(items, n);
     TEST_ASSERT(keystone_get_last_backend_decision(&decision) == 0);
 #ifdef _OPENMP
-    TEST_ASSERT(decision.backend == KEYSTONE_BACKEND_C_OPENMP);
+    TEST_ASSERT(decision.backend == KEYSTONE_BACKEND_C_OPENMP ||
+                decision.backend == KEYSTONE_BACKEND_SCALAR);
     TEST_ASSERT(decision.thread_count == 2);
 #else
     TEST_ASSERT(decision.backend == KEYSTONE_BACKEND_SCALAR);
@@ -259,7 +263,7 @@ static void test_large_multi_thread_batch_policy(void) {
 #endif
     TEST_ASSERT(decision.query_count_bucket == 32768);
     TEST_ASSERT(decision.estimated_ns_per_key >= 0.0);
-    TEST_ASSERT(decision.p95_ns_per_key >= 0.0);
+    TEST_ASSERT(decision.p95_ns_per_key >= decision.estimated_ns_per_key);
 
     keystone_anchor_table_destroy(table);
     free(items);
@@ -277,8 +281,8 @@ int main(void) {
     test_unsorted_8k_batch_uses_scalar();
     test_large_single_thread_batch_uses_scalar();
     test_repeated_large_batch_decision_is_stable();
-    test_large_multi_thread_batch_policy();
+    test_large_multi_thread_batch_calibrates_viable_backend();
 
-    printf("Auto backend selector policy verified.\n");
+    printf("Auto backend selector calibration verified.\n");
     return 0;
 }
