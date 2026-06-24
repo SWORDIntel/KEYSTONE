@@ -1,0 +1,184 @@
+"""
+Train the KEYSTONE micro-model classifier on a sample of real research data.
+Reads N records from .gz JSONL files, extracts features from context fields,
+labels them by job role / industry, trains a 256->64->3 DNN, exports weights
+to include/dsmil_model_weights.h.
+"""
+
+import gzip, json, sys, os, struct, random
+import numpy as np
+
+VAULT = "/vault/archives/CONSOLIDATED/RESEARCH_DATA/gz"
+SAMPLE_PER_FILE = 500
+MAX_FILES = 4
+INPUT_DIM = 256
+HIDDEN_DIM = 64
+NUM_CLASSES = 3
+EPOCHS = 200
+LR = 0.01
+
+# Class labels matching dsmil_micro_model.h
+# CLASS_GENERIC=0, CLASS_FINANCIAL=1, CLASS_CORPORATE=2
+FINANCIAL_ROLES = {"finance","accounting","operations","legal","purchasing"}
+CORPORATE_ROLES = {"cxo","director","vp","manager","owner","president","partner"}
+
+def classify_record(r):
+    role = (r.get("job_title_role") or "").lower()
+    level = " ".join(r.get("job_title_levels") or []).lower()
+    industry = (r.get("industry") or "").lower()
+    salary = r.get("inferred_salary") or ""
+
+    if role in FINANCIAL_ROLES or "financial" in industry or "banking" in industry:
+        return 1  # FINANCIAL
+    if role in CORPORATE_ROLES or any(l in level for l in ["cxo","vp","director","c-suite"]):
+        return 2  # CORPORATE
+    return 0  # GENERIC
+
+def hash_trigram(a, b, c):
+    h = 2166136261
+    for x in (a, b, c):
+        h = ((h ^ ord(x)) * 16777619) & 0xFFFFFFFF
+    return h % INPUT_DIM
+
+def extract_features(text):
+    vec = np.zeros(INPUT_DIM, dtype=np.float32)
+    t = str(text).lower()
+    for i in range(len(t) - 2):
+        idx = hash_trigram(t[i], t[i+1], t[i+2])
+        vec[idx] += 1.0
+    s = vec.sum()
+    if s > 0:
+        vec /= s
+    return vec
+
+def record_to_features(r):
+    # Simulate context window: concatenate surrounding text fields
+    context = " ".join(filter(None, [
+        r.get("job_title"), r.get("industry"),
+        r.get("job_company_name"), r.get("job_company_industry"),
+        r.get("location_name"), r.get("summary"),
+        " ".join(r.get("job_title_levels") or [])
+    ]))
+    return extract_features(context)
+
+# --- Load sample ---
+print("Sampling records...")
+X, y = [], []
+gz_files = sorted([f for f in os.listdir(VAULT) if f.endswith(".gz")])[:MAX_FILES]
+
+for fname in gz_files:
+    path = os.path.join(VAULT, fname)
+    print(f"  {fname}...", end=" ", flush=True)
+    sampled = 0
+    with gzip.open(path, "rt", encoding="utf-8", errors="replace") as f:
+        lines = f.readlines()
+    
+    random.shuffle(lines)
+    for line in lines[:SAMPLE_PER_FILE]:
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            r = json.loads(line)
+            X.append(record_to_features(r))
+            y.append(classify_record(r))
+            sampled += 1
+        except:
+            pass
+    print(f"{sampled} records")
+
+X = np.array(X, dtype=np.float32)
+y = np.array(y, dtype=np.int32)
+print(f"\nTotal: {len(X)} samples | Class dist: {np.bincount(y)}")
+
+# --- Train (simple SGD with mini-batches) ---
+np.random.seed(42)
+W1 = np.random.randn(INPUT_DIM, HIDDEN_DIM).astype(np.float32) * 0.1
+B1 = np.zeros(HIDDEN_DIM, dtype=np.float32)
+W2 = np.random.randn(HIDDEN_DIM, NUM_CLASSES).astype(np.float32) * 0.1
+B2 = np.zeros(NUM_CLASSES, dtype=np.float32)
+
+def relu(x): return np.maximum(0, x)
+def softmax(x):
+    e = np.exp(x - x.max(axis=1, keepdims=True))
+    return e / e.sum(axis=1, keepdims=True)
+
+print("\nTraining...")
+n = len(X)
+for epoch in range(EPOCHS):
+    idx = np.random.permutation(n)
+    Xs, ys = X[idx], y[idx]
+    batch_size = 32
+    total_loss = 0
+
+    for i in range(0, n, batch_size):
+        Xb = Xs[i:i+batch_size]
+        yb = ys[i:i+batch_size]
+
+        # Forward
+        h = relu(Xb @ W1 + B1)
+        logits = h @ W2 + B2
+        probs = softmax(logits)
+
+        # Loss (cross-entropy)
+        m = len(yb)
+        loss = -np.log(probs[np.arange(m), yb] + 1e-9).mean()
+        total_loss += loss
+
+        # Backward
+        dlogits = probs.copy()
+        dlogits[np.arange(m), yb] -= 1
+        dlogits /= m
+
+        dW2 = h.T @ dlogits
+        dB2 = dlogits.sum(axis=0)
+        dh = dlogits @ W2.T
+        dh[h <= 0] = 0  # ReLU gradient
+
+        dW1 = Xb.T @ dh
+        dB1 = dh.sum(axis=0)
+
+        W2 -= LR * dW2
+        B2 -= LR * dB2
+        W1 -= LR * dW1
+        B1 -= LR * dB1
+
+    if epoch % 50 == 0:
+        h = relu(X @ W1 + B1)
+        probs = softmax(h @ W2 + B2)
+        acc = (probs.argmax(axis=1) == y).mean()
+        print(f"  Epoch {epoch:3d} | loss={total_loss/n:.4f} | acc={acc:.3f}")
+
+# Final accuracy
+h = relu(X @ W1 + B1)
+probs = softmax(h @ W2 + B2)
+acc = (probs.argmax(axis=1) == y).mean()
+print(f"\nFinal accuracy: {acc:.3f}")
+
+# --- Export weights ---
+out_path = os.path.join(os.path.dirname(__file__), "../include/dsmil_model_weights.h")
+with open(out_path, "w") as f:
+    f.write("/* AUTO-GENERATED by scripts/train_from_sample.py — DO NOT EDIT */\n")
+    f.write("#ifndef DSMIL_MODEL_WEIGHTS_H\n#define DSMIL_MODEL_WEIGHTS_H\n\n")
+
+    f.write(f"static const float MODEL_W1[{INPUT_DIM}][{HIDDEN_DIM}] = {{\n")
+    for row in W1:
+        f.write("    {" + ", ".join(f"{x:.6f}f" for x in row) + "},\n")
+    f.write("};\n\n")
+
+    f.write(f"static const float MODEL_B1[{HIDDEN_DIM}] = {{")
+    f.write(", ".join(f"{x:.6f}f" for x in B1))
+    f.write("};\n\n")
+
+    f.write(f"static const float MODEL_W2[{HIDDEN_DIM}][{NUM_CLASSES}] = {{\n")
+    for row in W2:
+        f.write("    {" + ", ".join(f"{x:.6f}f" for x in row) + "},\n")
+    f.write("};\n\n")
+
+    f.write(f"static const float MODEL_B2[{NUM_CLASSES}] = {{")
+    f.write(", ".join(f"{x:.6f}f" for x in B2))
+    f.write("};\n\n")
+
+    f.write("#endif\n")
+
+print(f"Weights written to {out_path}")
