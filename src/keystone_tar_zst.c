@@ -873,6 +873,11 @@ keystone_result_t keystone_tar_zst_search_indexed(
         return KEYSTONE_NOT_FOUND;
     }
 
+    /* Quick-reject via bounds check */
+    if (key < entry->first_key || key > entry->last_key) {
+        return KEYSTONE_NOT_FOUND;
+    }
+
     /* Quick-reject via Bloom filter (avoids decompression on negative) */
     if (entry->bloom && !tar_zst_bloom_may_contain(entry->bloom, key)) {
         return KEYSTONE_NOT_FOUND;
