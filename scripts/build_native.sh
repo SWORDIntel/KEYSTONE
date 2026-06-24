@@ -130,16 +130,19 @@ gcc $NATIVE_CFLAGS -Wall -Wextra -I./include -c benchmarks/dsmil_benchmark.c || 
 echo "Compiling benchmarks/performance_proof.c..."
 gcc $NATIVE_CFLAGS -Wall -Wextra -I./include -c benchmarks/performance_proof.c || { echo "performance_proof.c compilation failed"; exit 1; }
 
+echo "Compiling benchmarks/benchmark_writer.c..."
+gcc $NATIVE_CFLAGS -Wall -Wextra -I./include -c benchmarks/benchmark_writer.c || { echo "benchmark_writer.c compilation failed"; exit 1; }
+
 # Link benchmarks
 echo "Linking benchmarks/dsmil_benchmark..."
-gcc -o benchmarks/dsmil_benchmark dsmil_benchmark.o keystone.o dsmil_keystone_wrapper.o dsmil_telemetry_processor.o keystone_tar_zst.o -lm $OPENMP_LDFLAGS $BENCHMARK_FORTRAN_LDFLAGS $TAR_ZST_LDFLAGS || { echo "dsmil_benchmark linking failed"; exit 1; }
+gcc -o benchmarks/dsmil_benchmark dsmil_benchmark.o keystone.o dsmil_keystone_wrapper.o dsmil_telemetry_processor.o keystone_tar_zst.o benchmark_writer.o -lm $OPENMP_LDFLAGS $BENCHMARK_FORTRAN_LDFLAGS $TAR_ZST_LDFLAGS || { echo "dsmil_benchmark linking failed"; exit 1; }
 
 echo "Linking benchmarks/performance_proof..."
-gcc -o benchmarks/performance_proof performance_proof.o keystone.o dsmil_keystone_wrapper.o dsmil_telemetry_processor.o keystone_tar_zst.o -lm $OPENMP_LDFLAGS $BENCHMARK_FORTRAN_LDFLAGS $TAR_ZST_LDFLAGS || { echo "performance_proof linking failed"; exit 1; }
+gcc -o benchmarks/performance_proof performance_proof.o keystone.o dsmil_keystone_wrapper.o dsmil_telemetry_processor.o keystone_tar_zst.o benchmark_writer.o -lm $OPENMP_LDFLAGS $BENCHMARK_FORTRAN_LDFLAGS $TAR_ZST_LDFLAGS || { echo "performance_proof linking failed"; exit 1; }
 
 echo "Building scripts/compare_search_auto..."
 gcc $NATIVE_CFLAGS $OPENMP_CFLAGS -Wall -Wextra -I. -I./include -DKEYSTONE_BENCH_AUTO=1 $FORTRAN_CFLAGS \
-    scripts/compare_search.c keystone.o \
+    scripts/compare_search.c keystone.o benchmark_writer.o \
     -lm $OPENMP_LDFLAGS $BENCHMARK_FORTRAN_LDFLAGS \
     -o scripts/compare_search_auto || { echo "compare_search_auto build failed"; exit 1; }
 

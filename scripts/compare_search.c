@@ -12,22 +12,6 @@ typedef struct { int64_t key; } query_t;
 #define KEYSTONE_BENCH_AUTO 0
 #endif
 
-#if KEYSTONE_BENCH_AUTO
-static const char* backend_name(keystone_backend_t backend) {
-    switch (backend) {
-        case KEYSTONE_BACKEND_AUTO: return "auto";
-        case KEYSTONE_BACKEND_SCALAR: return "scalar";
-        case KEYSTONE_BACKEND_C_BATCH: return "c_batch";
-        case KEYSTONE_BACKEND_C_OPENMP: return "c_openmp";
-        case KEYSTONE_BACKEND_C_AVX2: return "c_avx2";
-        case KEYSTONE_BACKEND_C_AVX512: return "c_avx512";
-        case KEYSTONE_BACKEND_C_AMX: return "c_amx";
-        case KEYSTONE_BACKEND_FORTRAN: return "fortran";
-        default: return "unknown";
-    }
-}
-#endif
-
 static inline uint64_t now_ns(void) {
     struct timespec ts;
     clock_gettime(CLOCK_MONOTONIC, &ts);
@@ -349,7 +333,7 @@ int main(void) {
            total_buffer_gib);
     printf("#effective_data_gib_s=dataset_gib/(backend_ns_per_key*queries);proxy_not_raw_dram_bandwidth\n");
     printf("#auto_backend_bench=%d\n", KEYSTONE_BENCH_AUTO ? 1 : 0);
-    printf("#run,binary_ns,keystone_ns,enhanced_ns,batch_parallel_ns,fortran_batch_ns,auto_batch_ns,fortran_available,auto_backend_bench,auto_decision_available,auto_backend,auto_cpu_features,auto_array_bucket,auto_query_bucket,auto_thread_count,auto_estimated_ns_per_key,auto_p95_ns_per_key,data_alloc_ms,data_init_ms,query_alloc_ms,query_init_ms,setup_total_ms,data_bytes,query_bytes,batch_bytes,total_buffer_bytes,data_gib,total_buffer_gib,binary_effective_gib_s,keystone_effective_gib_s,enhanced_effective_gib_s,batch_parallel_effective_gib_s,fortran_effective_gib_s,auto_effective_gib_s,bench_mode,warmup_runs\n");
+    printf("#run,binary_ns,keystone_ns,enhanced_ns,batch_parallel_ns,fortran_batch_ns,auto_batch_ns,fortran_available,auto_backend_bench,auto_decision_available,auto_backend,auto_decision_source,auto_query_shape,auto_cpu_features,auto_array_bucket,auto_query_bucket,auto_thread_count,auto_estimated_ns_per_key,auto_p95_ns_per_key,auto_calibration_runs,auto_candidates_measured,data_alloc_ms,data_init_ms,query_alloc_ms,query_init_ms,setup_total_ms,data_bytes,query_bytes,batch_bytes,total_buffer_bytes,data_gib,total_buffer_gib,binary_effective_gib_s,keystone_effective_gib_s,enhanced_effective_gib_s,batch_parallel_effective_gib_s,fortran_effective_gib_s,auto_effective_gib_s,bench_mode,warmup_runs\n");
     for (size_t run = 1; run <= runs; ++run) {
         uint64_t start, end;
         start = now_ns();
@@ -422,12 +406,16 @@ int main(void) {
         double auto_avg = 0.0;
         int auto_decision_available = 0;
         const char* auto_backend = "disabled";
+        const char* auto_decision_source = "disabled";
+        const char* auto_query_shape = "disabled";
         uint32_t auto_cpu_features = 0;
         size_t auto_array_bucket = 0;
         size_t auto_query_bucket = 0;
         int auto_thread_count = 0;
         double auto_estimated = 0.0;
         double auto_p95 = 0.0;
+        size_t auto_calibration_runs = 0;
+        size_t auto_candidates_measured = 0;
 #if KEYSTONE_BENCH_AUTO
         start = now_ns();
         fill_batch(batch, queries, num_queries);
@@ -442,15 +430,25 @@ int main(void) {
         keystone_backend_decision_t decision;
         if (keystone_get_last_backend_decision(&decision) == 0) {
             auto_decision_available = 1;
-            auto_backend = backend_name(decision.backend);
+            auto_backend = keystone_backend_name(decision.backend);
+            auto_decision_source = keystone_decision_source_name(
+                (keystone_backend_decision_source_t)decision.decision_source
+            );
+            auto_query_shape = keystone_query_shape_name(
+                (keystone_query_shape_t)decision.query_shape
+            );
             auto_cpu_features = decision.cpu_features;
             auto_array_bucket = decision.array_size_bucket;
             auto_query_bucket = decision.query_count_bucket;
             auto_thread_count = decision.thread_count;
             auto_estimated = decision.estimated_ns_per_key;
             auto_p95 = decision.p95_ns_per_key;
+            auto_calibration_runs = decision.calibration_runs;
+            auto_candidates_measured = decision.candidates_measured;
         } else {
             auto_backend = "unreported";
+            auto_decision_source = "unreported";
+            auto_query_shape = "unreported";
         }
 #endif
 
@@ -467,7 +465,7 @@ int main(void) {
         const double auto_effective_gib_s =
             effective_data_gib_s(auto_avg, num_queries, data_bytes);
 
-        printf("%zu,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%d,%d,%d,%s,%u,%zu,%zu,%d,%.2f,%.2f,%.3f,%.3f,%.3f,%.3f,%.3f,%zu,%zu,%zu,%zu,%.6f,%.6f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%s,%zu\n",
+        printf("%zu,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%d,%d,%d,%s,%s,%s,%u,%zu,%zu,%d,%.2f,%.2f,%zu,%zu,%.3f,%.3f,%.3f,%.3f,%.3f,%zu,%zu,%zu,%zu,%.6f,%.6f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%s,%zu\n",
                run,
                binary_avg,
                classic_avg,
@@ -479,12 +477,16 @@ int main(void) {
                KEYSTONE_BENCH_AUTO ? 1 : 0,
                auto_decision_available,
                auto_backend,
+               auto_decision_source,
+               auto_query_shape,
                auto_cpu_features,
                auto_array_bucket,
                auto_query_bucket,
                auto_thread_count,
                auto_estimated,
                auto_p95,
+               auto_calibration_runs,
+               auto_candidates_measured,
                data_alloc_ms,
                data_init_ms,
                query_alloc_ms,

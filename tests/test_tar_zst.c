@@ -345,6 +345,51 @@ static void test_extract_member(void) {
     test_pass(name);
 }
 
+static void test_corrupt_members(void) {
+    const char* name = "corrupt_members";
+    if (!file_exists(ARCHIVE_PATH)) {
+        test_fail(name, "archive fixture not found");
+        return;
+    }
+
+    keystone_tar_zst_t* tz = keystone_tar_zst_open(ARCHIVE_PATH, NULL);
+    if (!tz) {
+        test_fail(name, "failed to open archive");
+        return;
+    }
+
+    int64_t* keys = NULL;
+    size_t count = 0;
+
+    /* corrupt.txt should parse no keys (or fail gracefully) */
+    if (keystone_tar_zst_extract_member(tz, "corrupt.txt", &keys, &count) == 0) {
+        if (count > 0) {
+            test_fail(name, "corrupt.txt should yield 0 valid keys");
+            keystone_tar_zst_close(tz);
+            return;
+        }
+    }
+
+    keys = NULL;
+    count = 0;
+    /* corrupt.csv might yield 1 or 2 keys (123, 456), but gracefully skip the bad row */
+    if (keystone_tar_zst_extract_member(tz, "corrupt.csv", &keys, &count) == 0) {
+        if (count > 2) {
+            test_fail(name, "corrupt.csv yielded too many keys");
+            keystone_tar_zst_close(tz);
+            return;
+        }
+    }
+
+    keys = NULL;
+    count = 0;
+    /* corrupt.json might parse keys partially depending on JSON strategy, or return empty/error */
+    keystone_tar_zst_extract_member(tz, "corrupt.json", &keys, &count);
+
+    keystone_tar_zst_close(tz);
+    test_pass(name);
+}
+
 static void test_batch_search(void) {
     const char* name = "batch_search";
     if (!file_exists(ARCHIVE_PATH)) {
@@ -435,6 +480,7 @@ int main(int argc, char** argv) {
     test_error_handling();
     test_indexed_search();
     test_extract_member();
+    test_corrupt_members();
     test_batch_search();
     test_load_all_members();
 

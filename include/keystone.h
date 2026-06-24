@@ -98,14 +98,48 @@ typedef enum keystone_backend {
     KEYSTONE_BACKEND_FORTRAN
 } keystone_backend_t;
 
+/**
+ * @brief Source of the backend decision.
+ * Defines how the auto-backend router selected the execution path.
+ */
+typedef enum keystone_backend_decision_source {
+    KEYSTONE_DECISION_SOURCE_NONE = 0,
+    KEYSTONE_DECISION_SOURCE_FAST_PATH,      /**< Selected via fast-path heuristics */
+    KEYSTONE_DECISION_SOURCE_MEASURED,       /**< Selected via active runtime calibration */
+    KEYSTONE_DECISION_SOURCE_CACHE,          /**< Selected from historical calibration cache */
+    KEYSTONE_DECISION_SOURCE_STATIC_FALLBACK /**< Selected as a safe static fallback */
+} keystone_backend_decision_source_t;
+
+/**
+ * @brief Detected shape of the queries.
+ * Used by the auto-backend router to optimize vectorization strategies.
+ */
+typedef enum keystone_query_shape {
+    KEYSTONE_QUERY_SHAPE_GENERAL = 0,
+    KEYSTONE_QUERY_SHAPE_DENSE_SORTED = 1,   /**< Queries are tightly clustered and sorted */
+    KEYSTONE_QUERY_SHAPE_SPARSE_SORTED = 2,  /**< Queries are spread out but sorted */
+    KEYSTONE_QUERY_SHAPE_STRIDED = 3,        /**< Queries have a predictable access stride */
+    KEYSTONE_QUERY_SHAPE_RANDOM = 4,         /**< Queries are entirely random */
+    KEYSTONE_QUERY_SHAPE_MIXED_HIT_RATE = 5  /**< Queries have mixed success probabilities */
+} keystone_query_shape_t;
+
+/**
+ * @brief Decision metadata structure.
+ * Captures the provenance, timing, and conditions of the backend dispatch.
+ * Guaranteed to be stable for external telemetry inspection.
+ */
 typedef struct keystone_backend_decision {
-    keystone_backend_t backend;
-    uint32_t cpu_features;
-    size_t array_size_bucket;
-    size_t query_count_bucket;
-    int thread_count;
-    double estimated_ns_per_key;
-    double p95_ns_per_key;
+    keystone_backend_t backend;             /**< Selected execution backend */
+    uint32_t cpu_features;                  /**< CPU features active at decision time */
+    size_t array_size_bucket;               /**< Categorized size of the dataset */
+    size_t query_count_bucket;              /**< Categorized size of the query batch */
+    int thread_count;                       /**< Number of OpenMP threads utilized */
+    double estimated_ns_per_key;            /**< Estimated or calibrated time per key */
+    double p95_ns_per_key;                  /**< 95th percentile latency (if measured) */
+    int query_shape;                        /**< Detected keystone_query_shape_t */
+    int decision_source;                    /**< Detected keystone_backend_decision_source_t */
+    size_t calibration_runs;                /**< Number of micro-benchmark runs performed */
+    size_t candidates_measured;             /**< Number of backends actively evaluated */
 } keystone_backend_decision_t;
 
 typedef struct keystone_performance_stats {
@@ -221,6 +255,10 @@ size_t keystone_search_batch_auto(
 );
 
 int keystone_get_last_backend_decision(keystone_backend_decision_t* decision);
+
+const char* keystone_backend_name(keystone_backend_t backend);
+const char* keystone_decision_source_name(keystone_backend_decision_source_t source);
+const char* keystone_query_shape_name(keystone_query_shape_t shape);
 
 int keystone_fortran_backend_available(void);
 

@@ -13,6 +13,24 @@ STRIDES="${KEYSTONE_MATRIX_STRIDES:-1 17 257}"
 RUNS="${KEYSTONE_MATRIX_RUNS:-7}"
 THREADS="${KEYSTONE_MATRIX_THREADS:-${OMP_NUM_THREADS:-16}}"
 LIMIT="${KEYSTONE_MATRIX_LIMIT:-0}"
+PERF_STAT="${KEYSTONE_PERF_STAT:-0}"
+
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --perf)
+            PERF_STAT=1
+            shift
+            ;;
+        --out)
+            OUT_ROOT="$2"
+            shift 2
+            ;;
+        *)
+            echo "unknown argument: $1" >&2
+            exit 2
+            ;;
+    esac
+done
 
 if [[ ! -x "$BENCH_BIN" ]]; then
     echo "benchmark binary is not executable: $BENCH_BIN" >&2
@@ -58,6 +76,12 @@ for n in $DATA_SIZES; do
                         printf '  csv=%s\n' "$csv_path"
                     } >> "$RUN_LOG"
 
+                    if [[ "$PERF_STAT" -eq 1 ]]; then
+                        bench_cmd=("perf" "stat" "-d" "-o" "$OUT_ROOT/perf_${profile}.log" "--" "$BENCH_BIN")
+                    else
+                        bench_cmd=("$BENCH_BIN")
+                    fi
+
                     if ! OMP_NUM_THREADS="$THREADS" \
                         KEYSTONE_PROFILE="$profile" \
                         KEYSTONE_N="$n" \
@@ -67,7 +91,7 @@ for n in $DATA_SIZES; do
                         KEYSTONE_DATA_GAP="$data_gap" \
                         KEYSTONE_DATA_GAP_JITTER="$data_gap_jitter" \
                         KEYSTONE_QUERY_STRIDE="$stride" \
-                        "$BENCH_BIN" > "$csv_path" 2>> "$RUN_LOG"; then
+                        "${bench_cmd[@]}" > "$csv_path" 2>> "$RUN_LOG"; then
                         status="failed"
                     fi
 

@@ -11,19 +11,24 @@ This file records the intended benchmark posture for SIMD-related work. Treat it
 | OpenMP batch path | Optional; available when built with OpenMP |
 | Fortran batch path | Optional; available when built or auto-enabled by the native toolchain |
 | Auto backend calibration | Measures viable local candidates on first cache miss and caches the fastest median timing |
+| Decision provenance | Reports fast path, measured, cache, or static fallback source through `keystone_backend_decision_t` and public label helpers |
 | AMX | Feature detection only; no AMX search backend is currently claimed |
 
 ## Measurement Rules
 
 Any SIMD result should include:
 
-- CPU model and microarchitecture;
+- host CPU model and microarchitecture;
+- accelerator model/runtime when a GPU or NPU backend is involved;
 - compiler and exact compile flags;
 - KEYSTONE feature toggles;
 - dataset size and distribution;
 - query count, query order, and hit rate;
 - warmup policy;
 - whether the run used scalar, optimized C batch, OpenMP, Fortran, auto-calibrated backend selection, AVX2 local scan, or AVX-512 local scan;
+- transfer cost and device memory policy for any future GPU or NPU backend;
+- decision source and query shape from `keystone_get_last_backend_decision()`;
+- readable backend/source/shape labels from the public `keystone_*_name()` helpers;
 - raw output or CSV from the benchmark run.
 
 ## Recommended Commands
@@ -54,4 +59,4 @@ make benchmarks
 
 Older estimates around AVX-512 and engineering-board unlock behavior should not be treated as current project claims unless they are regenerated with the rules above and tied to raw benchmark output.
 
-The defensible claim today is narrower and stronger: KEYSTONE is a native, target-silicon-tuned search library with tested scalar, batch, archive, telemetry, optional Fortran, and optional OpenMP paths, plus host-dependent SIMD local scan support.
+The defensible claim today is narrower and stronger: KEYSTONE is a native, target-silicon-tuned search library with tested scalar, batch, archive, telemetry, optional Fortran, and optional OpenMP paths, plus host-dependent SIMD local scan support. GPU and NPU acceleration are roadmap backend families, not current implementation claims.

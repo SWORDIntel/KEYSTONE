@@ -61,7 +61,7 @@ endif
 SRC     := src/keystone.c src/dsmil_keystone_wrapper.c src/dsmil_telemetry_processor.c \
            src/nst_prefetch_profile.c src/nst_platform_hints.c src/nst_memory_topology.c \
            src/nst_vector_config.c src/nst_batch_scheduler.c src/nst_cache_line_align.c \
-           src/nst_branch_predict.c src/nst_dram_locality.c
+           src/nst_branch_predict.c src/nst_dram_locality.c src/keystone_avx512.c
 OBJS    := $(SRC:.c=.o)
 
 TEST_SRC := tests/test_core_native.c tests/test_auto_backend.c \
@@ -105,6 +105,10 @@ bin:
 	mkdir -p bin
 
 # Pattern rules
+# Explicit rule for AVX-512 object to isolate experimental code
+src/keystone_avx512.o: src/keystone_avx512.c
+	$(CC) $(CFLAGS) -mavx512f -mavx512dq -c $< -o $@
+
 %.o: %.c
 	$(CC) $(CFLAGS) -c $< -o $@
 
@@ -140,10 +144,10 @@ bin/test_tar_zst: $(OBJS) tests/test_tar_zst.o | bin
 	$(CC) -o $@ $^ $(LDFLAGS)
 
 # Benchmark binaries
-benchmarks/dsmil_benchmark: $(OBJS) benchmarks/dsmil_benchmark.o
+benchmarks/dsmil_benchmark: $(OBJS) benchmarks/dsmil_benchmark.o benchmarks/benchmark_writer.o
 	$(CC) -o $@ $^ $(LDFLAGS)
 
-benchmarks/performance_proof: $(OBJS) benchmarks/performance_proof.o
+benchmarks/performance_proof: $(OBJS) benchmarks/performance_proof.o benchmarks/benchmark_writer.o
 	$(CC) -o $@ $^ $(LDFLAGS)
 
 # Fortran backend (optional)

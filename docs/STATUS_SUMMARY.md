@@ -22,6 +22,10 @@ Condensed from DYNAMIC_HOT_PATH_PLAN, FORTRAN_BACKEND_PLAN, IMPROVEMENT_PLAN, OP
 - Calibration cache keyed by CPU feature mask, array-size bucket, query-count bucket, thread count.
 - Static fallback remains for invalid/uncalibrated fallback cases, but normal uncached decisions use measured median/p95 timing.
 - p95 field exposed in public `keystone_backend_decision_t` from calibration samples or cached measured values.
+- Decision provenance is exposed as fast path, measured, cache, or static fallback.
+- Query shape is exposed as general or dense sorted.
+- Cache-hit correctness tests compare result and ordinal arrays across measured and cached selector runs.
+- `scripts/compare_search.c` CSV output includes auto backend, decision source, query shape, calibration run count, and candidate count.
 - Benchmark matrix runner (`scripts/run_perf_matrix.sh`) with configurable size/query/hit-rate/gap/stride sweeps.
 
 ### Fortran Backend
@@ -39,10 +43,13 @@ Condensed from DYNAMIC_HOT_PATH_PLAN, FORTRAN_BACKEND_PLAN, IMPROVEMENT_PLAN, OP
 
 ## Still To Do
 
+See [ROADMAP.md](ROADMAP.md) for the phased roadmap and acceptance gates. The
+items below are the current engineering backlog.
+
 ### Calibration & Cache
-- Add workload profile fields (hit-rate, gap, stride) to calibration cache keys and decision output.
-- Add cache reliability tests: repeated reuse, fallback-policy verification, correctness under cache hit.
-- Add explicit cache-entry provenance flag (measured vs static policy).
+- Add more workload profile fields (hit-rate, gap, stride) to calibration cache keys and decision output.
+- Add fallback-policy verification for cache and static fallback paths.
+- Add richer host/build metadata to calibration CSV output.
 
 ### Fortran
 - Expand benchmark coverage beyond dense all-hit workloads.
@@ -58,6 +65,7 @@ Condensed from DYNAMIC_HOT_PATH_PLAN, FORTRAN_BACKEND_PLAN, IMPROVEMENT_PLAN, OP
 ### Architecture Candidates (deferred)
 - **AVX-512**: Split into isolated object (`src/keystone_avx512.c`), compile only with AVX-512 flags, validate on real AVX-512 hardware.
 - **AMX**: CPU feature detection exists, but no AMX search backend should be claimed until there is a real tiled integer search design.
+- **GPU/NPU**: Native-first also includes resident accelerators, but no GPU or NPU backend should be claimed until transfer costs, correctness, fallback behavior, and dispatch provenance are implemented and measured.
 
 ### Profiling & Measurement
 - Tune prefetch distance per workload instead of global fixed distance.

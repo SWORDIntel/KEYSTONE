@@ -1,0 +1,41 @@
+{
+  "active_context": "Repository mapping complete. All subagents have finished structural analysis. Core, Integration, and Performance layers have been mapped.",
+  "product_context": "KEYSTONE is a high-performance database indexing and lookup engine built for precise, repeatable retrieval over sorted 64-bit integer datasets. It combines anchor-guided interpolation search, adaptive backend selection, SIMD-assisted local scans, OpenMP parallelism, an optional Fortran batch engine, and compressed archive ingestion. Integration layers tailor this for telemetry and security event processing (DSMIL).",
+  "progress": "Completed mapping the codebase through Socratic questioning and subagent delegation. The core engine, telemetry processor, archive interface, native tuning modules, and Fortran batch systems are now mapped into the memory bank.",
+  "decision_log": [
+    "2026-06-24: Initialized memory-bank/memory.qdb.",
+    "2026-06-24: Traversed the repository and documented architecture via subagents."
+  ],
+  "system_patterns": [
+    {
+      "name": "Anchor-Guided Search",
+      "description": "Core engine uses an anchor table (`keystone_anchor_table_t`) to memorize lookups and bound searches, followed by 128-bit interpolation and runtime-detected SIMD logic (AVX512, AVX2, AMX, etc.) for local chunk resolution."
+    },
+    {
+      "name": "Adaptive Backend Calibration",
+      "description": "Evaluates query shape (sorted/dense) using `keystone_detect_auto_query_shape()` and tests viable backends at runtime to select and cache the fastest execution path."
+    },
+    {
+      "name": "Native System Tuning (NST)",
+      "description": "An autonomous tuning layer (`nst_*`) that tracks memory topology, DRAM row-buffer locality, aligns cache-lines, profiles prefetch hits to adapt distances, and provides BTB seeds to warm up branch predictors for tight search loops."
+    },
+    {
+      "name": "DSMIL Telemetry & Wrapper",
+      "description": "Wrappers (`dsmil_keystone_wrapper.c`) bridge domain events (logs, security events) by extracting targets into primitive `int64_t` contiguous arrays for zero-overhead vector querying."
+    },
+    {
+      "name": "Streaming Archive Ingestion",
+      "description": "Integrates `libarchive` (`keystone_tar_zst.c`) for streaming decompression of `tar.zst` files without full inflation. Builds a member offset index via hash tables and bloom filters for fast lookups."
+    },
+    {
+      "name": "Fortran Batch Optimization",
+      "description": "Optional high-throughput Fortran module (`keystone_batch.f90`) featuring merge-walk and OpenMP binary search paths, selected when the C calibration layer detects strictly sorted, dense query batches."
+    }
+  ],
+  "retrieval_notes": [
+    "Core entrypoints: `keystone_search()`, `keystone_search_batch_auto()` in `src/keystone.c`.",
+    "Tuning logic: `nst_*` files in `src/` and `include/`.",
+    "Wrapper/Telemetry APIs: `dsmil_search_create()`, `dsmil_telemetry_processor_add_event()` in `src/dsmil_*`.",
+    "Fortran bind(C): `keystone_batch_search_i64` in `fortran/keystone_batch.f90`."
+  ]
+}

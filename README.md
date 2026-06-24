@@ -2,7 +2,7 @@
   <img src="docs/Logo.png" alt="KEYSTONE logo" width="720">
 </p>
 
-### KEYSTONE helps large databases find the right record fast — using adaptive search, CPU acceleration, and repeatable indexing logic.
+### KEYSTONE helps large databases find the right record fast — using adaptive search, resident-hardware acceleration, and repeatable indexing logic.
 
 [![C](https://img.shields.io/badge/C-11-blue.svg)](https://en.wikipedia.org/wiki/C11_(C_standard_revision))
 [![Fortran](https://img.shields.io/badge/Fortran-90%2B-purple.svg)](https://en.wikipedia.org/wiki/Fortran)
@@ -30,14 +30,14 @@ KEYSTONE is a working native C library and benchmark suite, not just a design no
 | Core sorted `int64_t` lookup | Implemented and tested |
 | Anchor-guided interpolation search | Implemented and tested |
 | Batch lookup | Implemented and tested |
-| Runtime backend calibration and decision reporting | Implemented and tested |
+| Runtime backend calibration, provenance, and decision reporting | Implemented and tested |
 | OpenMP batch path | Available when built with OpenMP |
 | Fortran batch backend | Optional; enabled when requested or when the local toolchain supports it |
 | `.tar.zst` archive search | Optional; enabled when `libarchive` and `libzstd` are available |
 | AVX2 small-window scan | Implemented for native x86 builds with AVX2 |
 | AVX-512 path | Build-gated and hardware-dependent; treat as experimental until measured on target silicon |
 
-The default workflow is intentionally native: build on the machine, container image, or CPU family where the code will run, then measure there.
+The default workflow is intentionally native: build on the machine, container image, or silicon family where the code will run, then measure there.
 
 ---
 
@@ -94,7 +94,7 @@ It is not a decorative wrapper around a database. It is a low-level search compo
 | **Anchor-guided interpolation search** | Reduces search work by using learned anchor points across sorted data. |
 | **Single-key lookup** | Supports precise direct search for individual records. |
 | **Batch lookup** | Handles high-volume query workloads efficiently. |
-| **Runtime backend calibration** | Measures viable local backends on first use, caches the fastest decision, and reports the selected path. |
+| **Runtime backend calibration** | Measures viable local backends on first use, caches the fastest decision, and reports selected path, source, query shape, calibration count, and readable labels. |
 | **SIMD-assisted search windows** | Uses compiled AVX2 and build-gated AVX-512 scan paths where available. |
 | **OpenMP parallelism** | Scales batch workloads across CPU threads when built with OpenMP. |
 | **Fortran batch backend** | Provides an optional high-throughput backend for numerical batch processing. |
@@ -226,6 +226,7 @@ flowchart LR
 | Single search | Yes | No | Yes, inside local windows | No | No | No |
 | Batch search | Yes | Yes | Indirect | Optional | Optional | No |
 | Auto backend calibration | Yes | Yes | Build/runtime detected | Optional measured candidate | Optional measured candidate | No |
+| Decision provenance | Fast path / measured / cached / fallback | Measured or cached | Build/runtime detected | Measured or cached | Measured or cached | No |
 | Anchor learning | Yes | No for merge-walk batch | Yes through scalar path | Per-thread clone path | No | No |
 | Runtime tuning | Yes | Yes | Build/runtime gated | Build gated | Build gated | No |
 | Archive ingestion | No | No | No | No | No | Yes |
@@ -273,13 +274,13 @@ The benchmark suite is intended to produce concrete latency and speedup comparis
 |---|---|
 | **Small lookup overhead** | Scalar interpolation remains available where vector or parallel overhead would be wasteful. |
 | **Large batch volume** | Optimized C batch, OpenMP, and optional Fortran paths provide acceleration options for heavier workloads. |
-| **CPU variability** | Runtime feature detection plus first-use timing calibration supports backend selection based on resident hardware. |
+| **Resident hardware variability** | Runtime feature detection plus first-use timing calibration supports backend selection based on the local CPU today and leaves room for measured GPU/NPU backends later. |
 | **Repeated lookup behavior** | Anchor learning helps reduce repeated search cost across sorted keyspaces. |
 | **Benchmark credibility** | Dedicated benchmark outputs support reviewable performance claims. |
 
 ### Benchmark Posture
 
-Performance numbers are meaningful only with the host CPU, compiler flags, feature toggles, dataset shape, query hit rate, and warmup policy attached. Treat checked-in benchmark reports as examples of measurement style, not universal guarantees.
+Performance numbers are meaningful only with the host silicon, compiler flags, feature toggles, dataset shape, query hit rate, warmup policy, and transfer costs attached. Treat checked-in benchmark reports as examples of measurement style, not universal guarantees.
 
 For serious comparison, run the benchmark matrix on the target machine and keep the generated CSV/output with the exact build command.
 
@@ -382,6 +383,7 @@ KEYSTONE is intended for technical users who care about lookup correctness, runt
 | **Benchmark visualization** | Python 3 with numerical and plotting support |
 | **Parallel acceleration** | OpenMP-capable compiler/runtime |
 | **Vector acceleration** | AVX2 or AVX-512 capable CPU where available |
+| **Future accelerator backends** | GPU or NPU runtime/toolchain only after explicit backend implementation and measurement |
 
 ---
 
@@ -390,10 +392,12 @@ KEYSTONE is intended for technical users who care about lookup correctness, runt
 KEYSTONE is intentionally built as a native, silicon-tuned component. The
 default Makefile uses `-O3 -march=native` and enables resident CPU paths such as
 AVX2, optional AVX-512, OpenMP, Fortran, and `.tar.zst` support when the local
-toolchain and libraries allow it.
+toolchain and libraries allow it. CPU execution is the current implemented
+surface; GPU and NPU execution are future backend families that must earn their
+place through explicit data-movement-aware benchmarks.
 
 That means the preferred deployment model is to build KEYSTONE on the machine,
-container image, or target CPU family where it will run. It is not trying to
+container image, or target silicon family where it will run. It is not trying to
 produce one lowest-common-denominator binary for every host. For reproducible
 comparisons, pin the build flags and optional feature switches explicitly:
 
@@ -441,20 +445,18 @@ It is a focused indexing and lookup component for sorted integer datasets. Its s
 
 ---
 
-## Roadmap
+## Deployment Posture
 
-Planned development areas:
+KEYSTONE is engineered for hostile operational environments where lookup latency, backend unpredictability, and ingestion bottlenecks are unacceptable. 
 
-- stronger benchmark reporting;
-- richer backend comparison output;
-- expanded archive ingestion profiles;
-- improved telemetry processor documentation;
-- additional workload profiles for sparse and skewed datasets;
-- clearer integration guidance for database-backed systems;
-- richer validation around index stability;
-- packaging improvements;
-- expanded platform notes;
-- deeper documentation for anchor behavior and tuning.
+| Capability | Posture |
+|---|---|
+| **Backend calibration** | The auto-router operates as a strict decision engine that measures, caches, and locks in the optimal hardware execution path. No assumptions; only verified throughput. |
+| **Benchmark evidence** | Speculative performance claims are rejected. `dsmil_benchmark` and `performance_proof` generate hard CSV/JSON telemetry, enforcing strict cache-locality (e.g., locking anchors to Graviton4 L2 boundaries). |
+| **Workload coverage** | Designed to process sparse, dense, skewed, and randomized query profiles without degradation. Native `.tar.zst` archive ingestion allows telemetry to be stripped and searched in-stream. |
+| **Integration surface** | Exposed via a disciplined, C11-compliant embeddable interface (`include/keystone.h`). It is a localized ordnance, not a sprawling framework. |
+| **Platform validation** | AVX-512 paths are isolated into hardened, explicitly compiled object files. Unproven silicon features (e.g., AMX) are restricted to detection-only until fully validated under load. |
+| **Packaging** | Deployment profiles range from dependency-stripped scalar fallbacks to heavily parallelized OpenMP/Fortran builds, documented entirely in `docs/BUILD_MODES.md`. |
 
 ---
 
