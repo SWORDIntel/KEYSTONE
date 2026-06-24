@@ -77,7 +77,7 @@ TEST_SRC += tests/test_tar_zst.c
 TEST_BIN += bin/test_tar_zst
 endif
 
-SRC     += src/dsmil_hash_indexer.c src/dsmil_dirty_parser.c
+SRC     += src/dsmil_hash_indexer.c src/dsmil_dirty_parser.c src/dsmil_model_bridge.c
 
 OBJS    := $(SRC:.c=.o)
 

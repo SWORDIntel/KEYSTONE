@@ -56,6 +56,35 @@ size_t dsmil_dirty_log_ingest(const char* buffer, size_t length, uint64_t base_o
                     /* Index the cleaned email */
                     dsmil_hash_index_add(index, clean_val, len, base_offset + start);
                     artifacts_found++;
+                    
+                    /* Credential combo extraction: look for email:password pattern */
+                    if (end < length && (buffer[end] == ':' || buffer[end] == '|' || buffer[end] == ';')) {
+                        size_t pass_start = end + 1;
+                        size_t pass_end = pass_start;
+                        /* Read until whitespace or next delimiter */
+                        while (pass_end < length && 
+                               buffer[pass_end] > 32 && 
+                               buffer[pass_end] < 127 && 
+                               buffer[pass_end] != '|' && 
+                               buffer[pass_end] != ';') {
+                            pass_end++;
+                        }
+                        
+                        size_t pass_len = pass_end - pass_start;
+                        if (pass_len > 0 && pass_len < 255) {
+                            char pass_val[256];
+                            memcpy(pass_val, buffer + pass_start, pass_len);
+                            pass_val[pass_len] = '\0';
+                            
+                            /* Passwords are case-sensitive; do not normalize them.
+                             * Indexing the password allows analysts to search for password re-use
+                             * across different breached databases. */
+                            dsmil_hash_index_add(index, pass_val, pass_len, base_offset + pass_start);
+                            artifacts_found++;
+                            end = pass_end;
+                        }
+                    }
+                    
                     i = end;
                     continue;
                 }
