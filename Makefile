@@ -46,6 +46,21 @@ else ifneq ($(KEYSTONE_ENABLE_FORTRAN),0)
     endif
 endif
 
+# Optional QIHSE Unified Wire Protocol Bridge
+ifeq ($(KEYSTONE_ENABLE_QIHSE_BRIDGE),1)
+    ifndef QIHSE_ROOT
+        $(error KEYSTONE_ENABLE_QIHSE_BRIDGE=1 requires QIHSE_ROOT to be set (e.g. QIHSE_ROOT=/path/to/QIHSE))
+    endif
+    QIHSE_CFLAGS := -DKEYSTONE_ENABLE_QIHSE_BRIDGE -I"$(QIHSE_ROOT)/include"
+    QIHSE_LDFLAGS := -L"$(QIHSE_ROOT)" -lqihse -Wl,-rpath,"$(QIHSE_ROOT)"
+    CFLAGS += $(QIHSE_CFLAGS)
+    LDFLAGS += $(QIHSE_LDFLAGS)
+    SRC += src/qihse_keystone_bridge.c
+else
+    # Standalone stub compilation
+    SRC += src/qihse_keystone_bridge.c
+endif
+
 # SIMD detection
 ifeq ($(KEYSTONE_FORCE_SCALAR),1)
     CFLAGS += -mno-avx2

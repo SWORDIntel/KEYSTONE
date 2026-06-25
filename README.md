@@ -261,6 +261,17 @@ The project includes performance tooling intended to compare backend behavior ac
 
 KEYSTONE demonstrates practical low-level engineering across C11, optional Fortran, Python-based benchmark visualization, SIMD-aware execution, optional OpenMP parallelism, compressed archive ingestion, and structured validation.
 
+### QIHSE Unified Wire Protocol Bridge
+
+KEYSTONE can act as a native ingestion head-node for [QIHSE](https://github.com/SWORDIntel/QIHSE). When compiled with the bridge enabled, KEYSTONE parses dirty archives, categorizes the extracted intelligence using the micro-model, and streams the structured hits directly into QIHSE's Key-Value or Vector databases via UWP memory layout.
+
+To build KEYSTONE as a QIHSE ingestor:
+
+```bash
+make clean
+KEYSTONE_ENABLE_QIHSE_BRIDGE=1 QIHSE_ROOT=/path/to/QIHSE make
+```
+
 ---
 
 ## Performance Orientation
