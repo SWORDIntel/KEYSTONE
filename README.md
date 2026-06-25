@@ -331,25 +331,7 @@ flowchart LR
 
 ---
 
-## Technical Showcase Value
 
-KEYSTONE is intended to be read as serious software, not a throwaway benchmark experiment.
-
-It showcases:
-
-- low-level search engine design;
-- deterministic lookup over sorted 64-bit keyspaces;
-- adaptive backend dispatch;
-- SIMD-aware systems programming;
-- optional OpenMP batch parallelism;
-- optional Fortran integration;
-- compressed archive ingestion;
-- telemetry-oriented data handling;
-- benchmark-driven engineering;
-- testable performance claims;
-- practical database-adjacent design.
-
-This makes it suitable for portfolio review, technical demonstration, internal tooling, research infrastructure, and performance-sensitive database support work.
 
 ---
 
@@ -455,18 +437,7 @@ It is a focused indexing and lookup component for sorted integer datasets. Its s
 
 ---
 
-## Deployment Posture
 
-KEYSTONE is engineered for hostile operational environments where lookup latency, backend unpredictability, and ingestion bottlenecks are unacceptable. 
-
-| Capability | Posture |
-|---|---|
-| **Backend calibration** | The auto-router operates as a strict decision engine that measures, caches, and locks in the optimal hardware execution path. No assumptions; only verified throughput. |
-| **Benchmark evidence** | Speculative performance claims are rejected. `dsmil_benchmark` and `performance_proof` generate hard CSV/JSON telemetry, enforcing strict cache-locality (e.g., locking anchors to Graviton4 L2 boundaries). |
-| **Workload coverage** | Designed to process sparse, dense, skewed, and randomized query profiles without degradation. Native `.tar.zst` archive ingestion allows telemetry to be stripped and searched in-stream. |
-| **Integration surface** | Exposed via a disciplined, C11-compliant embeddable interface (`include/keystone.h`). It is a localized ordnance, not a sprawling framework. |
-| **Platform validation** | AVX-512 paths are isolated into hardened, explicitly compiled object files. Unproven silicon features (e.g., AMX) are restricted to detection-only until fully validated under load. |
-| **Packaging** | Deployment profiles range from dependency-stripped scalar fallbacks to heavily parallelized OpenMP/Fortran builds, documented entirely in `docs/BUILD_MODES.md`. |
 
 ---
 
