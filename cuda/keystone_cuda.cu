@@ -15,6 +15,46 @@ static const int64_t* g_cached_h_arr = NULL;
 static int64_t* g_cached_d_arr = NULL;
 static size_t g_cached_n = 0;
 
+__global__ void keystone_search_kernel_scalar(
+    const int64_t* __restrict__ arr,
+    size_t n,
+    keystone_batch_item_t* __restrict__ items,
+    size_t num_items,
+    unsigned long long* __restrict__ d_success_count)
+{
+    // Scalar Branchless Binary Search (Optimized for older GPUs / Pascal / low SM count)
+    size_t idx = blockIdx.x * blockDim.x + threadIdx.x;
+    if (idx >= num_items) return;
+
+    int64_t key = items[idx].key;
+    size_t found_idx = KEYSTONE_NOT_FOUND;
+
+    // Quick bounds check using texture cache
+    if (n > 0 && key >= LDG(&arr[0]) && key <= LDG(&arr[n - 1])) {
+        size_t lo = 0;
+        size_t len = n;
+        
+        while (len > 1) {
+            size_t half = len / 2;
+            size_t mid = lo + half - 1;
+            int64_t mid_val = LDG(&arr[mid]);
+            
+            // Branchless advance
+            lo = (mid_val < key) ? (lo + half) : lo;
+            len -= half;
+        }
+        
+        if (LDG(&arr[lo]) == key) {
+            found_idx = lo;
+        }
+    }
+
+    items[idx].result = found_idx;
+    if (found_idx != KEYSTONE_NOT_FOUND) {
+        atomicAdd(d_success_count, 1ULL);
+    }
+}
+
 __global__ void keystone_search_kernel_warp_cooperative(
     const int64_t* __restrict__ arr,
     size_t n,
@@ -148,14 +188,32 @@ extern "C" size_t keystone_search_batch_cuda(
     cudaMemcpyAsync(d_items, items, num_items * sizeof(keystone_batch_item_t), cudaMemcpyHostToDevice, stream);
     cudaMemsetAsync(d_success_count, 0, sizeof(unsigned long long), stream);
 
-    // Compute optimal thread blocks for Warp-Cooperative Launch
-    int threads_per_block = 256;
-    int warps_per_block = threads_per_block / 32;
-    int blocks = (num_items + warps_per_block - 1) / warps_per_block;
+    // Adaptive Pathway Decision based on GPU architecture and capability
+    cudaDeviceProp prop;
+    cudaGetDeviceProperties(&prop, 0);
+    
+    // Warp-cooperative search is heavily beneficial on Pascal (Compute 6.0) and newer
+    // due to hardware sync primitives (__ballot_sync, __shfl_sync) and massive memory bandwidth.
+    // On exceptionally old architectures (Compute < 6.0), scalar branchless achieves
+    // better execution due to lack of warp-synchronous optimizations.
+    bool use_warp_cooperative = (prop.major >= 6);
 
-    // Launch Warp-Cooperative kernel
-    keystone_search_kernel_warp_cooperative<<<blocks, threads_per_block, 0, stream>>>(
-        d_arr, n, d_items, num_items, d_success_count);
+    if (use_warp_cooperative) {
+        // Compute optimal thread blocks for Warp-Cooperative Launch
+        int threads_per_block = 256;
+        int warps_per_block = threads_per_block / 32;
+        int blocks = (num_items + warps_per_block - 1) / warps_per_block;
+
+        keystone_search_kernel_warp_cooperative<<<blocks, threads_per_block, 0, stream>>>(
+            d_arr, n, d_items, num_items, d_success_count);
+    } else {
+        // Compute optimal thread blocks for Scalar Launch
+        int threads_per_block = 256;
+        int blocks = (num_items + threads_per_block - 1) / threads_per_block;
+
+        keystone_search_kernel_scalar<<<blocks, threads_per_block, 0, stream>>>(
+            d_arr, n, d_items, num_items, d_success_count);
+    }
 
     // Download items back asynchronously
     cudaMemcpyAsync(items, d_items, num_items * sizeof(keystone_batch_item_t), cudaMemcpyDeviceToHost, stream);
