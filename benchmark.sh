@@ -50,20 +50,36 @@ if [ "${KEYSTONE_ENABLE_FORTRAN:-1}" = "1" ]; then
     fi
 fi
 
+CUDA_CFLAGS=""
+CUDA_LDFLAGS=""
+if [ "${KEYSTONE_ENABLE_CUDA:-1}" = "1" ]; then
+    if [ -f cuda/libkeystone_cuda.so ]; then
+        CUDA_CFLAGS="-DKEYSTONE_ENABLE_CUDA"
+        CUDA_LDFLAGS="-L./cuda -lkeystone_cuda -Wl,-rpath,\$ORIGIN/cuda"
+    elif command -v nvcc >/dev/null 2>&1; then
+        echo "Building CUDA backend for benchmark..."
+        mkdir -p cuda
+        nvcc -O3 --compiler-options '-fPIC' -shared cuda/keystone_cuda.cu -o cuda/libkeystone_cuda.so
+        CUDA_CFLAGS="-DKEYSTONE_ENABLE_CUDA"
+        CUDA_LDFLAGS="-L./cuda -lkeystone_cuda -Wl,-rpath,\$ORIGIN/cuda"
+    fi
+fi
+
 # Build compare_search_auto benchmark binary
 echo "Compiling src/keystone.c..."
-gcc $NATIVE_CFLAGS $OPENMP_CFLAGS -Wall -Wextra -Werror=implicit-function-declaration -I./include $FORTRAN_CFLAGS \
+gcc $NATIVE_CFLAGS $OPENMP_CFLAGS -Wall -Wextra -Werror=implicit-function-declaration -I./include $FORTRAN_CFLAGS $CUDA_CFLAGS \
     -c src/keystone.c -o keystone.o
 
 echo "Compiling src/keystone_avx512.c..."
 gcc $NATIVE_CFLAGS -mavx512f -mavx512dq -c src/keystone_avx512.c -o keystone_avx512.o
 
 echo "Building compare_search_auto..."
-gcc $NATIVE_CFLAGS $OPENMP_CFLAGS -Wall -Wextra -I. -I./include -DKEYSTONE_BENCH_AUTO=1 $FORTRAN_CFLAGS \
+gcc $NATIVE_CFLAGS $OPENMP_CFLAGS -Wall -Wextra -I. -I./include -DKEYSTONE_BENCH_AUTO=1 $FORTRAN_CFLAGS $CUDA_CFLAGS \
     -c scripts/compare_search.c -o scripts/compare_search_auto.o
 
 gcc -o scripts/compare_search_auto scripts/compare_search_auto.o keystone.o keystone_avx512.o \
-    -lm $OPENMP_LDFLAGS -L./fortran -lkeystone_batch -Wl,-rpath,"\$ORIGIN/../fortran" || { echo "compare_search_auto linking failed"; exit 1; }
+    -lm $OPENMP_LDFLAGS -L./fortran -lkeystone_batch -Wl,-rpath,"\$ORIGIN/../fortran" \
+    $CUDA_LDFLAGS -Wl,-rpath,"\$ORIGIN/../cuda" || { echo "compare_search_auto linking failed"; exit 1; }
 
 # Run benchmark profiles and collect CSV output
 CSV_FILE="benchmark_results.csv"

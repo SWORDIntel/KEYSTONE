@@ -46,6 +46,25 @@ else ifneq ($(KEYSTONE_ENABLE_FORTRAN),0)
     endif
 endif
 
+# Optional CUDA backend
+ifeq ($(KEYSTONE_ENABLE_CUDA),1)
+    ifeq ($(shell command -v nvcc >/dev/null 2>&1 && echo yes),yes)
+        CUDA_CFLAGS := -DKEYSTONE_ENABLE_CUDA
+        CUDA_LDFLAGS := -L./cuda -lkeystone_cuda -Wl,-rpath,'$$ORIGIN/cuda'
+        CFLAGS  += $(CUDA_CFLAGS)
+        LDFLAGS += $(CUDA_LDFLAGS)
+    else
+        $(error KEYSTONE_ENABLE_CUDA=1 requires nvcc)
+    endif
+else ifneq ($(KEYSTONE_ENABLE_CUDA),0)
+    ifeq ($(shell command -v nvcc >/dev/null 2>&1 && echo yes),yes)
+        CUDA_CFLAGS := -DKEYSTONE_ENABLE_CUDA
+        CUDA_LDFLAGS := -L./cuda -lkeystone_cuda -Wl,-rpath,'$$ORIGIN/cuda'
+        CFLAGS  += $(CUDA_CFLAGS)
+        LDFLAGS += $(CUDA_LDFLAGS)
+    endif
+endif
+
 # Optional QIHSE Unified Wire Protocol Bridge
 ifeq ($(KEYSTONE_ENABLE_QIHSE_BRIDGE),1)
     ifndef QIHSE_ROOT
@@ -186,8 +205,28 @@ all: fortran/libkeystone_batch.so
 $(TEST_BIN) $(BENCH_BIN): fortran/libkeystone_batch.so | bin
 endif
 
+# CUDA backend (optional)
+cuda/libkeystone_cuda.so: cuda/keystone_cuda.cu
+	mkdir -p cuda
+	nvcc -O3 --compiler-options '-fPIC' -shared $< -o $@
+
+CUDA_ENABLED := no
+ifeq ($(KEYSTONE_ENABLE_CUDA),1)
+CUDA_ENABLED := yes
+else ifneq ($(KEYSTONE_ENABLE_CUDA),0)
+ifeq ($(shell command -v nvcc >/dev/null 2>&1 && echo yes),yes)
+CUDA_ENABLED := yes
+endif
+endif
+
+ifeq ($(CUDA_ENABLED),yes)
+all: cuda/libkeystone_cuda.so
+$(TEST_BIN) $(BENCH_BIN): cuda/libkeystone_cuda.so | bin
+endif
+
 clean:
 	rm -f $(OBJS) tests/*.o benchmarks/*.o
 	rm -rf bin
 	rm -f scripts/compare_search_auto
 	rm -f fortran/libkeystone_batch.so fortran/*.mod
+	rm -f cuda/libkeystone_cuda.so

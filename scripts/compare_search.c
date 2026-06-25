@@ -285,6 +285,11 @@ int main(void) {
     const double data_gib = bytes_to_gib(data_bytes);
     const double total_buffer_gib = bytes_to_gib(total_buffer_bytes);
 
+    int cuda_available = 0;
+#ifdef KEYSTONE_ENABLE_CUDA
+    cuda_available = 1;
+#endif
+
     for (size_t warmup = 0; warmup < warmup_runs; ++warmup) {
         if (run_warmup_pass(
                 data,
@@ -333,7 +338,7 @@ int main(void) {
            total_buffer_gib);
     printf("#effective_data_gib_s=dataset_gib/(backend_ns_per_key*queries);proxy_not_raw_dram_bandwidth\n");
     printf("#auto_backend_bench=%d\n", KEYSTONE_BENCH_AUTO ? 1 : 0);
-    printf("#run,binary_ns,keystone_ns,enhanced_ns,batch_parallel_ns,fortran_batch_ns,auto_batch_ns,fortran_available,auto_backend_bench,auto_decision_available,auto_backend,auto_decision_source,auto_query_shape,auto_cpu_features,auto_array_bucket,auto_query_bucket,auto_thread_count,auto_estimated_ns_per_key,auto_p95_ns_per_key,auto_calibration_runs,auto_candidates_measured,data_alloc_ms,data_init_ms,query_alloc_ms,query_init_ms,setup_total_ms,data_bytes,query_bytes,batch_bytes,total_buffer_bytes,data_gib,total_buffer_gib,binary_effective_gib_s,keystone_effective_gib_s,enhanced_effective_gib_s,batch_parallel_effective_gib_s,fortran_effective_gib_s,auto_effective_gib_s,bench_mode,warmup_runs\n");
+    printf("#run,binary_ns,keystone_ns,enhanced_ns,batch_parallel_ns,fortran_batch_ns,cuda_batch_ns,auto_batch_ns,fortran_available,cuda_available,auto_backend_bench,auto_decision_available,auto_backend,auto_decision_source,auto_query_shape,auto_cpu_features,auto_array_bucket,auto_query_bucket,auto_thread_count,auto_estimated_ns_per_key,auto_p95_ns_per_key,auto_calibration_runs,auto_candidates_measured,data_alloc_ms,data_init_ms,query_alloc_ms,query_init_ms,setup_total_ms,data_bytes,query_bytes,batch_bytes,total_buffer_bytes,data_gib,total_buffer_gib,binary_effective_gib_s,keystone_effective_gib_s,enhanced_effective_gib_s,batch_parallel_effective_gib_s,fortran_effective_gib_s,cuda_effective_gib_s,auto_effective_gib_s,bench_mode,warmup_runs\n");
     for (size_t run = 1; run <= runs; ++run) {
         uint64_t start, end;
         start = now_ns();
@@ -404,6 +409,19 @@ int main(void) {
         }
 
         double auto_avg = 0.0;
+        double cuda_avg = 0.0;
+
+#ifdef KEYSTONE_ENABLE_CUDA
+        start = now_ns();
+        fill_batch(batch, queries, num_queries);
+        found = keystone_search_batch_cuda(data, n, batch, num_queries);
+        end = now_ns();
+        if (found != expected_found) {
+            fprintf(stderr, "CUDA batch found %zu queries; expected %zu\n", found, expected_found);
+            return 1;
+        }
+        cuda_avg = (double)(end - start) / num_queries;
+#endif
         int auto_decision_available = 0;
         const char* auto_backend = "disabled";
         const char* auto_decision_source = "disabled";
@@ -462,18 +480,22 @@ int main(void) {
             effective_data_gib_s(parallel_avg, num_queries, data_bytes);
         const double fortran_effective_gib_s =
             effective_data_gib_s(fortran_avg, num_queries, data_bytes);
+        const double cuda_effective_gib_s =
+            effective_data_gib_s(cuda_avg, num_queries, data_bytes);
         const double auto_effective_gib_s =
             effective_data_gib_s(auto_avg, num_queries, data_bytes);
 
-        printf("%zu,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%d,%d,%d,%s,%s,%s,%u,%zu,%zu,%d,%.2f,%.2f,%zu,%zu,%.3f,%.3f,%.3f,%.3f,%.3f,%zu,%zu,%zu,%zu,%.6f,%.6f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%s,%zu\n",
+        printf("%zu,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%d,%d,%d,%d,%s,%s,%s,%u,%zu,%zu,%d,%.2f,%.2f,%zu,%zu,%.3f,%.3f,%.3f,%.3f,%.3f,%zu,%zu,%zu,%zu,%.6f,%.6f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%s,%zu\n",
                run,
                binary_avg,
                classic_avg,
                enhanced_avg,
                parallel_avg,
                fortran_avg,
+               cuda_avg,
                auto_avg,
                fortran_available,
+               cuda_available,
                KEYSTONE_BENCH_AUTO ? 1 : 0,
                auto_decision_available,
                auto_backend,
@@ -503,6 +525,7 @@ int main(void) {
                enhanced_effective_gib_s,
                parallel_effective_gib_s,
                fortran_effective_gib_s,
+               cuda_effective_gib_s,
                auto_effective_gib_s,
                bench_mode,
                warmup_runs);

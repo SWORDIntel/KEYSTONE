@@ -47,9 +47,9 @@ def main():
 
     fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(16, 6))
 
-    labels = ['Binary', 'KEYSTONE', 'Enhanced', 'Parallel', 'Fortran', 'Auto']
-    keys = ['binary_ns', 'keystone_ns', 'enhanced_ns', 'batch_parallel_ns', 'fortran_batch_ns', 'auto_batch_ns']
-    colors = ['#2ca02c', '#ff7f0e', '#1f77b4', '#9467bd', '#d62728', '#8c564b']
+    labels = ['Binary', 'KEYSTONE', 'Enhanced', 'Parallel', 'Fortran', 'CUDA', 'Auto']
+    keys = ['binary_ns', 'keystone_ns', 'enhanced_ns', 'batch_parallel_ns', 'fortran_batch_ns', 'cuda_batch_ns', 'auto_batch_ns']
+    colors = ['#2ca02c', '#ff7f0e', '#1f77b4', '#9467bd', '#d62728', '#17becf', '#8c564b']
 
     # Aggregate across all profiles into single averages
     avgs = {}
@@ -83,8 +83,8 @@ def main():
                     xytext=(0, 3), textcoords="offset points",
                     ha='center', va='bottom', fontsize=8)
 
-    speed_labels = ['KEYSTONE', 'Enhanced', 'Parallel', 'Fortran', 'Auto']
-    speed_keys = ['keystone_ns', 'enhanced_ns', 'batch_parallel_ns', 'fortran_batch_ns', 'auto_batch_ns']
+    speed_labels = ['KEYSTONE', 'Enhanced', 'Parallel', 'Fortran', 'CUDA', 'Auto']
+    speed_keys = ['keystone_ns', 'enhanced_ns', 'batch_parallel_ns', 'fortran_batch_ns', 'cuda_batch_ns', 'auto_batch_ns']
     x2 = np.arange(len(speed_labels))
     speed_vals = [speedups.get(k, 0) for k in speed_keys]
     bars2 = ax2.bar(x2, speed_vals, width, color=colors[1:], alpha=0.8, edgecolor='black')

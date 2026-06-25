@@ -269,6 +269,15 @@ size_t keystone_search_batch_fortran(
     size_t num_items
 );
 
+#ifdef KEYSTONE_ENABLE_CUDA
+size_t keystone_search_batch_cuda(
+    const int64_t* arr,
+    size_t n,
+    keystone_batch_item_t* items,
+    size_t num_items
+);
+#endif
+
 size_t keystone_search_batch_c_optimized(
     const int64_t* arr,
     size_t n,
