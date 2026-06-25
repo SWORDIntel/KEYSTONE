@@ -13,9 +13,9 @@
 [![Platform](https://img.shields.io/badge/Platform-Linux-success.svg)](https://www.kernel.org/)
 [![License](https://img.shields.io/badge/License-AGPL--3.0-red.svg)](LICENSE)
 
-**KEYSTONE** is a high-performance database indexing and lookup engine built for precise, repeatable retrieval over sorted 64-bit integer datasets.
+**KEYSTONE** is a high-performance intelligence ingestion and database indexing engine. It is designed to operate as a standalone fast-search layer, or as the native pre-processing pipeline for the [QIHSE](https://github.com/SWORDIntel/QIHSE) database ecosystem.
 
-It combines anchor-guided interpolation search, adaptive backend selection, SIMD-assisted local scans, optional OpenMP parallelism, an optional Fortran batch engine, and compressed archive ingestion into a single practical system for serious data infrastructure.
+It combines zero-allocation dirty log tokenization, anchor-guided interpolation search, SIMD-assisted local scans, and a native C neural network (micro-model) to pull structured semantic hits from chaotic post-compromise data.
 
 </div>
 
