@@ -30,12 +30,15 @@ KEYSTONE is a working native C library and benchmark suite, not just a design no
 | Core sorted `int64_t` lookup | Implemented and tested |
 | Anchor-guided interpolation search | Implemented and tested |
 | Batch lookup | Implemented and tested |
-| Runtime backend calibration, provenance, and decision reporting | Implemented and tested |
+| Runtime backend calibration | Implemented and tested |
+| Unstructured / Dirty Log Tokenizer | Implemented (zero-allocation email:pass extraction) |
+| Heterogeneous Hash Indexer | Implemented (FNV-1a column projection) |
+| Native Context Micro-Model | Implemented (6-class DNN with confidence gating) |
 | OpenMP batch path | Available when built with OpenMP |
-| Fortran batch backend | Optional; enabled when requested or when the local toolchain supports it |
+| Fortran batch backend | Optional; enabled when requested |
 | `.tar.zst` archive search | Optional; enabled when `libarchive` and `libzstd` are available |
 | AVX2 small-window scan | Implemented for native x86 builds with AVX2 |
-| AVX-512 path | Build-gated and hardware-dependent; treat as experimental until measured on target silicon |
+| AVX-512 path | Build-gated and hardware-dependent |
 
 The default workflow is intentionally native: build on the machine, container image, or silicon family where the code will run, then measure there.
 
@@ -92,15 +95,15 @@ It is not a decorative wrapper around a database. It is a low-level search compo
 | Capability | Purpose |
 |---|---|
 | **Anchor-guided interpolation search** | Reduces search work by using learned anchor points across sorted data. |
-| **Single-key lookup** | Supports precise direct search for individual records. |
+| **Unstructured data ingestion** | A zero-allocation C tokenizer aggressively hunts for `email:pass`, URLs, and identifiers in raw, dirty stealer logs and memory dumps. |
+| **Hash indexing** | Projects strings into 64-bit integer hashes via FNV-1a, feeding them directly into KEYSTONE's fast scalar search. |
+| **Native micro-model** | Extracts 256 bytes of context around a hit and classifies the target (e.g., FINANCIAL, CORPORATE) using a compiled 6-class neural network. |
 | **Batch lookup** | Handles high-volume query workloads efficiently. |
-| **Runtime backend calibration** | Measures viable local backends on first use, caches the fastest decision, and reports selected path, source, query shape, calibration count, and readable labels. |
+| **Runtime backend calibration** | Measures viable local backends on first use, caches the fastest decision, and reports the selected path. |
 | **SIMD-assisted search windows** | Uses compiled AVX2 and build-gated AVX-512 scan paths where available. |
 | **OpenMP parallelism** | Scales batch workloads across CPU threads when built with OpenMP. |
 | **Fortran batch backend** | Provides an optional high-throughput backend for numerical batch processing. |
-| **`.tar.zst` ingestion** | Supports compressed archive workflows and member offset indexing. |
 | **Benchmark suite** | Measures latency, throughput, and backend behavior across dataset profiles. |
-| **Test coverage** | Validates native search, auto backend selection, Fortran support, telemetry processing, archive handling, performance fixes, and enhanced lookup behavior. |
 
 ---
 
@@ -128,32 +131,28 @@ KEYSTONE provides a focused answer: a compact, benchmarkable, database-adjacent 
 
 ```mermaid
 flowchart TB
-    subgraph Search["Search Pipeline"]
+    subgraph Intelligence["Post-Compromise Intelligence Pipeline"]
+        DIRTY["Dirty Log / Memory Dump"] --> PARSE["Custom C Tokenizer"]
+        PARSE -->|Extracts email:pass| HASH["Hash Indexer (FNV-1a)"]
+        HASH --> AT["Anchor Table"]
+        AT --> R["Result Offset"]
+        R --> BRIDGE["Model Context Bridge"]
+        BRIDGE -->|256-byte window| MODEL["Native Micro-Model"]
+        MODEL --> CLASS["6-Class Semantic Triage"]
+    end
+
+    subgraph Search["Numeric Search Pipeline"]
         Q["Query Key / Query Batch"] --> Auto{"Runtime Backend Calibrator"}
-        Auto -->|Single / Small Workloads| S["Scalar Anchor Search"]
-        Auto -->|Sorted Query Batch| CB["Optimized C Batch"]
+        Auto -->|Single / Small| S["Scalar Anchor Search"]
+        Auto -->|Sorted Batch| CB["Optimized C Batch"]
         Auto -->|Large Batch + OpenMP| MP["C OpenMP Batch"]
-        Auto -->|Dense Numerical Batch| FT["Optional Fortran Batch"]
-        S --> SIMD["SIMD-Assisted Local Scan<br/>AVX2 / AVX-512 when compiled and available"]
-        S --> AT["Anchor Table"]
+        Auto -->|Dense Batch| FT["Optional Fortran Batch"]
+        S --> SIMD["SIMD Scan (AVX2 / AVX-512)"]
+        S --> AT
         CB --> AT
         SIMD --> AT
         MP --> AT
         FT --> AT
-        AT --> R["Result Index"]
-    end
-
-    subgraph Ingestion["Archive and Telemetry Ingestion"]
-        RAW["Raw CSV / JSON / Text"] --> TZST[".tar.zst Archive"]
-        TZST --> TP["Telemetry Processor"]
-        TP --> IDX["Member Offset Index"]
-        IDX --> AT
-    end
-
-    subgraph Tuning["Runtime Tuning"]
-        CPU["CPU Feature Detection"] --> Auto
-        WL["Workload Shape"] --> Auto
-        CAL["First-Use Local Timing Cache"] --> Auto
     end
 ```
 
@@ -209,13 +208,13 @@ flowchart LR
 | Layer | Function |
 |---|---|
 | **Core search engine** | Performs anchor-guided interpolation search over sorted integer data. |
-| **Adaptive backend layer** | Calibrates and routes workloads across scalar, optimized C batch, optional OpenMP, and optional Fortran paths. |
+| **Dirty Log Tokenizer** | Aggressively rips identifiers (`email:pass`) from unstructured dumps. |
+| **Hash Indexer** | Projects heterogeneous strings into 64-bit space for rapid search. |
+| **Context Bridge** | Slices perfectly shaped context windows from raw data bypassing full decompression. |
+| **Micro-Model Inference** | A compiled DNN executing focal-loss trained classification on context data. |
+| **Adaptive backend layer** | Routes workloads across scalar, optimized C, OpenMP, and Fortran paths. |
 | **Anchor table** | Maintains learned search anchors to improve repeated lookup behavior. |
-| **Batch processing layer** | Executes large query sets efficiently across available acceleration paths. |
-| **Telemetry processor** | Supports structured ingestion and indexed lookup workflows for telemetry-style data. |
-| **Archive interface** | Enables compressed `.tar.zst` workflows without treating archive handling as an afterthought. |
-| **Benchmark harness** | Produces measurable performance evidence rather than vague speed claims. |
-| **Validation suite** | Confirms core behavior, enhanced search, backend selection, archive support, and performance fixes. |
+| **Archive interface** | Enables `.tar.zst` workflows without treating archive handling as an afterthought. |
 
 ---
 
