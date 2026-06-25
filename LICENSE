@@ -2,7 +2,7 @@
                           NOTICE: COMMERCIAL COMPLIANCE POLICY
 ================================================================================
 
-StisSorter is licensed under the GNU Affero General Public License v3.0 (AGPL-3.0).
+KEYSTONE is licensed under the GNU Affero General Public License v3.0 (AGPL-3.0).
 This license is INTENTIONALLY STRONG COPYLEFT. Read it carefully.
 
 TECHNICAL SHOWCASE STATUS
@@ -39,7 +39,7 @@ This is AGPL-3.0. Act accordingly.
 
 COMMERCIAL LICENSING ALTERNATIVE
 ----------------------------------
-If you wish to use StisSorter in a closed-source or commercial SaaS product WITHOUT
+If you wish to use KEYSTONE in a closed-source or commercial SaaS product WITHOUT
 releasing your entire codebase under AGPL-3.0, a commercial license is available.
 
 Standard commercial terms start at **25% of gross revenue** derived from the
