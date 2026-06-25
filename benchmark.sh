@@ -55,11 +55,14 @@ echo "Compiling src/keystone.c..."
 gcc $NATIVE_CFLAGS $OPENMP_CFLAGS -Wall -Wextra -Werror=implicit-function-declaration -I./include $FORTRAN_CFLAGS \
     -c src/keystone.c -o keystone.o
 
+echo "Compiling src/keystone_avx512.c..."
+gcc $NATIVE_CFLAGS -mavx512f -mavx512dq -c src/keystone_avx512.c -o keystone_avx512.o
+
 echo "Building compare_search_auto..."
 gcc $NATIVE_CFLAGS $OPENMP_CFLAGS -Wall -Wextra -I. -I./include -DKEYSTONE_BENCH_AUTO=1 $FORTRAN_CFLAGS \
     -c scripts/compare_search.c -o scripts/compare_search_auto.o
 
-gcc -o scripts/compare_search_auto scripts/compare_search_auto.o keystone.o \
+gcc -o scripts/compare_search_auto scripts/compare_search_auto.o keystone.o keystone_avx512.o \
     -lm $OPENMP_LDFLAGS -L./fortran -lkeystone_batch -Wl,-rpath,"\$ORIGIN/../fortran" || { echo "compare_search_auto linking failed"; exit 1; }
 
 # Run benchmark profiles and collect CSV output
@@ -100,4 +103,4 @@ if [ -f benchmarks/performance_proof ]; then
 fi
 
 # Cleanup temporary objects
-rm -f keystone.o scripts/compare_search_auto.o
+rm -f keystone.o keystone_avx512.o scripts/compare_search_auto.o
