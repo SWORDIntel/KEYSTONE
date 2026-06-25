@@ -15,44 +15,82 @@ static const int64_t* g_cached_h_arr = NULL;
 static int64_t* g_cached_d_arr = NULL;
 static size_t g_cached_n = 0;
 
-__global__ void keystone_search_kernel_optimized(
+__global__ void keystone_search_kernel_warp_cooperative(
     const int64_t* __restrict__ arr,
     size_t n,
     keystone_batch_item_t* __restrict__ items,
     size_t num_items,
     unsigned long long* __restrict__ d_success_count)
 {
-    size_t idx = blockIdx.x * blockDim.x + threadIdx.x;
-    if (idx >= num_items) return;
+    // Warp-Cooperative 32-ary Search (Optimized for H200 / Hopper)
+    // Instead of 1 thread = 1 query (which causes warp divergence and memory serialization),
+    // we use 1 WARP (32 threads) = 1 query.
+    // The warp divides the search space into 32 segments per iteration, reducing a 24-depth
+    // binary search into a mere 5-depth 32-ary search. All memory reads are perfectly coalesced/parallel.
 
-    int64_t key = items[idx].key;
+    unsigned int tid = threadIdx.x;
+    unsigned int lane_id = tid % 32;
+    unsigned int warp_id = (blockIdx.x * blockDim.x + tid) / 32;
+    
+    if (warp_id >= num_items) return;
+
+    int64_t key = items[warp_id].key;
     size_t found_idx = KEYSTONE_NOT_FOUND;
 
-    // Quick bounds check using texture cache
-    if (n > 0 && key >= LDG(&arr[0]) && key <= LDG(&arr[n - 1])) {
-        // Branchless lower-bound binary search
-        // This minimizes thread divergence within a warp when threads are searching for disparate keys
-        size_t lo = 0;
-        size_t len = n;
+    if (n > 0) {
+        // Broadcast bounds check across the warp to avoid divergent reads
+        int64_t bound_min = (lane_id == 0) ? LDG(&arr[0]) : 0;
+        int64_t bound_max = (lane_id == 31) ? LDG(&arr[n - 1]) : 0;
         
-        while (len > 1) {
-            size_t half = len / 2;
-            size_t mid = lo + half - 1;
-            int64_t mid_val = LDG(&arr[mid]);
+        bound_min = __shfl_sync(0xFFFFFFFF, bound_min, 0);
+        bound_max = __shfl_sync(0xFFFFFFFF, bound_max, 31);
+        
+        if (key >= bound_min && key <= bound_max) {
+            size_t lo = 0;
+            size_t hi = n;
             
-            // Branchless advance
-            lo = (mid_val < key) ? (lo + half) : lo;
-            len -= half;
-        }
-        
-        if (LDG(&arr[lo]) == key) {
-            found_idx = lo;
+            // N-ary search loop (N=32)
+            while (hi - lo > 32) {
+                size_t step = (hi - lo) / 32;
+                size_t probe_idx = lo + lane_id * step;
+                
+                int64_t probe_val = LDG(&arr[probe_idx]);
+                
+                // Ballot creates a bitmask of all lanes where probe_val <= key
+                unsigned int mask = __ballot_sync(0xFFFFFFFF, probe_val <= key);
+                
+                // The highest set bit tells us the exact segment the key falls into
+                int highest_lane = 31 - __clz(mask); 
+                
+                lo = lo + highest_lane * step;
+                hi = (highest_lane == 31) ? hi : (lo + step);
+            }
+            
+            // Final phase: the remaining search space is <= 32 elements.
+            // A single parallel read by the warp finds the exact match.
+            size_t len = hi - lo;
+            size_t probe_idx = lo + lane_id;
+            
+            int is_match = 0;
+            if (lane_id < len && LDG(&arr[probe_idx]) == key) {
+                is_match = 1;
+            }
+            
+            unsigned int match_mask = __ballot_sync(0xFFFFFFFF, is_match);
+            if (match_mask != 0) {
+                // If there are multiple matches, __ffs gets the lowest index
+                int match_lane = __ffs(match_mask) - 1;
+                found_idx = lo + match_lane;
+            }
         }
     }
 
-    items[idx].result = found_idx;
-    if (found_idx != KEYSTONE_NOT_FOUND) {
-        atomicAdd(d_success_count, 1ULL);
+    // Only lane 0 writes the result back to global memory
+    if (lane_id == 0) {
+        items[warp_id].result = found_idx;
+        if (found_idx != KEYSTONE_NOT_FOUND) {
+            atomicAdd(d_success_count, 1ULL);
+        }
     }
 }
 
@@ -110,12 +148,13 @@ extern "C" size_t keystone_search_batch_cuda(
     cudaMemcpyAsync(d_items, items, num_items * sizeof(keystone_batch_item_t), cudaMemcpyHostToDevice, stream);
     cudaMemsetAsync(d_success_count, 0, sizeof(unsigned long long), stream);
 
-    // Compute optimal thread blocks
+    // Compute optimal thread blocks for Warp-Cooperative Launch
     int threads_per_block = 256;
-    int blocks = (num_items + threads_per_block - 1) / threads_per_block;
+    int warps_per_block = threads_per_block / 32;
+    int blocks = (num_items + warps_per_block - 1) / warps_per_block;
 
-    // Launch optimized kernel
-    keystone_search_kernel_optimized<<<blocks, threads_per_block, 0, stream>>>(
+    // Launch Warp-Cooperative kernel
+    keystone_search_kernel_warp_cooperative<<<blocks, threads_per_block, 0, stream>>>(
         d_arr, n, d_items, num_items, d_success_count);
 
     // Download items back asynchronously
