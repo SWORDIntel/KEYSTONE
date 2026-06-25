@@ -59,7 +59,7 @@ if [ "${KEYSTONE_ENABLE_CUDA:-1}" = "1" ]; then
     elif command -v nvcc >/dev/null 2>&1; then
         echo "Building CUDA backend for benchmark..."
         mkdir -p cuda
-        nvcc -O3 --compiler-options '-fPIC' -shared cuda/keystone_cuda.cu -o cuda/libkeystone_cuda.so
+        nvcc -O3 --std=c++17 -U_GNU_SOURCE --compiler-options '-fPIC' -shared cuda/keystone_cuda.cu -o cuda/libkeystone_cuda.so
         CUDA_CFLAGS="-DKEYSTONE_ENABLE_CUDA"
         CUDA_LDFLAGS="-L./cuda -lkeystone_cuda -Wl,-rpath,\$ORIGIN/cuda"
     fi

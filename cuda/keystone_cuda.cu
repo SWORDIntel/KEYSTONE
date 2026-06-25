@@ -1,7 +1,6 @@
-#include "keystone_cuda.h"
 #include <cuda_runtime.h>
 #include <stdio.h>
-#include <mutex>
+#include "keystone_cuda.h"
 
 // Use __ldg to route reads through the read-only texture cache for high warp divergence efficiency
 #if __CUDA_ARCH__ >= 350
@@ -11,7 +10,7 @@
 #endif
 
 // Global device cache to prevent catastrophic PCIe overhead on repeated batch calls
-static std::mutex g_cache_mutex;
+static volatile int g_cache_lock = 0;
 static const int64_t* g_cached_h_arr = NULL;
 static int64_t* g_cached_d_arr = NULL;
 static size_t g_cached_n = 0;
@@ -68,27 +67,31 @@ extern "C" size_t keystone_search_batch_cuda(
     int64_t* d_arr = NULL;
     
     // Lock the cache to safely reuse device memory across repeated batch queries
-    {
-        std::lock_guard<std::mutex> lock(g_cache_mutex);
-        if (g_cached_h_arr == arr && g_cached_n == n) {
+    while (__sync_lock_test_and_set(&g_cache_lock, 1)) {
+        // spin
+    }
+    
+    if (g_cached_h_arr == arr && g_cached_n == n) {
+        d_arr = g_cached_d_arr;
+    } else {
+        if (g_cached_d_arr) {
+            cudaFree(g_cached_d_arr);
+        }
+        if (cudaMalloc((void**)&g_cached_d_arr, n * sizeof(int64_t)) == cudaSuccess) {
+            cudaMemcpy(g_cached_d_arr, arr, n * sizeof(int64_t), cudaMemcpyHostToDevice);
+            g_cached_h_arr = arr;
+            g_cached_n = n;
             d_arr = g_cached_d_arr;
         } else {
-            if (g_cached_d_arr) {
-                cudaFree(g_cached_d_arr);
-            }
-            if (cudaMalloc((void**)&g_cached_d_arr, n * sizeof(int64_t)) == cudaSuccess) {
-                cudaMemcpy(g_cached_d_arr, arr, n * sizeof(int64_t), cudaMemcpyHostToDevice);
-                g_cached_h_arr = arr;
-                g_cached_n = n;
-                d_arr = g_cached_d_arr;
-            } else {
-                g_cached_h_arr = NULL;
-                g_cached_n = 0;
-                g_cached_d_arr = NULL;
-                return 0; // OOM
-            }
+            g_cached_h_arr = NULL;
+            g_cached_n = 0;
+            g_cached_d_arr = NULL;
+            __sync_lock_release(&g_cache_lock);
+            return 0; // OOM
         }
     }
+    
+    __sync_lock_release(&g_cache_lock);
 
     keystone_batch_item_t* d_items = NULL;
     unsigned long long* d_success_count = NULL;
