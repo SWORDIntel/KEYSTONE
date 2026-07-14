@@ -143,7 +143,7 @@ bin:
 # Pattern rules
 # Explicit rule for AVX-512 object to isolate experimental code
 src/keystone_avx512.o: src/keystone_avx512.c
-	$(CC) $(CFLAGS) -mavx512f -mavx512dq -c $< -o $@
+	$(if $(filter 1,$(KEYSTONE_ENABLE_AVX512)),$(CC) $(CFLAGS) -mavx512f -mavx512dq -c $< -o $@,$(CC) $(CFLAGS) -mno-avx512f -c $< -o $@)
 
 %.o: %.c
 	$(CC) $(CFLAGS) -c $< -o $@
