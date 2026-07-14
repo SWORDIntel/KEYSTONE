@@ -67,6 +67,10 @@ echo "Compiling src/keystone.c..."
 gcc $NATIVE_CFLAGS $OPENMP_CFLAGS -Wall -Wextra -fPIC -I./include $FORTRAN_CFLAGS \
     -c src/keystone.c -o .build_lib/keystone.o
 
+echo "Compiling src/keystone_avx512.c..."
+gcc $NATIVE_CFLAGS -Wall -Wextra -fPIC -I./include \
+    -c src/keystone_avx512.c -o .build_lib/keystone_avx512.o
+
 echo "Compiling src/dsmil_keystone_wrapper.c..."
 gcc $NATIVE_CFLAGS $OPENMP_CFLAGS -Wall -Wextra -fPIC -I./include $TAR_ZST_CFLAGS \
     -c src/dsmil_keystone_wrapper.c -o .build_lib/dsmil_keystone_wrapper.o
@@ -75,7 +79,7 @@ echo "Compiling src/dsmil_telemetry_processor.c..."
 gcc $NATIVE_CFLAGS $OPENMP_CFLAGS -Wall -Wextra -fPIC -I./include $TAR_ZST_CFLAGS \
     -c src/dsmil_telemetry_processor.c -o .build_lib/dsmil_telemetry_processor.o
 
-LIB_OBJS=".build_lib/keystone.o .build_lib/dsmil_keystone_wrapper.o .build_lib/dsmil_telemetry_processor.o"
+LIB_OBJS=".build_lib/keystone.o .build_lib/keystone_avx512.o .build_lib/dsmil_keystone_wrapper.o .build_lib/dsmil_telemetry_processor.o"
 
 if [ -n "$TAR_ZST_CFLAGS" ]; then
     echo "Compiling src/keystone_tar_zst.c..."
@@ -85,7 +89,7 @@ if [ -n "$TAR_ZST_CFLAGS" ]; then
 fi
 
 echo "Linking libkeystone.so..."
-gcc -shared -fPIC -o libkeystone.so $LIB_OBJS -lm $OPENMP_LDFLAGS $FORTRAN_LDFLAGS $TAR_ZST_LDFLAGS
+gcc -shared -fPIC -Wl,-z,defs -o libkeystone.so $LIB_OBJS -lm $OPENMP_LDFLAGS $FORTRAN_LDFLAGS $TAR_ZST_LDFLAGS
 
 echo "Library build complete: $(pwd)/libkeystone.so"
 

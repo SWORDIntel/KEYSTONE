@@ -32,9 +32,11 @@ size_t keystone_linear_search_avx512(const int64_t* arr, size_t n, int64_t key) 
         if (arr[i] == key) return i;
     }
 #else
-    (void)arr;
-    (void)n;
-    (void)key;
+    for (size_t i = 0; i < n; ++i) {
+        if (arr[i] == key) {
+            return i;
+        }
+    }
 #endif
     return KEYSTONE_NOT_FOUND;
 }
@@ -49,10 +51,8 @@ void keystone_batch_linear_search_fallback_avx512(
         results[k] = keystone_linear_search_avx512(arr, n, keys[k]);
     }
 #else
-    (void)arr;
-    (void)n;
-    (void)keys;
-    (void)num_keys;
-    (void)results;
+    for (size_t k = 0; k < num_keys; ++k) {
+        results[k] = keystone_linear_search_avx512(arr, n, keys[k]);
+    }
 #endif
 }
