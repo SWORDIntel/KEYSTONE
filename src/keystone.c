@@ -777,6 +777,17 @@ static inline size_t keystone_local_search(const int64_t* arr, size_t lo, size_t
         return (res == KEYSTONE_NOT_FOUND) ? KEYSTONE_NOT_FOUND : (lo + res);
     }
 
+    /* For medium windows (33-64), use AVX-512 lower_bound if available.
+     * The branchless SIMD scan eliminates branch mispredictions that
+     * plague binary search for these sizes. */
+#if defined(__AVX512F__)
+    if (n <= 64) {
+        size_t lb = keystone_lower_bound_avx512(&arr[lo], n, key);
+        if (lb < n && arr[lo + lb] == key) return lo + lb;
+        return KEYSTONE_NOT_FOUND;
+    }
+#endif
+
     /* BRANCHLESS lower-bound binary search for larger windows.
      * Invariant: arr[idx] may be < key, but the true lower bound lies
      * somewhere in [idx, idx + n - 1].  We compare against the last
@@ -1237,6 +1248,42 @@ size_t keystone_search_batch(const int64_t* arr, size_t n,
 
     qsort(sorted, num_items, sizeof(keystone_batch_item_t), keystone_batch_key_cmp);
 
+    /* AVX-512 merge-walk path: extract sorted keys, use SIMD-accelerated
+     * merge-walk, then scatter results back to original order. */
+#if defined(__AVX512F__)
+    if (n >= 1024 && num_items >= 8) {
+        int64_t* sorted_keys = malloc(num_items * sizeof(int64_t));
+        size_t* sorted_results = malloc(num_items * sizeof(size_t));
+        if (sorted_keys && sorted_results) {
+            for (size_t i = 0; i < num_items; i++) {
+                sorted_keys[i] = sorted[i].key;
+            }
+
+            /* Use AVX-512 merge-walk for the bulk search */
+            keystone_batch_search_sorted_avx512(
+                arr, n, sorted_keys, num_items, sorted_results);
+
+            /* Scatter results back to original order */
+            for (size_t i = 0; i < num_items; i++) {
+                size_t original = sorted[i].ordinal;
+                items[original].result = sorted_results[i];
+                items[original].ordinal = original;
+                if (sorted_results[i] != KEYSTONE_NOT_FOUND) {
+                    found++;
+                }
+            }
+
+            free(sorted_keys);
+            free(sorted_results);
+            free(sorted);
+            return found;
+        }
+        free(sorted_keys);
+        free(sorted_results);
+    }
+#endif
+
+    /* Scalar merge-walk fallback */
     size_t ai = 0;
     for (size_t i = 0; i < num_items; ++i) {
         const int64_t key = sorted[i].key;
