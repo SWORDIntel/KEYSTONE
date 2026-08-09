@@ -206,9 +206,11 @@ $(TEST_BIN) $(BENCH_BIN): fortran/libkeystone_batch.so | bin
 endif
 
 # CUDA backend (optional)
+CUDA_HOME ?= $(firstword $(wildcard /usr/local/cuda /usr/local/cuda-13.3 /opt/cuda))
+CUDA_INCLUDE ?= $(firstword $(wildcard $(CUDA_HOME)/targets/x86_64-linux/include $(CUDA_HOME)/include))
 cuda/libkeystone_cuda.so: cuda/keystone_cuda.cu
 	mkdir -p cuda
-	nvcc -O3 --std=c++17 -U_GNU_SOURCE --compiler-options '-fPIC' -shared $< -o $@
+	nvcc -O3 --std=c++17 -U_GNU_SOURCE -I$(CUDA_INCLUDE) --compiler-options '-fPIC' -shared $< -o $@
 
 CUDA_ENABLED := no
 ifeq ($(KEYSTONE_ENABLE_CUDA),1)
