@@ -76,6 +76,11 @@ jobs:
           } > .github/ci-artifacts/ci-summary.md
           exit "$TEST_STATUS"
 
+      - name: Run Python SDK tests
+        run: |
+          pip install --break-system-packages -e python || pip install -e python
+          python3 -m unittest discover -s python/tests
+
       - name: Upload CI artifacts
         if: always()
         uses: actions/upload-artifact@v4

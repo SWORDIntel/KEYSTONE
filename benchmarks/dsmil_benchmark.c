@@ -443,7 +443,7 @@ int main(int argc, char** argv) {
     benchmark_auto_batch_search("random query profile", data, DATA_SIZE, queries, NUM_QUERIES);
 
     const size_t DENSE_SORTED_QUERIES = DATA_SIZE < 8192 ? DATA_SIZE : 8192;
-    int64_t* dense_sorted_queries = malloc(DENSE_SORTED_QUERIES * sizeof(*dense_sorted_queries));
+    int64_t* dense_sorted_queries = (int64_t*)calloc(DENSE_SORTED_QUERIES, sizeof(int64_t));
     assert(dense_sorted_queries && "Failed to allocate dense sorted queries");
     for (size_t i = 0; i < DENSE_SORTED_QUERIES; ++i) {
         dense_sorted_queries[i] = data[i % DATA_SIZE];
@@ -451,7 +451,7 @@ int main(int argc, char** argv) {
     benchmark_auto_batch_search("dense sorted profile",
                                 data, DATA_SIZE, dense_sorted_queries, DENSE_SORTED_QUERIES);
     
-    int64_t* sparse_sorted_queries = malloc(DENSE_SORTED_QUERIES * sizeof(*sparse_sorted_queries));
+    int64_t* sparse_sorted_queries = (int64_t*)calloc(DENSE_SORTED_QUERIES, sizeof(int64_t));
     assert(sparse_sorted_queries && "Failed to allocate sparse sorted queries");
     for (size_t i = 0; i < DENSE_SORTED_QUERIES; ++i) {
         sparse_sorted_queries[i] = data[(i * 10) % DATA_SIZE];
@@ -463,7 +463,7 @@ int main(int argc, char** argv) {
     benchmark_auto_batch_search("sparse sorted profile",
                                 data, DATA_SIZE, sparse_sorted_queries, DENSE_SORTED_QUERIES);
 
-    int64_t* strided_queries = malloc(DENSE_SORTED_QUERIES * sizeof(*strided_queries));
+    int64_t* strided_queries = (int64_t*)calloc(DENSE_SORTED_QUERIES, sizeof(int64_t));
     assert(strided_queries && "Failed to allocate strided queries");
     for (size_t i = 0; i < DENSE_SORTED_QUERIES; ++i) {
         strided_queries[i] = data[0] + (int64_t)i * 15;
@@ -471,7 +471,7 @@ int main(int argc, char** argv) {
     benchmark_auto_batch_search("strided profile",
                                 data, DATA_SIZE, strided_queries, DENSE_SORTED_QUERIES);
 
-    int64_t* mixed_queries = malloc(NUM_QUERIES * sizeof(*mixed_queries));
+    int64_t* mixed_queries = (int64_t*)calloc(NUM_QUERIES, sizeof(int64_t));
     assert(mixed_queries && "Failed to allocate mixed queries");
     for (size_t i = 0; i < NUM_QUERIES; ++i) {
         if (rand() % 2 == 0) {

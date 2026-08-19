@@ -1944,7 +1944,7 @@ size_t keystone_search_batch_auto(const int64_t* arr,
     if (estimated_ns_per_key <= 0.0) {
         estimated_ns_per_key = cached_ns_per_key;
     }
-    if (cached_p95_ns_per_key <= 0.0) {
+    if (cached_p95_ns_per_key < estimated_ns_per_key) {
         cached_p95_ns_per_key = estimated_ns_per_key;
     }
 
