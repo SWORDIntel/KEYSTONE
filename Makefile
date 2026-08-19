@@ -2,7 +2,7 @@
 # Standard make / make test workflow
 
 CC      := gcc
-CFLAGS  := -O3 -march=native -Wall -Wextra -Werror=implicit-function-declaration -I./include -DKEYSTONE_ENABLE_PLATFORM_TUNING
+CFLAGS  := -O3 -march=native -fPIC -Wall -Wextra -Werror=implicit-function-declaration -I./include -DKEYSTONE_ENABLE_PLATFORM_TUNING
 LDFLAGS := -lm
 
 # Optional OpenMP
@@ -125,9 +125,14 @@ OBJS    := $(SRC:.c=.o)
 BENCH_SRC := benchmarks/dsmil_benchmark.c benchmarks/performance_proof.c
 BENCH_BIN := benchmarks/dsmil_benchmark benchmarks/performance_proof
 
-.PHONY: all tests test check run-tests benchmarks clean
+.PHONY: all lib tests test check run-tests benchmarks clean
 
-all: tests benchmarks
+all: lib tests benchmarks
+
+lib: libkeystone.so
+
+libkeystone.so: $(OBJS)
+	$(CC) -shared -fPIC -o $@ $^ $(LDFLAGS)
 
 tests: $(TEST_BIN)
 
@@ -209,7 +214,7 @@ endif
 
 ifeq ($(FORTRAN_ENABLED),yes)
 all: fortran/libkeystone_batch.so
-$(TEST_BIN) $(BENCH_BIN): fortran/libkeystone_batch.so | bin
+libkeystone.so $(TEST_BIN) $(BENCH_BIN): fortran/libkeystone_batch.so | bin
 endif
 
 # CUDA backend (optional)
@@ -230,11 +235,11 @@ endif
 
 ifeq ($(CUDA_ENABLED),yes)
 all: cuda/libkeystone_cuda.so
-$(TEST_BIN) $(BENCH_BIN): cuda/libkeystone_cuda.so | bin
+libkeystone.so $(TEST_BIN) $(BENCH_BIN): cuda/libkeystone_cuda.so | bin
 endif
 
 clean:
-	rm -f $(OBJS) tests/*.o benchmarks/*.o
+	rm -f $(OBJS) tests/*.o benchmarks/*.o libkeystone.so
 	rm -rf bin
 	rm -f scripts/compare_search_auto
 	rm -f fortran/libkeystone_batch.so fortran/*.mod

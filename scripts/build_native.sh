@@ -3,5 +3,5 @@ set -e
 
 echo "Building KEYSTONE for native architecture via Makefile..."
 make clean
-make tests benchmarks
+make all
 echo "Native build completed successfully!"
