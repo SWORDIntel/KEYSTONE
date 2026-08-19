@@ -1,0 +1,11 @@
+Metadata-Version: 2.4
+Name: keystone-sdk
+Version: 1.0.0
+Summary: High-Performance Target-Silicon-Tuned Search & Telemetry Engine
+Author: John Reese
+Requires-Python: >=3.8
+Requires-Dist: numpy>=1.20.0
+Dynamic: author
+Dynamic: requires-dist
+Dynamic: requires-python
+Dynamic: summary
