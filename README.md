@@ -441,6 +441,55 @@ It is a focused indexing and lookup component for sorted integer datasets. Its s
 
 ---
 
+## Python SDK Quickstart
+
+KEYSTONE provides a high-performance Python SDK (`pip install -e python`):
+
+```python
+import keystone
+import numpy as np
+
+# 1. Single & Auto-Calibrated Batch Interpolation Search
+data = np.arange(0, 1000000, 7, dtype=np.int64)
+indices = keystone.KeystoneSearch.search_batch(data, [70, 7000, 140000])
+
+# Inspect backend provenance (scalar, OpenMP, AVX2, Fortran)
+decision = keystone.KeystoneSearch.get_last_decision()
+print(f"Active Backend: {decision.backend} (p95: {decision.p95_ns_per_key:.1f} ns/key)")
+
+# 2. DSMIL Telemetry Processor with Keystone Acceleration
+with keystone.TelemetryProcessor(max_events=100000) as tp:
+    tp.add_event(keystone.TelemetryEvent(timestamp=1600000000, event_type=1, device_id=42, layer_id=2))
+    ev = tp.find_by_timestamp(1600000000)
+
+# 3. Cluster Slot Router (16,384 CRC16 Slots)
+slot = keystone.ClusterRouter.get_slot("device:alpha:42")
+print(f"Assigned Cluster Slot: {slot}")
+
+# 4. Neural Micro-Model Classification (260->64->6 Feedforward)
+clf = keystone.NeuralClassifier()
+cls, name, conf = clf.classify("auth_failure admin@pentagon.af.mil topsecret_token=998822")
+print(f"Classification: {name} ({conf*100:.1f}%)")
+```
+
+---
+
+## Joint QIHSE + KEYSTONE 5-Pillar Architecture Benchmarks
+
+Measured on host hardware (Intel Xeon E5-2407, AVX execution mode):
+
+| Pillar / Subsystem | QIHSE + KEYSTONE Measured | Industry Standard / Alternative | Competitive Advantage |
+| :--- | :--- | :--- | :--- |
+| **[1] Vector Graph Search** | **33,080 QPS** (p50: 27.9 µs)<br>Anchor-Seeded 1D Spline Projection | **FAISS HNSW (CPU)**: ~15,000 QPS (65 µs)<br>**pgvector (HNSW)**: ~2,000 QPS (500 µs) | **2.2x higher QPS** vs FAISS CPU<br>**16.5x higher QPS** vs pgvector |
+| **[2] Sorted Column / TSDB Search** | **3,510,610 lookups/s** (218 ns)<br>Keystone $O(\log \log N)$ Spline (18 ns best) | **C++ `std::lower_bound`**: 2,016,334 (447 ns)<br>**Postgres B-Tree**: ~600k lookups/s (1.2 µs) | **1.74x–2.0x faster** vs `std::lower_bound`<br>**5.5x faster** vs B+Tree pointer chasing |
+| **[3] Packet Ingest / Log Scan** | **141,865 pkts/sec** (34.6 MiB/s)<br>AF_XDP Kernel Bypass + In-Place UMEM Scan | **Linux BSD Socket + epoll**: ~25,000 pkts/s<br>**Redis Ingestion**: ~75,000 ops/s | **5.6x higher throughput** vs epoll<br>**1.9x higher throughput** vs Redis |
+| **[4] Neural Context Inference** | **370,749 infer/s** (2.55 µs)<br>Inlined Dense SAXPY C Kernel (260 $\to$ 64 $\to$ 6) | **ONNX Runtime (CPU)**: ~35,000 infer/s (28 µs)<br>**PyTorch LibTorch**: ~5,000 infer/s (200 µs) | **10.5x faster inference** vs ONNX Runtime<br>**74.0x faster** vs PyTorch LibTorch |
+| **[5] Hybrid Multimodal Search** | **1,838 queries/s** (501 µs)<br>In-Memory BM25 + HNSW + Neural Masking | **OpenSearch Hybrid**: ~120 QPS (8.3 ms)<br>**Weaviate Hybrid**: ~200 QPS (5.0 ms) | **16.5x lower latency** vs OpenSearch<br>**10.0x lower latency** vs Weaviate |
+
+> 📊 **Full Benchmark Details:** See [`docs/BENCHMARK_RESULTS.md`](docs/BENCHMARK_RESULTS.md).
+
+---
+
 ## License
 
 **AGPL-3.0-or-later. This is strong copyleft. See [LICENSE](LICENSE) before use, modification, redistribution, hosting, or derivative work.**
