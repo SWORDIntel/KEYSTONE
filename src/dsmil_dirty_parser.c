@@ -2,6 +2,10 @@
 #include <ctype.h>
 #include <string.h>
 
+#if defined(__x86_64__) || defined(__i386__)
+#include <immintrin.h>
+#endif
+
 /* Helper to check if char is valid for an email */
 static inline int is_email_char(char c) {
     return isalnum((unsigned char)c) || c == '.' || c == '_' || c == '-' || c == '+';
@@ -19,6 +23,83 @@ static void normalize_string(char* str, size_t len) {
     }
 }
 
+/*
+ * SIMD-accelerated candidate scan.
+ *
+ * The dirty-log tokenizer only ever reacts to three anchor bytes:
+ *   '@'  -> begins an email extraction attempt
+ *   'h'  -> begins a "http" URL extraction attempt
+ *   'H'  -> case-insensitive variant of the above
+ *
+ * Every other byte is a no-op that simply advances the cursor. Instead of
+ * probing those bytes one at a time, we vectorize the search so that long
+ * runs of uninteresting bytes are skipped in 32-byte (AVX2) or 16-byte
+ * (SSE4.2) strides using _mm256_cmpeq_epi8 / _mm_cmpeq_epi8. The three
+ * per-lane equality masks are OR-ed together; __builtin_ctz then yields the
+ * first matching lane in constant time.
+ *
+ * Returns the first index >= start whose byte is one of '@', 'h', 'H', or
+ * `length` if no such index exists. The remainder past the last full vector
+ * stride is handled by a scalar tail so behavior is identical to the original
+ * byte-by-byte scan.
+ */
+static inline size_t dsmil_dirty_find_next_candidate(const char* buf, size_t length, size_t start) {
+#if defined(__x86_64__) || defined(__i386__)
+    const unsigned char* p = (const unsigned char*)buf;
+    size_t i = start;
+
+#ifdef __AVX2__
+    const __m256i v_at = _mm256_set1_epi8((char)'@');
+    const __m256i v_h  = _mm256_set1_epi8((char)'h');
+    const __m256i v_H  = _mm256_set1_epi8((char)'H');
+    while (i + 32 <= length) {
+        __m256i v  = _mm256_loadu_si256((const __m256i*)(p + i));
+        __m256i m1 = _mm256_cmpeq_epi8(v, v_at);
+        __m256i m2 = _mm256_cmpeq_epi8(v, v_h);
+        __m256i m3 = _mm256_cmpeq_epi8(v, v_H);
+        __m256i m  = _mm256_or_si256(_mm256_or_si256(m1, m2), m3);
+        unsigned int mask = (unsigned int)_mm256_movemask_epi8(m);
+        if (mask) {
+            return i + (size_t)__builtin_ctz(mask);
+        }
+        i += 32;
+    }
+#endif /* __AVX2__ */
+
+#ifdef __SSE4_2__
+    const __m128i s_at = _mm_set1_epi8((char)'@');
+    const __m128i s_h  = _mm_set1_epi8((char)'h');
+    const __m128i s_H  = _mm_set1_epi8((char)'H');
+    while (i + 16 <= length) {
+        __m128i v  = _mm_loadu_si128((const __m128i*)(p + i));
+        __m128i m1 = _mm_cmpeq_epi8(v, s_at);
+        __m128i m2 = _mm_cmpeq_epi8(v, s_h);
+        __m128i m3 = _mm_cmpeq_epi8(v, s_H);
+        __m128i m  = _mm_or_si128(_mm_or_si128(m1, m2), m3);
+        unsigned int mask = (unsigned int)_mm_movemask_epi8(m);
+        if (mask) {
+            return i + (size_t)__builtin_ctz(mask);
+        }
+        i += 16;
+    }
+#endif /* __SSE4_2__ */
+
+    /* Scalar tail for the sub-vector remainder */
+    for (; i < length; i++) {
+        unsigned char c = p[i];
+        if (c == '@' || c == 'h' || c == 'H') return i;
+    }
+    return length;
+#else
+    /* Non-x86 (e.g. Graviton/Neoverse) scalar fallback */
+    for (size_t i = start; i < length; i++) {
+        unsigned char c = (unsigned char)buf[i];
+        if (c == '@' || c == 'h' || c == 'H') return i;
+    }
+    return length;
+#endif
+}
+
 size_t dsmil_dirty_log_ingest(const char* buffer, size_t length, uint64_t base_offset, dsmil_hash_index_t* index) {
     if (!buffer || !index || length == 0) return 0;
 
@@ -26,6 +107,14 @@ size_t dsmil_dirty_log_ingest(const char* buffer, size_t length, uint64_t base_o
     size_t i = 0;
 
     while (i < length) {
+        /* SIMD-skip long runs of bytes that cannot begin an email ('@') or
+         * URL ('h'/'H') token. The candidate finder jumps straight to the
+         * next interesting byte in 16/32-byte vector strides; the extraction
+         * logic below is unchanged and runs only at real candidates. */
+        size_t candidate = dsmil_dirty_find_next_candidate(buffer, length, i);
+        if (candidate >= length) break;
+        i = candidate;
+
         /* Extremely aggressive, zero-allocation scanner for dirty stealer data */
         
         /* 1. Email extraction heuristic: look for '@' */
