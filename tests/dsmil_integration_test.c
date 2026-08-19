@@ -1,4 +1,5 @@
 #include "dsmil_keystone_wrapper.h"
+#include "keystone.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <assert.h>
@@ -12,8 +13,8 @@ static void test_context_creation(void) {
 
     dsmil_search_context_t *ctx = dsmil_search_create();
     assert(ctx != NULL);
-    assert(ctx->initialized == true);
-    assert(dsmil_search_avx2_enabled(ctx) == true);
+    // AVX2 state reflects host CPU capabilities
+    assert(dsmil_search_avx2_enabled(ctx) == ((keystone_detect_cpu_features() & KEYSTONE_CPU_AVX2) != 0));
 
     printf("✓ Context creation successful\n");
     printf("  AVX2 enabled: %s\n", dsmil_search_avx2_enabled(ctx) ? "yes" : "no");

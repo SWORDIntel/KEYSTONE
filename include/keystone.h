@@ -40,7 +40,9 @@ typedef enum keystone_cpu_feature {
     KEYSTONE_CPU_SVE = (1 << 5),
     KEYSTONE_CPU_SVE2 = (1 << 6),
     KEYSTONE_CPU_I8MM = (1 << 7),
-    KEYSTONE_CPU_GRAVITON4 = (1 << 8)
+    KEYSTONE_CPU_GRAVITON4 = (1 << 8),
+    KEYSTONE_CPU_AVX = (1 << 9),
+    KEYSTONE_CPU_SSE42 = (1 << 10)
 } keystone_cpu_feature_t;
 
 typedef struct {

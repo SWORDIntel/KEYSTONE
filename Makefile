@@ -80,11 +80,18 @@ else
     SRC += src/qihse_keystone_bridge.c
 endif
 
+# CPU ISA feature flags
+HOST_CPU_FLAGS ?= $(shell awk -F: '/^flags/{sub(/^ /, "", $$2); print $$2; exit}' /proc/cpuinfo 2>/dev/null)
+cpu_has = $(if $(filter $(1),$(HOST_CPU_FLAGS)),1,0)
+
+KEYSTONE_ENABLE_AVX2   ?= $(call cpu_has,avx2)
+KEYSTONE_ENABLE_AVX512 ?= $(if $(and $(filter avx512f,$(HOST_CPU_FLAGS)),$(filter avx512dq,$(HOST_CPU_FLAGS))),1,0)
+
 # SIMD detection
 ifeq ($(KEYSTONE_FORCE_SCALAR),1)
-    CFLAGS += -mno-avx2
+    CFLAGS += -mno-avx2 -mno-avx512f
 else
-    ifneq ($(KEYSTONE_ENABLE_AVX2),0)
+    ifeq ($(KEYSTONE_ENABLE_AVX2),1)
         CFLAGS += -mavx2
     endif
     ifeq ($(KEYSTONE_ENABLE_AVX512),1)

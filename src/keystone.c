@@ -236,6 +236,19 @@ uint32_t keystone_detect_cpu_features(void) {
             features |= KEYSTONE_CPU_GRAVITON4;
         }
 #else
+        /* Test AVX */
+        if (x86_os_avx_enabled()) {
+            features |= KEYSTONE_CPU_AVX;
+        }
+
+        /* Test SSE4.2 */
+        {
+            uint32_t eax = 0, ebx = 0, ecx = 0, edx = 0;
+            if (__get_cpuid(1, &eax, &ebx, &ecx, &edx) && (ecx & (1u << 20))) {
+                features |= KEYSTONE_CPU_SSE42;
+            }
+        }
+
         /* Test AVX2 */
         if (test_avx2()) {
             features |= KEYSTONE_CPU_AVX2;

@@ -42,7 +42,7 @@ static bool check_avx2_support(void) {
 }
 
 /* Evaluate local host context for backend dispatch routing decisions. */
-static int _dsmil_evaluate_host_context(_nst_numa_placement_hint_t* hint) {
+__attribute__((unused)) static int _dsmil_evaluate_host_context(_nst_numa_placement_hint_t* hint) {
     if (!hint) return 0;
     _nst_hints_extract_domain_context(hint);
     return _nst_hints_score_environment(hint);
