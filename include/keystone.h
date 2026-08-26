@@ -327,6 +327,27 @@ keystone_result_t keystone_search_events(
 bool keystone_init_for_dsmil(keystone_anchor_table_t* table, int workload_type);
 int keystone_optimize_array_memory(int64_t* arr, size_t n);
 
+/**
+ * @brief Pre-populate the anchor table with evenly-spaced anchors.
+ *
+ * Samples the sorted array at regular intervals and inserts anchors at
+ * those positions.  This "warms up" the interpolation search table so
+ * that the first batch of lookups benefits from good anchor coverage
+ * without needing to learn anchors one-by-one from search misses.
+ *
+ * @param arr Sorted array of int64_t values
+ * @param n Number of elements in arr
+ * @param table Anchor table to populate (must not be NULL)
+ * @param anchor_count Number of anchors to insert (clamped to table->max_capacity)
+ * @return Number of anchors actually inserted
+ */
+size_t keystone_anchor_seed_batch(
+    const int64_t* arr,
+    size_t n,
+    keystone_anchor_table_t* table,
+    size_t anchor_count
+);
+
 #ifdef KEYSTONE_ENABLE_TAR_ZST
 #include "keystone_tar_zst.h"
 #endif

@@ -2321,3 +2321,72 @@ bool enhanced_available(void) {
 const char* enhanced_build_info(void) {
     return KEYSTONE_BUILD_INFO;
 }
+
+size_t keystone_anchor_seed_batch(
+    const int64_t* arr,
+    size_t n,
+    keystone_anchor_table_t* table,
+    size_t anchor_count
+) {
+    size_t inserted = 0u;
+    size_t i;
+
+    if (!arr || n == 0u || !table || !table->anchors || anchor_count == 0u) {
+        return 0u;
+    }
+    /* Clamp to max_capacity to avoid overfilling. */
+    if (anchor_count > table->max_capacity) {
+        anchor_count = table->max_capacity;
+    }
+    /* Don't seed more anchors than data points. */
+    if (anchor_count > n) {
+        anchor_count = n;
+    }
+    /* Grow capacity if needed. */
+    if (anchor_count > table->capacity) {
+        size_t new_cap = table->capacity;
+        while (new_cap < anchor_count && new_cap < table->max_capacity) {
+            new_cap = (new_cap * 2u > table->max_capacity) ?
+                      table->max_capacity : new_cap * 2u;
+        }
+        if (new_cap > table->capacity) {
+            keystone_anchor_t* new_anchors = realloc(table->anchors,
+                                                     new_cap * sizeof(keystone_anchor_t));
+            if (!new_anchors) {
+                return 0u;
+            }
+            table->anchors = new_anchors;
+            table->capacity = new_cap;
+            table->stats.memory_reallocations++;
+        }
+    }
+    /* Reset table — seeding replaces existing anchors. */
+    table->size = 0u;
+    /* Sample at evenly-spaced intervals. */
+    for (i = 0u; i < anchor_count; i++) {
+        size_t idx = (n * i) / anchor_count;
+        if (idx >= n) idx = n - 1u;
+        /* Find insertion point (anchors must stay sorted by value). */
+        size_t pos = 0u;
+        while (pos < table->size && table->anchors[pos].v < arr[idx]) {
+            ++pos;
+        }
+        /* Skip duplicate values. */
+        if (pos < table->size && table->anchors[pos].v == arr[idx]) {
+            continue;
+        }
+        /* Shift elements to make room. */
+        if (pos < table->size) {
+            memmove(&table->anchors[pos + 1], &table->anchors[pos],
+                    (table->size - pos) * sizeof(keystone_anchor_t));
+        }
+        table->anchors[pos].v = arr[idx];
+        table->anchors[pos].i = idx;
+        table->anchors[pos].use_count = 0u;
+        table->anchors[pos].last_used = keystone_next_anchor_timestamp();
+        table->size++;
+        table->stats.anchors_learned++;
+        inserted++;
+    }
+    return inserted;
+}
