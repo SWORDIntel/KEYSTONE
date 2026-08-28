@@ -256,6 +256,36 @@ size_t keystone_search_batch_auto(
     const keystone_parallel_config_t* config
 );
 
+/**
+ * @brief Zero-copy batch search for NumPy/ctypes callers.
+ *
+ * Takes contiguous int64_t key array and writes results directly into a
+ * contiguous size_t result array.  Avoids the per-key Python-level
+ * keystone_batch_item_t construction/scatter that dominates Python batch
+ * workloads.
+ *
+ * @param arr Sorted int64_t array to search.
+ * @param n Number of elements in arr.
+ * @param keys Contiguous int64_t array of query keys.
+ * @param num_keys Number of query keys.
+ * @param results Pre-allocated contiguous size_t array (length num_keys).
+ *                Each element receives the found index or KEYSTONE_NOT_FOUND.
+ * @param table Anchor table (may be NULL).
+ * @param tol Interpolation tolerance.
+ * @param config Parallel config (may be NULL for defaults).
+ * @return Number of successful searches (keys found).
+ */
+size_t keystone_search_keys_batch_auto(
+    const int64_t* arr,
+    size_t n,
+    const int64_t* keys,
+    size_t num_keys,
+    size_t* results,
+    keystone_anchor_table_t* table,
+    size_t tol,
+    const keystone_parallel_config_t* config
+);
+
 int keystone_get_last_backend_decision(keystone_backend_decision_t* decision);
 
 const char* keystone_backend_name(keystone_backend_t backend);
