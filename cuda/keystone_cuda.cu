@@ -2,7 +2,6 @@
 #include <stdio.h>
 #include <stdint.h>
 #include <string.h>
-#include <pthread.h>
 #include "keystone_cuda.h"
 
 // Use __ldg to route reads through the read-only texture cache for high warp divergence efficiency
@@ -12,68 +11,50 @@
 #define LDG(ptr) (*(ptr))
 #endif
 
-// ============================================================================
-// Thread-safe device-array cache with reader leases
-// ============================================================================
+// ---------------------------------------------------------------------------
+// Lock-free double-buffered device cache with dataset versioning
 //
-// The previous implementation released the spinlock *before* launching the
-// kernel that uses d_arr.  A concurrent thread could then evict and cudaFree
-// the buffer while the first thread's kernel was still referencing it — a
-// GPU use-after-free.
+// Two slots, each with its own CUDA stream.  Writers acquire a slot via CAS
+// on the in_use field (0→1), copy the host array to the device buffer, then
+// publish the slot as valid (in_use = 2) and update g_active_slot.  Readers
+// check both slots for a matching host pointer + length + version and, on a
+// hit, reuse the cached device pointer without copying.
 //
-// The new design uses a generation + reader-count protocol:
+// Synchronization is entirely via atomic operations and CUDA stream ordering:
+//   * Before overwriting a slot's device buffer, the writer calls
+//     cudaStreamSynchronize on that slot's stream so that any in-flight
+//     kernels still reading the old contents have finished.
+//   * The previously active slot is retired (marked free) only after its
+//     stream is synchronized, guaranteeing no reader is still in flight.
 //
-//   Cache hit:
-//     1. Acquire mutex.
-//     2. Verify identity (h_arr + n + version).
-//     3. Increment readers, increment generation (to pin the slot).
-//     4. Release mutex.
-//     5. Launch kernel using d_arr.
-//     6. cudaStreamSynchronize.
-//     7. Decrement readers.
-//
-//   Cache miss / eviction:
-//     1. Acquire mutex.
-//     2. Wait for readers == 0 (other threads may be using the old buffer).
-//     3. cudaStreamSynchronize the slot's stream.
-//     4. cudaFree old d_arr, allocate new one, copy.
-//     5. Update identity + generation.
-//     6. Increment readers (for the current caller).
-//     7. Release mutex.
-//
-// The mutex serializes install/evict but NOT kernel execution, so concurrent
-// cache hits run in parallel.  Only the brief critical section is serialized.
+// This eliminates the global spinlock that serialized all host-side batch
+// submissions, allowing batches that hit different cache slots to execute
+// concurrently on the GPU.
 //
 // A caller-supplied dataset version (default 0) lets callers that mutate the
-// host array in-place signal that the cached device copy is stale.
-// ============================================================================
-
-// Slot states
-#define KSLOT_FREE      0
-#define KSLOT_WRITING   1
-#define KSLOT_VALID     2
-
+// host array in-place signal that the cached device copy is stale, avoiding
+// silent wrong-array queries.  keystone_cuda_cache_invalidate() forces
+// eviction for callers that free/reallocate host memory without versioning.
+// ---------------------------------------------------------------------------
 typedef struct {
-    // Identity (protected by cache_mutex)
-    const int64_t* h_arr;
-    int64_t* d_arr;
-    size_t n;
-    uint64_t version;       // caller-supplied dataset generation
-
-    // Reader lease tracking (protected by cache_mutex)
-    int state;              // KSLOT_*
-    int readers;            // number of threads currently using this slot
-    uint64_t generation;    // bumped on every install, used to detect eviction
-    cudaStream_t stream;    // per-slot stream for synchronization
-    int has_stream;
+    const int64_t* h_arr;      // host pointer (for comparison)
+    int64_t* d_arr;            // device pointer
+    size_t n;                  // array length
+    uint64_t version;          // caller-supplied dataset generation
+    volatile int in_use;       // 0=free, 1=being written, 2=valid
 } keystone_cuda_cache_slot_t;
 
-static keystone_cuda_cache_slot_t g_slot = {0};
-static pthread_mutex_t g_cache_mutex = PTHREAD_MUTEX_INITIALIZER;
+// __sync_swap is not available on all GCC versions (e.g. GCC 14+); use
+// __sync_lock_test_and_set which provides identical atomic-exchange semantics
+// (stores val into *ptr and returns the previous contents of *ptr).
+#ifndef KEYSTONE_SYNC_SWAP
+#define KEYSTONE_SYNC_SWAP(ptr, val) __sync_lock_test_and_set(ptr, val)
+#endif
 
-// ----------------------------------------------------------------------------
-// Kernels
-// ----------------------------------------------------------------------------
+static keystone_cuda_cache_slot_t g_cache_slots[2];
+static volatile int g_active_slot = 0;  // index of currently valid slot
+static cudaStream_t g_streams[2];
+static volatile int g_streams_init = 0; // 0=not init, 1=initializing, 2=ready
 
 __global__ void keystone_search_kernel_scalar(
     const int64_t* __restrict__ arr,
@@ -182,44 +163,6 @@ __global__ void keystone_search_kernel_warp_cooperative(
 }
 
 // ----------------------------------------------------------------------------
-// Internal helpers (called with mutex held)
-// ----------------------------------------------------------------------------
-
-static void slot_destroy_stream(keystone_cuda_cache_slot_t* s) {
-    if (s->has_stream) {
-        cudaStreamSynchronize(s->stream);
-        cudaStreamDestroy(s->stream);
-        s->has_stream = 0;
-    }
-}
-
-static int slot_ensure_stream(keystone_cuda_cache_slot_t* s) {
-    if (s->has_stream) return 0;
-    if (cudaStreamCreate(&s->stream) != cudaSuccess) return -1;
-    s->has_stream = 1;
-    return 0;
-}
-
-static void slot_evict(keystone_cuda_cache_slot_t* s) {
-    // Wait for any outstanding readers before freeing.
-    while (s->readers > 0) {
-        pthread_mutex_unlock(&g_cache_mutex);
-        // Brief spin-wait outside the mutex to allow readers to finish.
-        for (volatile int spin = 0; spin < 1000; ++spin) { }
-        pthread_mutex_lock(&g_cache_mutex);
-    }
-    slot_destroy_stream(s);
-    if (s->d_arr) {
-        cudaFree(s->d_arr);
-        s->d_arr = NULL;
-    }
-    s->h_arr = NULL;
-    s->n = 0;
-    s->version = 0;
-    s->state = KSLOT_FREE;
-}
-
-// ----------------------------------------------------------------------------
 // Public API
 // ----------------------------------------------------------------------------
 
@@ -243,84 +186,126 @@ extern "C" size_t keystone_search_batch_cuda_versioned(
 {
     if (n == 0 || num_items == 0) return 0;
 
-    int64_t* d_arr = NULL;
-    cudaStream_t slot_stream;
-
-    // --- Acquire a reader lease on the cached device array ---
-    pthread_mutex_lock(&g_cache_mutex);
-
-    int cache_hit = (g_slot.state == KSLOT_VALID &&
-                     g_slot.h_arr == arr &&
-                     g_slot.n == n &&
-                     g_slot.version == dataset_version &&
-                     g_slot.d_arr != NULL);
-
-    if (cache_hit) {
-        // Pin the slot: increment readers so eviction can't free d_arr
-        // while our kernel is in flight.
-        g_slot.readers++;
-        d_arr = g_slot.d_arr;
-        slot_stream = g_slot.stream;
-    } else {
-        // Cache miss: evict the old slot (waits for any existing readers).
-        if (g_slot.state == KSLOT_VALID || g_slot.d_arr) {
-            slot_evict(&g_slot);
+    // --- Lazy one-time initialization of per-slot CUDA streams ---
+    if (g_streams_init != 2) {
+        if (__sync_val_compare_and_swap(&g_streams_init, 0, 1) == 0) {
+            cudaStreamCreate(&g_streams[0]);
+            cudaStreamCreate(&g_streams[1]);
+            __sync_synchronize();  // publish stream handles before flag
+            g_streams_init = 2;
+        } else {
+            while (g_streams_init != 2) {
+                /* spin briefly until initialization finishes */
+            }
         }
-        if (slot_ensure_stream(&g_slot) != 0) {
-            pthread_mutex_unlock(&g_cache_mutex);
-            return 0;  // OOM / stream creation failure
-        }
-        g_slot.state = KSLOT_WRITING;
-        if (cudaMalloc((void**)&g_slot.d_arr, n * sizeof(int64_t)) != cudaSuccess) {
-            g_slot.d_arr = NULL;
-            g_slot.state = KSLOT_FREE;
-            pthread_mutex_unlock(&g_cache_mutex);
-            return 0;  // OOM
-        }
-        cudaMemcpy(g_slot.d_arr, arr, n * sizeof(int64_t), cudaMemcpyHostToDevice);
-        g_slot.h_arr = arr;
-        g_slot.n = n;
-        g_slot.version = dataset_version;
-        g_slot.generation++;
-        g_slot.state = KSLOT_VALID;
-        g_slot.readers = 1;  // lease for the current caller
-        d_arr = g_slot.d_arr;
-        slot_stream = g_slot.stream;
     }
 
-    pthread_mutex_unlock(&g_cache_mutex);
+    int64_t* d_arr = NULL;
+    cudaStream_t stream;
+    bool used_temp = false;  // true when we fell back to a temporary buffer
 
-    // --- Allocate per-call buffers (d_items, d_success_count) ---
+    // --- Cache lookup: check both slots for a hit (same host pointer + length + version) ---
+    for (int i = 0; i < 2; i++) {
+        if (g_cache_slots[i].in_use == 2 &&
+            g_cache_slots[i].h_arr == arr &&
+            g_cache_slots[i].n == n &&
+            g_cache_slots[i].version == dataset_version) {
+            // Cache hit — reuse the cached device pointer, no copy needed
+            d_arr = g_cache_slots[i].d_arr;
+            stream = g_streams[i];
+            break;
+        }
+    }
+
+    // --- Cache miss: try to acquire a free slot via CAS (0 → 1) ---
+    if (d_arr == NULL) {
+        int acquired = -1;
+        for (int i = 0; i < 2; i++) {
+            if (__sync_val_compare_and_swap(&g_cache_slots[i].in_use, 0, 1) == 0) {
+                acquired = i;
+                break;
+            }
+        }
+
+        if (acquired >= 0) {
+            // Ensure any in-flight kernels previously dispatched on this slot's
+            // stream have finished reading before we overwrite the device buffer.
+            cudaStreamSynchronize(g_streams[acquired]);
+
+            // Reallocate the device buffer if it is missing or the length changed
+            if (g_cache_slots[acquired].d_arr && g_cache_slots[acquired].n != n) {
+                cudaFree(g_cache_slots[acquired].d_arr);
+                g_cache_slots[acquired].d_arr = NULL;
+            }
+            if (!g_cache_slots[acquired].d_arr) {
+                if (cudaMalloc((void**)&g_cache_slots[acquired].d_arr,
+                               n * sizeof(int64_t)) != cudaSuccess) {
+                    g_cache_slots[acquired].in_use = 0;  // release the slot
+                    return 0;  // OOM
+                }
+            }
+
+            // Copy the sorted array to the device buffer
+            cudaMemcpy(g_cache_slots[acquired].d_arr, arr,
+                       n * sizeof(int64_t), cudaMemcpyHostToDevice);
+            g_cache_slots[acquired].h_arr = arr;
+            g_cache_slots[acquired].n = n;
+            g_cache_slots[acquired].version = dataset_version;
+
+            // Publish: make the slot's contents visible, then mark it valid
+            __sync_synchronize();
+            g_cache_slots[acquired].in_use = 2;
+
+            // Atomically update the active-slot index and retrieve the old value
+            int old_active = KEYSTONE_SYNC_SWAP(&g_active_slot, acquired);
+
+            // Retire the previously active slot: wait for any in-flight kernels
+            // that are still reading from it, then mark it free for reuse.
+            if (old_active != acquired) {
+                cudaStreamSynchronize(g_streams[old_active]);
+                __sync_val_compare_and_swap(&g_cache_slots[old_active].in_use, 2, 0);
+            }
+
+            d_arr = g_cache_slots[acquired].d_arr;
+            stream = g_streams[acquired];
+        } else {
+            // --- Fallback: both slots are being written — allocate a temp buffer ---
+            if (cudaMalloc((void**)&d_arr, n * sizeof(int64_t)) != cudaSuccess) {
+                return 0;  // OOM
+            }
+            cudaMemcpy(d_arr, arr, n * sizeof(int64_t), cudaMemcpyHostToDevice);
+            cudaStreamCreate(&stream);
+            used_temp = true;
+        }
+    }
+
+    // --- Allocate per-batch device buffers ---
     keystone_batch_item_t* d_items = NULL;
     unsigned long long* d_success_count = NULL;
 
     if (cudaMalloc((void**)&d_items, num_items * sizeof(keystone_batch_item_t)) != cudaSuccess) {
-        pthread_mutex_lock(&g_cache_mutex);
-        g_slot.readers--;
-        pthread_mutex_unlock(&g_cache_mutex);
+        if (used_temp) { cudaFree(d_arr); cudaStreamDestroy(stream); }
         return 0;
     }
     if (cudaMalloc((void**)&d_success_count, sizeof(unsigned long long)) != cudaSuccess) {
         cudaFree(d_items);
-        pthread_mutex_lock(&g_cache_mutex);
-        g_slot.readers--;
-        pthread_mutex_unlock(&g_cache_mutex);
+        if (used_temp) { cudaFree(d_arr); cudaStreamDestroy(stream); }
         return 0;
     }
 
-    // Use a per-call stream for items so we don't block the slot stream
-    // (which other threads may be using for their own kernels).
-    cudaStream_t call_stream;
-    cudaStreamCreate(&call_stream);
-
+    // Upload items and zero the counter asynchronously on the chosen stream
     cudaMemcpyAsync(d_items, items, num_items * sizeof(keystone_batch_item_t),
-                    cudaMemcpyHostToDevice, call_stream);
-    cudaMemsetAsync(d_success_count, 0, sizeof(unsigned long long), call_stream);
+                    cudaMemcpyHostToDevice, stream);
+    cudaMemsetAsync(d_success_count, 0, sizeof(unsigned long long), stream);
 
     // Adaptive Pathway Decision based on GPU architecture and capability
     cudaDeviceProp prop;
     cudaGetDeviceProperties(&prop, 0);
 
+    // Warp-cooperative search is heavily beneficial on Pascal (Compute 6.0) and newer
+    // due to hardware sync primitives (__ballot_sync, __shfl_sync) and massive memory bandwidth.
+    // On exceptionally old architectures (Compute < 6.0), scalar branchless achieves
+    // better execution due to lack of warp-synchronous optimizations.
     bool use_warp_cooperative = (prop.major >= 6);
 
     if (use_warp_cooperative) {
@@ -328,39 +313,62 @@ extern "C" size_t keystone_search_batch_cuda_versioned(
         int warps_per_block = threads_per_block / 32;
         int blocks = (num_items + warps_per_block - 1) / warps_per_block;
 
-        keystone_search_kernel_warp_cooperative<<<blocks, threads_per_block, 0, call_stream>>>(
+        keystone_search_kernel_warp_cooperative<<<blocks, threads_per_block, 0, stream>>>(
             d_arr, n, d_items, num_items, d_success_count);
     } else {
         int threads_per_block = 256;
         int blocks = (num_items + threads_per_block - 1) / threads_per_block;
 
-        keystone_search_kernel_scalar<<<blocks, threads_per_block, 0, call_stream>>>(
+        keystone_search_kernel_scalar<<<blocks, threads_per_block, 0, stream>>>(
             d_arr, n, d_items, num_items, d_success_count);
     }
 
+    // Download items back asynchronously
     cudaMemcpyAsync(items, d_items, num_items * sizeof(keystone_batch_item_t),
-                    cudaMemcpyDeviceToHost, call_stream);
+                    cudaMemcpyDeviceToHost, stream);
 
     unsigned long long h_success_count = 0;
     cudaMemcpyAsync(&h_success_count, d_success_count, sizeof(unsigned long long),
-                    cudaMemcpyDeviceToHost, call_stream);
+                    cudaMemcpyDeviceToHost, stream);
 
-    cudaStreamSynchronize(call_stream);
-    cudaStreamDestroy(call_stream);
+    // Sync the stream to ensure all operations finish before returning
+    cudaStreamSynchronize(stream);
+
+    // Clean up temporary resources (cached slot resources are kept for reuse)
+    if (used_temp) {
+        cudaFree(d_arr);
+        cudaStreamDestroy(stream);
+    }
 
     cudaFree(d_items);
     cudaFree(d_success_count);
 
-    // --- Release the reader lease ---
-    pthread_mutex_lock(&g_cache_mutex);
-    g_slot.readers--;
-    pthread_mutex_unlock(&g_cache_mutex);
-
     return (size_t)h_success_count;
 }
 
+// Force-evict all cached device buffers.  Callers that free or reallocate
+// host memory without incrementing the dataset version should call this
+// to prevent stale device copies from being reused.
 extern "C" void keystone_cuda_cache_invalidate(void) {
-    pthread_mutex_lock(&g_cache_mutex);
-    slot_evict(&g_slot);
-    pthread_mutex_unlock(&g_cache_mutex);
+    for (int i = 0; i < 2; i++) {
+        // Wait for any writer to finish, then take ownership
+        while (g_cache_slots[i].in_use == 1) { /* spin */ }
+        if (__sync_val_compare_and_swap(&g_cache_slots[i].in_use, 2, 1) == 2 ||
+            __sync_val_compare_and_swap(&g_cache_slots[i].in_use, 0, 1) == 0) {
+            // Synchronize the stream before freeing
+            if (g_streams_init == 2) {
+                cudaStreamSynchronize(g_streams[i]);
+            }
+            if (g_cache_slots[i].d_arr) {
+                cudaFree(g_cache_slots[i].d_arr);
+                g_cache_slots[i].d_arr = NULL;
+            }
+            g_cache_slots[i].h_arr = NULL;
+            g_cache_slots[i].n = 0;
+            g_cache_slots[i].version = 0;
+            __sync_synchronize();
+            g_cache_slots[i].in_use = 0;
+        }
+    }
+    g_active_slot = 0;
 }
