@@ -2,6 +2,23 @@
 
 All notable changes to the KEYSTONE search engine are documented in this file.
 
+## [1.4.0] - 2026-09-11
+
+### Trigram Content Indexing Engine (tgrep-style)
+- **Native Inverted Trigram Index** (`include/keystone_trigram.h`, `src/keystone_trigram.c`) — 24-bit hash trigram inverted posting list intersection engine providing sub-linear text/log candidate rejection.
+- **SIMD Case-Insensitive Mode** — `KEYSTONE_TRIGRAM_OPT_CASE_INSENSITIVE` flag with SSE4.2 character folding and case-insensitive substring verification.
+- **Binary Persistence** — Zero-rebuild `keystone_trigram_index_save()` and `keystone_trigram_index_load()` file format.
+- **Streaming Archive Ingestion** — `keystone_tar_zst_index_trigram()` and `dsmil_trigram_index_tar_zst()` index compressed archive text members directly from stream buffers with zero disk inflation.
+- **Python SDK Bindings** — Added `keystone.TrigramIndex` with support for document ingestion, case-insensitivity, streaming archive ingestion, binary persistence, and candidate document search.
+
+### Calibration Cache & Workload Profiling
+- **Workload Profile Detection** — Added `keystone_detect_auto_query_profile()` evaluating query shape (`general`, `dense_sorted`, `sparse_sorted`, `strided`, `random`), estimated in-bounds hit percentage, average key gap, and constant stride using 128-bit overflow-safe arithmetic.
+- **Profile Fields in Decision Provenance** — Exposed `hit_rate_pct`, `avg_gap`, and `detected_stride` in public `keystone_backend_decision_t` and Python `BackendDecision`.
+- **Granular Cache Keys** — Calibration cache (`g_backend_cache`) now keys on CPU features, array size bucket, query count bucket, thread count, query shape, 25%-granular hit-rate buckets, power-of-two gap buckets, and detected stride.
+- **Fallback Policy Verification** — Added testing switches `KEYSTONE_FORCE_CALIBRATION_FALLBACK` and `KEYSTONE_DISABLE_CALIBRATION_CACHE` to verify graceful degradation to `KEYSTONE_DECISION_SOURCE_STATIC_FALLBACK` and cache bypass behavior without corrupting cached decisions.
+- **Rich Host & Build Metadata** — Added `host` (nodename), `os` (sysname), `arch` (machine), `release` (kernel release), `compiler` (`gcc`/`clang`), and `compiler_version` (`__VERSION__`) across benchmark writers and CSV/JSON output.
+- **Makefile Integration** — Added target `scripts/compare_search_auto` for direct automated benchmark execution.
+
 ## [1.3.0] - 2026-09-02
 
 ### Performance & Concurrency Hardening

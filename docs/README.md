@@ -13,6 +13,7 @@ The root [README](../README.md) is intentionally written as a high-level introdu
 | [BENCHMARK_RESULTS.md](BENCHMARK_RESULTS.md) | Current measurement rules and benchmark results. |
 | [ACCELERATOR_CONTRACT.md](ACCELERATOR_CONTRACT.md) | Requirements a GPU/NPU/other accelerator backend must satisfy before it is treated as supported. |
 | [TELEMETRY_PROCESSOR.md](TELEMETRY_PROCESSOR.md) | Telemetry processor implementation and usage. |
+| [TRIGRAM_BENCHMARK.md](TRIGRAM_BENCHMARK.md) | Inverted trigram index performance and benchmark analysis. |
 
 ## Benchmark records
 

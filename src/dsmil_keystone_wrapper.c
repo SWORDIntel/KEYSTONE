@@ -961,6 +961,47 @@ int dsmil_search_batch_tar_zst(
     return (found_total > 0) ? DSMIL_SEARCH_SUCCESS : DSMIL_SEARCH_ERROR_NOT_FOUND;
 }
 
+int dsmil_trigram_index_tar_zst(
+    const char *archive_path,
+    const char *member_pattern,
+    bool retain_content,
+    uint32_t flags,
+    keystone_trigram_index_t **out_idx
+) {
+    if (!archive_path || !out_idx) return DSMIL_SEARCH_ERROR_INVALID_PARAM;
+    *out_idx = NULL;
+
+    keystone_tar_zst_options_t opts;
+    memset(&opts, 0, sizeof(opts));
+    opts.format = KEYSTONE_TAR_ZST_FORMAT_TEXT;
+
+    keystone_tar_zst_t *tz = keystone_tar_zst_open(archive_path, &opts);
+    if (!tz) return DSMIL_SEARCH_ERROR_INIT_FAILED;
+
+    keystone_trigram_index_t *idx = keystone_trigram_index_create_options(64, flags);
+    if (!idx) {
+        keystone_tar_zst_close(tz);
+        return DSMIL_SEARCH_ERROR_MEMORY;
+    }
+
+    int count = keystone_tar_zst_index_trigram(tz, idx, member_pattern, retain_content ? 1 : 0);
+    keystone_tar_zst_close(tz);
+
+    if (count < 0) {
+        keystone_trigram_index_destroy(idx);
+        return DSMIL_SEARCH_ERROR_INIT_FAILED;
+    }
+
+    int rc = keystone_trigram_index_finalize(idx);
+    if (rc != KEYSTONE_TRIGRAM_OK) {
+        keystone_trigram_index_destroy(idx);
+        return DSMIL_SEARCH_ERROR_INIT_FAILED;
+    }
+
+    *out_idx = idx;
+    return count;
+}
+
 #endif /* KEYSTONE_ENABLE_TAR_ZST */
 
 /* ============================================================================

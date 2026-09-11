@@ -31,8 +31,12 @@ class TestKeystoneSDK(unittest.TestCase):
         self.assertEqual(results[3], -1)
 
         dec = keystone.KeystoneSearch.get_last_decision()
+        self.assertIsNotNone(dec)
+        self.assertEqual(dec.hit_rate_pct, 75)
+        self.assertGreater(dec.avg_gap, 0)
+        self.assertEqual(dec.detected_stride, 0)
         if dec:
-            print(f"[Auto Decision] Backend: {dec.backend} | Source: {dec.decision_source} | Est Latency: {dec.estimated_ns_per_key:.2f} ns/key")
+            print(f"[Auto Decision] Backend: {dec.backend} | Source: {dec.decision_source} | Est Latency: {dec.estimated_ns_per_key:.2f} ns/key | Hit Rate: {dec.hit_rate_pct}%")
 
     def test_anchor_table(self):
         with keystone.AnchorTable() as table:
@@ -81,6 +85,64 @@ class TestKeystoneSDK(unittest.TestCase):
         self.assertIsInstance(cls, keystone.SemanticClass)
         self.assertGreater(conf, 0.0)
         self.assertLessEqual(conf, 1.0)
+
+    def test_trigram_index(self):
+        with keystone.TrigramIndex(initial_doc_capacity=8) as idx:
+            doc_id = idx.add_document("doc0", b"The quick brown fox jumps")
+            self.assertEqual(doc_id, 0)
+            idx.add_document("doc1", b"KEYSTONE high performance search")
+            idx.finalize()
+            self.assertEqual(idx.document_count, 2)
+
+            matches = idx.search(b"KEYSTONE")
+            self.assertEqual(matches, [1])
+
+            candidates = idx.get_candidates(b"quick")
+            self.assertEqual(candidates, [0])
+
+    def test_trigram_case_insensitive(self):
+        with keystone.TrigramIndex(case_insensitive=True) as idx:
+            self.assertEqual(idx.flags, keystone.KEYSTONE_TRIGRAM_OPT_CASE_INSENSITIVE)
+            idx.add_document("doc0", b"The Quick BROWN Fox")
+            idx.finalize()
+
+            self.assertEqual(idx.search(b"quick"), [0])
+            self.assertEqual(idx.search(b"BROWN"), [0])
+            self.assertEqual(idx.search(b"fox"), [0])
+
+    def test_trigram_save_load(self):
+        import os, tempfile
+        tmp_path = os.path.join(tempfile.gettempdir(), "py_test_trigram.bin")
+        try:
+            with keystone.TrigramIndex(case_insensitive=True) as idx:
+                idx.add_document("d0", b"Alpha Bravo Charlie")
+                idx.add_document("d1", b"Delta Echo Foxtrot")
+                idx.finalize()
+                idx.save(tmp_path)
+
+            loaded = keystone.TrigramIndex.load(tmp_path)
+            try:
+                self.assertEqual(loaded.document_count, 2)
+                self.assertEqual(loaded.flags, keystone.KEYSTONE_TRIGRAM_OPT_CASE_INSENSITIVE)
+                self.assertEqual(loaded.search(b"bravo"), [0])
+                self.assertEqual(loaded.search(b"FOXTROT"), [1])
+            finally:
+                loaded.close()
+        finally:
+            if os.path.exists(tmp_path):
+                os.remove(tmp_path)
+
+    def test_trigram_streaming_with_content(self):
+        with keystone.TrigramIndex() as idx:
+            stream = idx.begin_document("streamed.txt", retain_content=True)
+            stream.feed(b"Hello ")
+            stream.feed(b"streaming ")
+            stream.feed(b"world!")
+            doc_id = stream.end()
+            self.assertEqual(doc_id, 0)
+            idx.finalize()
+
+            self.assertEqual(idx.search(b"streaming"), [0])
 
 
 if __name__ == "__main__":

@@ -18,6 +18,7 @@
 #include <stdarg.h>
 #include <pthread.h>
 #include <unistd.h>
+#include <fnmatch.h>
 
 #ifdef _OPENMP
 #include <omp.h>
@@ -1640,4 +1641,74 @@ int keystone_tar_zst_get_stats(keystone_tar_zst_t* tz,
     if (!tz || !stats) return -1;
     *stats = tz->stats;
     return 0;
+}
+
+int keystone_tar_zst_index_trigram(
+    keystone_tar_zst_t* tz,
+    struct keystone_trigram_index* idx,
+    const char* member_pattern,
+    int retain_content
+) {
+    if (!tz || !tz->archive || !idx) return -1;
+
+    if (tz->at_eof) {
+        if (keystone_tar_zst_rewind(tz) != 0) return -1;
+    }
+
+    size_t chunk_size = tz->options.chunk_size ? tz->options.chunk_size : 262144;
+    char* chunk = (char*)malloc(chunk_size);
+    if (!chunk) {
+        set_error(tz, "Out of memory allocating streaming chunk buffer");
+        return -1;
+    }
+
+    int indexed_count = 0;
+    char* name = NULL;
+    size_t name_len = 0;
+
+    while (keystone_tar_zst_next_member(tz, &name, &name_len) > 0) {
+        if (member_pattern && member_pattern[0] != '\0') {
+            if (fnmatch(member_pattern, name, 0) != 0) {
+                /* Skip content for this member */
+                continue;
+            }
+        }
+
+        keystone_trigram_stream_t* stream = keystone_trigram_begin_document_options(
+            idx, name, retain_content != 0);
+        if (!stream) {
+            free(chunk);
+            return -1;
+        }
+
+        for (;;) {
+            ssize_t n = archive_read_data(tz->archive, chunk, chunk_size);
+            if (n < 0) {
+                set_error(tz, "archive_read_data failed: %s", archive_error_string(tz->archive));
+                keystone_trigram_cancel_document(stream);
+                free(chunk);
+                return -1;
+            }
+            if (n == 0) break;
+
+            if (keystone_trigram_feed_bytes(stream, chunk, (size_t)n) != KEYSTONE_TRIGRAM_OK) {
+                set_error(tz, "keystone_trigram_feed_bytes failed");
+                keystone_trigram_cancel_document(stream);
+                free(chunk);
+                return -1;
+            }
+        }
+
+        uint32_t doc_id = 0u;
+        if (keystone_trigram_end_document(stream, &doc_id) != KEYSTONE_TRIGRAM_OK) {
+            set_error(tz, "keystone_trigram_end_document failed");
+            free(chunk);
+            return -1;
+        }
+
+        indexed_count++;
+    }
+
+    free(chunk);
+    return indexed_count;
 }

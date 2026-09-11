@@ -96,15 +96,29 @@ AMX feature detection exists, but there is no current AMX search backend claim. 
 
 `keystone_search_batch_auto()` can calibrate viable batch backends on a cache miss rather than assuming a fixed backend is best for every machine or query shape.
 
-Current decision state includes:
+Current decision state (`keystone_backend_decision_t`) includes:
 
-- selected backend;
-- decision source such as fast path, measured, cache, or static fallback;
-- query-shape classification;
-- measured latency information including p95 where available;
+- selected backend (`keystone_backend_t`);
+- decision source (`keystone_backend_decision_source_t`): fast path, measured, cache, or static fallback;
+- query-shape classification (`keystone_query_shape_t`): `general`, `dense_sorted`, `sparse_sorted`, `strided`, or `random`;
+- workload profile metrics: `hit_rate_pct` (exact observed hit percentage: 0–100), `avg_gap` (average delta between adjacent query keys), and `detected_stride` (constant stride or 0);
+- measured latency metrics: estimated median ns/key and p95 ns/key;
 - calibration-run and candidate information used by benchmark tooling.
 
-The calibration cache currently keys on CPU feature mask, array-size bucket, query-count bucket, and thread count. Additional workload-shape fields remain part of the engineering backlog.
+The calibration cache (`g_backend_cache`, protected by reader-writer lock `pthread_rwlock_t`) keys on:
+- CPU feature mask (`cpu_features`);
+- array-size bucket (power-of-two);
+- query-count bucket (power-of-two);
+- thread count;
+- query shape;
+- hit-rate bucket (25% granular in-bounds bucketing);
+- key gap bucket (power-of-two);
+- constant stride (`detected_stride`).
+
+### Fallback Policy & Test Controls
+
+- **Static Fallback**: When candidate calibration fails or is forced via `KEYSTONE_FORCE_CALIBRATION_FALLBACK=1`, the router falls back to the static routing policy (`KEYSTONE_DECISION_SOURCE_STATIC_FALLBACK`). Static fallback decisions are unmeasured and do not pollute the calibration cache.
+- **Cache Bypass**: Setting `KEYSTONE_DISABLE_CALIBRATION_CACHE=1` forces runtime calibration on each search batch for testing and timing validation without cache retention.
 
 ## System Profile
 
@@ -118,22 +132,24 @@ The calibration cache currently keys on CPU feature mask, array-size bucket, que
 | **Adaptive backend layer** | Routes batch workloads across viable scalar, optimized C, OpenMP, and optional Fortran paths. |
 | **Anchor table** | Maintains search guidance for repeated lookup behavior. |
 | **Archive interface** | Supports `.tar.zst` member workflows when archive dependencies are enabled. |
+| **Trigram content indexer** | 24-bit hash inverted trigram posting list index for sub-linear text/log search with SSE4.2 case-folding and archive streaming. |
+| **Vector similarity engine** | LSH coarse indexing and SIMD (SSE4.2/AVX/AVX2/AVX-512/NEON/CUDA/VPU) distance kernels for 384-dim float32 embeddings. |
 | **QIHSE bridge** | Streams structured results into QIHSE when compiled with integration support. |
 
 ## Feature Matrix
 
-| Feature | Scalar / Anchor C | Optimized C Batch | SIMD Local Scan | OpenMP Batch | Fortran Batch | `.tar.zst` |
-|---|---:|---:|---:|---:|---:|---:|
-| Single search | Yes | No | Yes, inside local windows | No | No | No |
-| Batch search | Yes | Yes | Indirect | Optional | Optional | No |
-| Auto backend calibration | Yes | Yes | Build/runtime detected | Optional measured candidate | Optional measured candidate | No |
-| Decision provenance | Fast path / measured / cached / fallback | Measured or cached | Build/runtime detected | Measured or cached | Measured or cached | No |
-| Anchor learning | Yes | No for merge-walk batch | Through scalar path | Per-thread clone path | No | No |
-| Runtime tuning | Yes | Yes | Build/runtime gated | Build gated | Build gated | No |
-| Archive ingestion | No | No | No | No | No | Yes |
-| Member offset indexing | No | No | No | No | No | Yes |
-| Benchmark validation | Yes | Yes | Host-specific | Yes when built | Yes when built | Yes |
-| Linux support | Yes | Yes | Host-dependent | Runtime-dependent | Toolchain-dependent | Dependency-dependent |
+| Feature | Scalar / Anchor C | Optimized C Batch | SIMD Local Scan | OpenMP Batch | Fortran Batch | `.tar.zst` | Trigram Index | Vector Engine |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| Single search | Yes | No | Yes, inside local windows | No | No | No | N/A | Yes |
+| Batch search | Yes | Yes | Indirect | Optional | Optional | No | Yes | Yes |
+| Auto backend calibration | Yes | Yes | Build/runtime detected | Optional measured candidate | Optional measured candidate | No | Auto fallback | Runtime auto-dispatch |
+| Decision provenance | Fast path / measured / cached / fallback | Measured or cached | Build/runtime detected | Measured or cached | Measured or cached | No | N/A | Runtime selected |
+| Anchor learning | Yes | No for merge-walk batch | Through scalar path | Per-thread clone path | No | No | N/A | N/A |
+| Runtime tuning | Yes | Yes | Build/runtime gated | Build gated | Build gated | No | SSE4.2 folding | SIMD / CUDA / VPU |
+| Archive ingestion | No | No | No | No | No | Yes | Direct streaming | No |
+| Member offset indexing | No | No | No | No | No | Yes | Line-offset hits | No |
+| Benchmark validation | Yes | Yes | Host-specific | Yes when built | Yes when built | Yes | Yes | Yes |
+| Linux support | Yes | Yes | Host-dependent | Runtime-dependent | Toolchain-dependent | Dependency-dependent | Yes | Yes |
 
 ## Memory Model
 

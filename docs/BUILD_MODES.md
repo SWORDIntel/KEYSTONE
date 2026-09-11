@@ -112,3 +112,33 @@ The standalone vector similarity engine is built via its self-contained build sc
   - `KEYSTONE_NO_CUDA=1`: Skip CUDA kernel compilation.
   - `KEYSTONE_HAVE_VPU=1`: Enable Myriad X VPU support.
 - Produces `vector_engine/libkeystone_vector.so` with runtime dynamic kernel dispatch.
+
+## 9. Trigram Index Build & Benchmarks
+The native C trigram index is built as part of the core library:
+
+```bash
+make bin/test_trigram_index
+make benchmarks/trigram_benchmark
+./benchmarks/trigram_benchmark
+```
+
+## 10. Automated Comparative Search Harness
+To build the automated comparative search benchmark (`compare_search_auto`):
+
+```bash
+make scripts/compare_search_auto
+./scripts/compare_search_auto
+```
+Outputs comprehensive performance metrics, decision provenance, and host/compiler metadata in CSV format.
+
+## 11. Runtime Calibration Environment Variables
+The auto-backend selector behavior can be controlled at runtime without recompilation:
+
+| Environment Variable | Default | Purpose |
+|---|---|---|
+| `KEYSTONE_AUTO_PARALLEL_MIN_ITEMS` | `4096` | Batch size threshold above which OpenMP multi-threading is evaluated. |
+| `KEYSTONE_DISABLE_CALIBRATION_CACHE` | `0` | When set to `1`, bypasses the calibration cache and forces fresh candidate calibration on every batch. |
+| `KEYSTONE_FORCE_CALIBRATION_FALLBACK` | `0` | When set to `1`, forces candidate measurement failure to verify graceful fallback to static routing policies (`KEYSTONE_DECISION_SOURCE_STATIC_FALLBACK`) without polluting cache. |
+| `KEYSTONE_HIT_RATE_PCT` | `100` | Controls target hit percentage (0–100) in benchmark workloads. |
+| `KEYSTONE_DATA_GAP` | `1` | Controls data array stride/gap in benchmark workloads. |
+| `KEYSTONE_QUERY_STRIDE` | `17` | Controls query key stride pattern in benchmark workloads. |

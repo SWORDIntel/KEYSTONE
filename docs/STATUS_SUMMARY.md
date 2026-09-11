@@ -19,13 +19,16 @@ Condensed from DYNAMIC_HOT_PATH_PLAN, FORTRAN_BACKEND_PLAN, IMPROVEMENT_PLAN, OP
 
 ### Batch & Auto-Selection
 - `keystone_search_batch_auto()` — first-use local calibration across viable scalar/C batch, OpenMP, and Fortran candidates.
-- Calibration cache keyed by CPU feature mask, array-size bucket, query-count bucket, thread count.
+- Calibration cache keyed by CPU feature mask, array-size bucket, query-count bucket, thread count, hit-rate bucket, gap bucket, and detected stride.
 - Static fallback remains for invalid/uncalibrated fallback cases, but normal uncached decisions use measured median/p95 timing.
+- Workload profile fields (`hit_rate_pct`, `avg_gap`, `detected_stride`) exposed in public `keystone_backend_decision_t` and Python `BackendDecision`.
+- Fallback-policy verification for cache bypass (`KEYSTONE_DISABLE_CALIBRATION_CACHE`) and static fallback paths (`KEYSTONE_FORCE_CALIBRATION_FALLBACK`).
+- Richer host/build metadata (hostname, OS, arch, kernel release, compiler name, compiler version) added to benchmark writer and calibration CSV/JSON output.
 - p95 field exposed in public `keystone_backend_decision_t` from calibration samples or cached measured values.
 - Decision provenance is exposed as fast path, measured, cache, or static fallback.
-- Query shape is exposed as general or dense sorted.
+- Query shape is exposed as general, dense sorted, sparse sorted, strided, or random.
 - Cache-hit correctness tests compare result and ordinal arrays across measured and cached selector runs.
-- `scripts/compare_search.c` CSV output includes auto backend, decision source, query shape, calibration run count, and candidate count.
+- `scripts/compare_search.c` CSV output includes auto backend, decision source, query shape, calibration run count, candidate count, hit-rate, gap, stride, and host/build comments.
 - Benchmark matrix runner (`scripts/run_perf_matrix.sh`) with configurable size/query/hit-rate/gap/stride sweeps.
 
 ### Fortran Backend
@@ -64,15 +67,16 @@ Condensed from DYNAMIC_HOT_PATH_PLAN, FORTRAN_BACKEND_PLAN, IMPROVEMENT_PLAN, OP
 - Native C11 trigram index engine (`include/keystone_trigram.h`, `src/keystone_trigram.c`).
 - 24-bit hash trigram extraction and inverted posting list intersection for sub-linear text document search.
 - Achieves 100x+ search speedups on large text/log corpora by rejecting non-matching candidates before full verification.
+- **Unified C Interface**: Integrated directly into `<keystone.h>` for single-include developer access.
+- **Case-Insensitive Mode**: `KEYSTONE_TRIGRAM_OPT_CASE_INSENSITIVE` flag with SIMD SSE4.2 character folding and case-insensitive substring verification.
+- **Binary Persistence**: `keystone_trigram_index_save()` and `keystone_trigram_index_load()` for zero-rebuild fast loading from disk.
+- **Direct `.tar.zst` Streaming Ingestion**: `keystone_tar_zst_index_trigram()` indexes compressed archive text members directly via stream buffers without unpacking to disk.
+- **DSMIL Integration**: `dsmil_trigram_index_tar_zst()` provides a unified one-call archive member indexer for log triage.
+- **Python SDK Bindings**: Full `TrigramIndex` support with streaming ingestion, case-insensitivity, persistence (`save`/`load`), and candidate iteration.
 
 ## Still To Do
 
 The items below are the current engineering backlog. The root README intentionally keeps this detail out of the executive overview; see [TECHNICAL_OVERVIEW.md](TECHNICAL_OVERVIEW.md) for the surrounding architecture.
-
-### Calibration & Cache
-- Add more workload profile fields (hit-rate, gap, stride) to calibration cache keys and decision output.
-- Add fallback-policy verification for cache and static fallback paths.
-- Add richer host/build metadata to calibration CSV output.
 
 ### Fortran
 - Expand benchmark coverage beyond dense all-hit workloads.

@@ -86,6 +86,9 @@ class _CBackendDecision(ctypes.Structure):
         ("decision_source", ctypes.c_int),
         ("calibration_runs", ctypes.c_size_t),
         ("candidates_measured", ctypes.c_size_t),
+        ("hit_rate_pct", ctypes.c_int),
+        ("avg_gap", ctypes.c_int64),
+        ("detected_stride", ctypes.c_int64),
     ]
 
 
@@ -97,6 +100,9 @@ class BackendDecision:
     estimated_ns_per_key: float
     p95_ns_per_key: float
     thread_count: int
+    hit_rate_pct: int = -1
+    avg_gap: int = 0
+    detected_stride: int = 0
 
 
 # ---------------------------------------------------------------------------
@@ -363,5 +369,8 @@ class KeystoneSearch:
                 estimated_ns_per_key=float(c_dec.estimated_ns_per_key),
                 p95_ns_per_key=float(c_dec.p95_ns_per_key),
                 thread_count=int(c_dec.thread_count),
+                hit_rate_pct=int(c_dec.hit_rate_pct),
+                avg_gap=int(c_dec.avg_gap),
+                detected_stride=int(c_dec.detected_stride),
             )
         return None

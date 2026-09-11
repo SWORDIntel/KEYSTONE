@@ -56,7 +56,7 @@ KEYSTONE combines several focused capabilities behind one native library:
 |---|---|
 | **Adaptive indexed search** | Finds records in large sorted keyspaces using anchor-guided interpolation rather than relying only on generic binary search. |
 | **High-volume batch lookup** | Processes large query sets through optimized C, OpenMP, and optional numerical backends. |
-| **Runtime backend calibration** | Measures viable execution paths on the local machine and caches the fastest choice for comparable workloads. |
+| **Runtime backend calibration** | Measures viable execution paths on the local machine and caches the fastest choice across workload shapes (hit rate, gap, stride). |
 | **Unstructured-data ingestion** | Extracts useful identifiers from noisy source data without requiring a heavyweight parsing stack. |
 | **Archive-aware processing** | High-throughput streaming and indexed search over `.tar.zst` archives with persistent `.idx.json` sidecars, pipelined ring-buffer decompression, and multi-archive batching. |
 | **Trigram content indexing (tgrep-style)** | Inverted 24-bit trigram index for raw text/log corpora delivering up to 100x+ sub-linear candidate file rejection prior to byte verification. |
@@ -141,8 +141,8 @@ KEYSTONE is a working native library and test/benchmark suite.
 **Implemented today:**
 
 - scalar and anchor-guided `int64_t` search;
-- batch lookup and measured runtime backend selection;
-- decision provenance for backend choices;
+- batch lookup with shape- and profile-aware runtime backend calibration (`hit_rate`, `gap`, `stride`);
+- decision provenance for backend choices (`source`, `shape`, `hit_rate_pct`, `avg_gap`, `detected_stride`);
 - SSE4.2, AVX, and AVX2 local scan paths where supported;
 - build-gated AVX-512 path;
 - OpenMP batch execution;
@@ -151,8 +151,9 @@ KEYSTONE is a working native library and test/benchmark suite.
 - unstructured-data tokenizer and hash indexer;
 - native context micro-model;
 - QIHSE bridge support;
-- **trigram content indexer** (`keystone_trigram.h`) inspired by Microsoft tgrep for sub-linear full-text and pattern search;
+- **trigram content indexer** (`keystone_trigram.h`) inspired by Microsoft tgrep with case-insensitivity, streaming archive ingestion, binary persistence, and Python SDK;
 - **vector similarity engine** with LSH coarse indexing, SIMD cosine/L2/dot distance, CUDA and VPU (Myriad X) accelerated paths, and 8-level graceful fallback (scalar always compiled);
+- host and build metadata tracking in benchmark outputs (nodename, OS, arch, release, compiler, version);
 - correctness and performance test infrastructure.
 
 GPU/NPU execution is not presented as a current production backend. The project detects or contains experimental accelerator work in places, but accelerator support is only considered implemented when correctness, transfer cost, fallback behavior, dispatch provenance, and target-hardware measurements are established.
@@ -251,6 +252,7 @@ For readers who want the implementation detail without making it the front door:
 | [`docs/INTEGRATION.md`](docs/INTEGRATION.md) | Integration guidance |
 | [`docs/ACCELERATOR_CONTRACT.md`](docs/ACCELERATOR_CONTRACT.md) | Requirements for adding accelerator backends |
 | [`docs/TELEMETRY_PROCESSOR.md`](docs/TELEMETRY_PROCESSOR.md) | Telemetry processor details |
+| [`docs/TRIGRAM_BENCHMARK.md`](docs/TRIGRAM_BENCHMARK.md) | Inverted trigram index performance and benchmark analysis |
 
 ---
 

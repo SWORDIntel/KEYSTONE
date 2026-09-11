@@ -142,6 +142,9 @@ typedef struct keystone_backend_decision {
     int decision_source;                    /**< Detected keystone_backend_decision_source_t */
     size_t calibration_runs;                /**< Number of micro-benchmark runs performed */
     size_t candidates_measured;             /**< Number of backends actively evaluated */
+    int hit_rate_pct;                       /**< Detected hit percentage (0-100, or -1 if unknown) */
+    int64_t avg_gap;                        /**< Average gap between adjacent query keys */
+    int64_t detected_stride;                /**< Detected constant stride (0 if non-strided) */
 } keystone_backend_decision_t;
 
 typedef struct keystone_performance_stats {
@@ -377,6 +380,8 @@ size_t keystone_anchor_seed_batch(
     keystone_anchor_table_t* table,
     size_t anchor_count
 );
+
+#include "keystone_trigram.h"
 
 #ifdef KEYSTONE_ENABLE_TAR_ZST
 #include "keystone_tar_zst.h"

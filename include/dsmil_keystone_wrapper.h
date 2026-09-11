@@ -4,6 +4,7 @@
 #include <stdint.h>
 #include <stddef.h>
 #include <stdbool.h>
+#include "keystone_trigram.h"
 
 /**
  * @file dsmil_keystone_wrapper.h
@@ -500,6 +501,24 @@ int dsmil_search_batch_tar_zst(
     int64_t *keys,
     size_t num_keys,
     dsmil_telemetry_result_t *results
+);
+
+/**
+ * @brief Index text files inside a tar.zst archive into a new trigram index.
+ *
+ * @param archive_path Path to the .tar.zst archive.
+ * @param member_pattern Optional glob filter (e.g. "*.txt", "*.log", or NULL for all).
+ * @param retain_content True to retain full content for exact verification; false for candidate-only.
+ * @param flags Trigram options flags (e.g. KEYSTONE_TRIGRAM_OPT_CASE_INSENSITIVE).
+ * @param out_idx Pointer to receive the created and finalized trigram index.
+ * @return Number of documents indexed on success, or negative error code on failure.
+ */
+int dsmil_trigram_index_tar_zst(
+    const char *archive_path,
+    const char *member_pattern,
+    bool retain_content,
+    uint32_t flags,
+    keystone_trigram_index_t **out_idx
 );
 
 #endif /* KEYSTONE_ENABLE_TAR_ZST */

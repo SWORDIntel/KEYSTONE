@@ -1,8 +1,14 @@
+#include "../include/keystone.h"
 #include "../include/keystone_trigram.h"
+#ifdef KEYSTONE_ENABLE_TAR_ZST
+#include "../include/keystone_tar_zst.h"
+#include "../include/dsmil_keystone_wrapper.h"
+#endif
 #include "test_macros.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <unistd.h>
 
 static void test_trigram_extraction(void) {
     printf("Testing trigram extraction...\n");
@@ -131,6 +137,139 @@ static void test_trigram_index_build_and_search(void) {
     printf("✓ Trigram index build and search verified.\n");
 }
 
+static void test_case_insensitive_search(void) {
+    printf("Testing case-insensitive trigram indexing and search...\n");
+    keystone_trigram_index_t* idx = keystone_trigram_index_create_options(
+        4, KEYSTONE_TRIGRAM_OPT_CASE_INSENSITIVE
+    );
+    TEST_ASSERT(idx != NULL);
+    TEST_ASSERT(keystone_trigram_index_get_flags(idx) == KEYSTONE_TRIGRAM_OPT_CASE_INSENSITIVE);
+
+    const char* doc0 = "The Quick BROWN Fox Jumps Over The Lazy Dog";
+    const char* doc1 = "KEYSTONE interpolation search engine for sorted int64";
+
+    TEST_ASSERT(keystone_trigram_index_add_document(idx, "doc0", doc0, strlen(doc0), NULL) == KEYSTONE_TRIGRAM_OK);
+    TEST_ASSERT(keystone_trigram_index_add_document(idx, "doc1", doc1, strlen(doc1), NULL) == KEYSTONE_TRIGRAM_OK);
+    TEST_ASSERT(keystone_trigram_index_finalize(idx) == KEYSTONE_TRIGRAM_OK);
+
+    uint32_t matches[4];
+    /* Search with various casings */
+    size_t count = keystone_trigram_index_search(idx, "quick", 5, matches, 4);
+    TEST_ASSERT(count == 1);
+    TEST_ASSERT(matches[0] == 0);
+
+    count = keystone_trigram_index_search(idx, "brown", 5, matches, 4);
+    TEST_ASSERT(count == 1);
+    TEST_ASSERT(matches[0] == 0);
+
+    count = keystone_trigram_index_search(idx, "FOX", 3, matches, 4);
+    TEST_ASSERT(count == 1);
+    TEST_ASSERT(matches[0] == 0);
+
+    count = keystone_trigram_index_search(idx, "keystone", 8, matches, 4);
+    TEST_ASSERT(count == 1);
+    TEST_ASSERT(matches[0] == 1);
+
+    count = keystone_trigram_index_search(idx, "SEARCH", 6, matches, 4);
+    TEST_ASSERT(count == 1);
+    TEST_ASSERT(matches[0] == 1);
+
+    keystone_trigram_index_destroy(idx);
+    printf("✓ Case-insensitive trigram search verified.\n");
+}
+
+static void test_binary_persistence(void) {
+    printf("Testing binary persistence (save / load)...\n");
+    keystone_trigram_index_t* idx = keystone_trigram_index_create_options(
+        4, KEYSTONE_TRIGRAM_OPT_CASE_INSENSITIVE
+    );
+    TEST_ASSERT(idx != NULL);
+
+    const char* doc0 = "Alpha Bravo Charlie Delta";
+    const char* doc1 = "Echo Foxtrot Golf Hotel";
+    TEST_ASSERT(keystone_trigram_index_add_document(idx, "d0.txt", doc0, strlen(doc0), NULL) == KEYSTONE_TRIGRAM_OK);
+    TEST_ASSERT(keystone_trigram_index_add_document(idx, "d1.txt", doc1, strlen(doc1), NULL) == KEYSTONE_TRIGRAM_OK);
+    TEST_ASSERT(keystone_trigram_index_finalize(idx) == KEYSTONE_TRIGRAM_OK);
+
+    const char* tmp_file = "/tmp/test_keystone_trigram_persist.bin";
+    TEST_ASSERT(keystone_trigram_index_save(idx, tmp_file) == KEYSTONE_TRIGRAM_OK);
+
+    /* Load back into a fresh index */
+    keystone_trigram_index_t* loaded = keystone_trigram_index_load(tmp_file);
+    TEST_ASSERT(loaded != NULL);
+    TEST_ASSERT(keystone_trigram_index_document_count(loaded) == 2);
+    TEST_ASSERT(keystone_trigram_index_get_flags(loaded) == KEYSTONE_TRIGRAM_OPT_CASE_INSENSITIVE);
+
+    uint32_t matches[4];
+    size_t count = keystone_trigram_index_search(loaded, "bravo", 5, matches, 4);
+    TEST_ASSERT(count == 1);
+    TEST_ASSERT(matches[0] == 0);
+
+    count = keystone_trigram_index_search(loaded, "FOXTROT", 7, matches, 4);
+    TEST_ASSERT(count == 1);
+    TEST_ASSERT(matches[0] == 1);
+
+    count = keystone_trigram_index_search(loaded, "Nonexistent", 11, matches, 4);
+    TEST_ASSERT(count == 0);
+
+    keystone_trigram_index_destroy(idx);
+    keystone_trigram_index_destroy(loaded);
+    unlink(tmp_file);
+    printf("✓ Binary persistence save/load verified.\n");
+}
+
+#ifdef KEYSTONE_ENABLE_TAR_ZST
+static void test_archive_streaming_trigram(void) {
+    printf("Testing tar.zst archive streaming trigram indexing...\n");
+    const char* archive_path = "tests/fixtures_tar_zst/test_data.tar.zst";
+
+    keystone_tar_zst_options_t opts;
+    memset(&opts, 0, sizeof(opts));
+    opts.format = KEYSTONE_TAR_ZST_FORMAT_TEXT;
+
+    keystone_tar_zst_t* tz = keystone_tar_zst_open(archive_path, &opts);
+    TEST_ASSERT(tz != NULL);
+
+    keystone_trigram_index_t* idx = keystone_trigram_index_create_options(
+        8, KEYSTONE_TRIGRAM_OPT_CASE_INSENSITIVE
+    );
+    TEST_ASSERT(idx != NULL);
+
+    /* Index all members, retaining content for exact verification */
+    int count = keystone_tar_zst_index_trigram(tz, idx, NULL, 1);
+    TEST_ASSERT(count > 0);
+    TEST_ASSERT(keystone_trigram_index_finalize(idx) == KEYSTONE_TRIGRAM_OK);
+
+    /* Search for content from corrupt.txt ("not a number") */
+    uint32_t matches[8];
+    size_t match_count = keystone_trigram_index_search(idx, "not a number", strlen("not a number"), matches, 8);
+    TEST_ASSERT(match_count >= 1);
+
+    keystone_trigram_index_destroy(idx);
+    keystone_tar_zst_close(tz);
+    printf("✓ tar.zst archive streaming trigram indexing verified.\n");
+}
+
+static void test_dsmil_wrapper_tar_zst_trigram(void) {
+    printf("Testing DSMIL wrapper tar.zst trigram indexing...\n");
+    const char* archive_path = "tests/fixtures_tar_zst/test_data.tar.zst";
+
+    keystone_trigram_index_t* idx = NULL;
+    int count = dsmil_trigram_index_tar_zst(
+        archive_path, "*.txt", true, KEYSTONE_TRIGRAM_OPT_CASE_INSENSITIVE, &idx
+    );
+    TEST_ASSERT(count > 0);
+    TEST_ASSERT(idx != NULL);
+
+    uint32_t matches[8];
+    size_t match_count = keystone_trigram_index_search(idx, "number", 6, matches, 8);
+    TEST_ASSERT(match_count >= 1);
+
+    keystone_trigram_index_destroy(idx);
+    printf("✓ DSMIL wrapper tar.zst trigram indexing verified.\n");
+}
+#endif
+
 int main(void) {
     printf("Running Trigram Index Test Suite\n");
     printf("===============================\n\n");
@@ -140,6 +279,12 @@ int main(void) {
     test_external_candidate_only_mode();
     test_finalize_is_security_boundary();
     test_trigram_index_build_and_search();
+    test_case_insensitive_search();
+    test_binary_persistence();
+#ifdef KEYSTONE_ENABLE_TAR_ZST
+    test_archive_streaming_trigram();
+    test_dsmil_wrapper_tar_zst_trigram();
+#endif
 
     printf("\nAll Trigram Index tests passed.\n");
     return 0;

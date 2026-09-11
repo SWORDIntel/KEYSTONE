@@ -1532,17 +1532,20 @@ size_t keystone_search_parallel(const int64_t* arr,
 }
 
 static keystone_backend_decision_t g_last_backend_decision = {
-    KEYSTONE_BACKEND_AUTO,
-    0,
-    0,
-    0,
-    0,
-    0.0,
-    0.0,
-    KEYSTONE_QUERY_SHAPE_GENERAL,
-    KEYSTONE_DECISION_SOURCE_NONE,
-    0,
-    0
+    .backend = KEYSTONE_BACKEND_AUTO,
+    .cpu_features = 0,
+    .array_size_bucket = 0,
+    .query_count_bucket = 0,
+    .thread_count = 0,
+    .estimated_ns_per_key = 0.0,
+    .p95_ns_per_key = 0.0,
+    .query_shape = KEYSTONE_QUERY_SHAPE_GENERAL,
+    .decision_source = KEYSTONE_DECISION_SOURCE_NONE,
+    .calibration_runs = 0,
+    .candidates_measured = 0,
+    .hit_rate_pct = -1,
+    .avg_gap = 0,
+    .detected_stride = 0
 };
 static _Atomic int g_last_backend_decision_valid = 0;
 /* Protects g_last_backend_decision against torn reads (the struct is
@@ -1578,6 +1581,9 @@ typedef struct keystone_backend_cache_entry {
     size_t query_count_bucket;
     int thread_count;
     int query_shape;
+    int hit_rate_bucket;
+    size_t gap_bucket;
+    int64_t detected_stride;
     keystone_backend_t backend;
     double estimated_ns_per_key;
     double p95_ns_per_key;
@@ -1652,19 +1658,31 @@ static double keystone_elapsed_ns_per_key(uint64_t start_ns,
     return (double)(end_ns - start_ns) / (double)num_items;
 }
 
+typedef struct keystone_query_profile {
+    int query_shape;
+    int hit_rate_pct;
+    int64_t avg_gap;
+    int64_t detected_stride;
+} keystone_query_profile_t;
 
-
-static int keystone_detect_auto_query_shape(const int64_t* arr,
-                                              size_t n,
-                                              const keystone_batch_item_t* items,
-                                              size_t num_items) {
-    (void)arr;
-    (void)n;
+static keystone_query_profile_t keystone_detect_auto_query_profile(const int64_t* arr,
+                                                                   size_t n,
+                                                                   const keystone_batch_item_t* items,
+                                                                   size_t num_items) {
+    keystone_query_profile_t prof = {
+        .query_shape = KEYSTONE_QUERY_SHAPE_GENERAL,
+        .hit_rate_pct = -1,
+        .avg_gap = 0,
+        .detected_stride = 0
+    };
     if (!items || num_items == 0) {
-        return KEYSTONE_QUERY_SHAPE_GENERAL;
+        return prof;
     }
     if (num_items == 1) {
-        return KEYSTONE_QUERY_SHAPE_GENERAL;
+        if (arr && n > 0) {
+            prof.hit_rate_pct = (items[0].key >= arr[0] && items[0].key <= arr[n - 1]) ? 100 : 0;
+        }
+        return prof;
     }
 
     int is_sorted = 1;
@@ -1675,6 +1693,15 @@ static int keystone_detect_auto_query_shape(const int64_t* arr,
     __int128 stride = (__int128)items[1].key - (__int128)items[0].key;
     int64_t min_key = items[0].key;
     int64_t max_key = items[0].key;
+    __int128 total_gap = 0;
+    size_t in_bounds = 0;
+
+    int64_t arr_min = (arr && n > 0) ? arr[0] : 0;
+    int64_t arr_max = (arr && n > 0) ? arr[n - 1] : 0;
+
+    if (arr && n > 0 && items[0].key >= arr_min && items[0].key <= arr_max) {
+        in_bounds++;
+    }
 
     for (size_t i = 1; i < num_items; ++i) {
         __int128 diff = (__int128)items[i].key - (__int128)items[i - 1].key;
@@ -1686,6 +1713,22 @@ static int keystone_detect_auto_query_shape(const int64_t* arr,
         }
         if (items[i].key < min_key) min_key = items[i].key;
         if (items[i].key > max_key) max_key = items[i].key;
+
+        total_gap += (diff < 0 ? -diff : diff);
+
+        if (arr && n > 0 && items[i].key >= arr_min && items[i].key <= arr_max) {
+            in_bounds++;
+        }
+    }
+
+    if (num_items > 1) {
+        prof.avg_gap = (int64_t)(total_gap / (num_items - 1));
+    }
+    if (arr && n > 0) {
+        prof.hit_rate_pct = (int)((in_bounds * 100) / num_items);
+    }
+    if (is_strided && stride != 0) {
+        prof.detected_stride = (int64_t)stride;
     }
 
     if (is_sorted) {
@@ -1694,17 +1737,24 @@ static int keystone_detect_auto_query_shape(const int64_t* arr,
         __int128 range = (__int128)max_key - (__int128)min_key;
         const long double avg_step = (long double)range / (long double)(num_items - 1);
         if (avg_step <= 4.0L) {
-            return KEYSTONE_QUERY_SHAPE_DENSE_SORTED;
+            prof.query_shape = KEYSTONE_QUERY_SHAPE_DENSE_SORTED;
         } else {
-            return KEYSTONE_QUERY_SHAPE_SPARSE_SORTED;
+            prof.query_shape = KEYSTONE_QUERY_SHAPE_SPARSE_SORTED;
         }
+    } else if (is_strided) {
+        prof.query_shape = KEYSTONE_QUERY_SHAPE_STRIDED;
+    } else {
+        prof.query_shape = KEYSTONE_QUERY_SHAPE_RANDOM;
     }
 
-    if (is_strided) {
-        return KEYSTONE_QUERY_SHAPE_STRIDED;
-    }
+    return prof;
+}
 
-    return KEYSTONE_QUERY_SHAPE_RANDOM;
+static __attribute__((unused)) int keystone_detect_auto_query_shape(const int64_t* arr,
+                                                                    size_t n,
+                                                                    const keystone_batch_item_t* items,
+                                                                    size_t num_items) {
+    return keystone_detect_auto_query_profile(arr, n, items, num_items).query_shape;
 }
 
 static int keystone_find_backend_cache(uint32_t cpu_features,
@@ -1712,7 +1762,15 @@ static int keystone_find_backend_cache(uint32_t cpu_features,
                                          size_t query_count_bucket,
                                          int thread_count,
                                          int query_shape,
-                                          keystone_backend_cache_entry_t* entry) {
+                                         int hit_rate_bucket,
+                                         size_t gap_bucket,
+                                         int64_t detected_stride,
+                                         keystone_backend_cache_entry_t* entry) {
+    const char* disable_cache = getenv("KEYSTONE_DISABLE_CALIBRATION_CACHE");
+    if (disable_cache && strcmp(disable_cache, "1") == 0) {
+        return 0;
+    }
+
     pthread_rwlock_rdlock(&g_backend_cache_rwlock);
     for (size_t i = 0; i < KEYSTONE_AUTO_CACHE_ENTRIES; ++i) {
         const keystone_backend_cache_entry_t* current = &g_backend_cache[i];
@@ -1723,7 +1781,10 @@ static int keystone_find_backend_cache(uint32_t cpu_features,
             current->array_size_bucket == array_size_bucket &&
             current->query_count_bucket == query_count_bucket &&
             current->thread_count == thread_count &&
-            current->query_shape == query_shape) {
+            current->query_shape == query_shape &&
+            current->hit_rate_bucket == hit_rate_bucket &&
+            current->gap_bucket == gap_bucket &&
+            current->detected_stride == detected_stride) {
             if (entry) {
                 *entry = *current;
             }
@@ -1740,6 +1801,9 @@ static void keystone_store_backend_cache(uint32_t cpu_features,
                                            size_t query_count_bucket,
                                            int thread_count,
                                            int query_shape,
+                                           int hit_rate_bucket,
+                                           size_t gap_bucket,
+                                           int64_t detected_stride,
                                            keystone_backend_t backend,
                                            double estimated_ns_per_key,
                                            double p95_ns_per_key,
@@ -1758,6 +1822,9 @@ static void keystone_store_backend_cache(uint32_t cpu_features,
     entry->query_count_bucket = query_count_bucket;
     entry->thread_count = thread_count;
     entry->query_shape = query_shape;
+    entry->hit_rate_bucket = hit_rate_bucket;
+    entry->gap_bucket = gap_bucket;
+    entry->detected_stride = detected_stride;
     entry->backend = backend;
     entry->estimated_ns_per_key = estimated_ns_per_key;
     entry->p95_ns_per_key = p95_ns_per_key;
@@ -1776,7 +1843,10 @@ static void keystone_record_backend_decision(keystone_backend_t backend,
                                                int query_shape,
                                                keystone_backend_decision_source_t decision_source,
                                                size_t calibration_runs,
-                                               size_t candidates_measured) {
+                                               size_t candidates_measured,
+                                               int hit_rate_pct,
+                                               int64_t avg_gap,
+                                               int64_t detected_stride) {
     pthread_mutex_lock(&g_last_decision_mutex);
     g_last_backend_decision.backend = backend;
     g_last_backend_decision.cpu_features = keystone_detect_cpu_features();
@@ -1789,6 +1859,9 @@ static void keystone_record_backend_decision(keystone_backend_t backend,
     g_last_backend_decision.decision_source = decision_source;
     g_last_backend_decision.calibration_runs = calibration_runs;
     g_last_backend_decision.candidates_measured = candidates_measured;
+    g_last_backend_decision.hit_rate_pct = hit_rate_pct;
+    g_last_backend_decision.avg_gap = avg_gap;
+    g_last_backend_decision.detected_stride = detected_stride;
     pthread_mutex_unlock(&g_last_decision_mutex);
     atomic_store_explicit(&g_last_backend_decision_valid, 1, memory_order_release);
 }
@@ -1953,7 +2026,9 @@ static keystone_backend_measurement_t keystone_calibrate_auto_backend(
         0
     };
 
-    if (!keystone_measure_auto_backend(
+    const char* force_fallback = getenv("KEYSTONE_FORCE_CALIBRATION_FALLBACK");
+    if ((force_fallback && strcmp(force_fallback, "1") == 0) ||
+        !keystone_measure_auto_backend(
             KEYSTONE_BACKEND_SCALAR,
             arr,
             n,
@@ -2039,7 +2114,10 @@ size_t keystone_search_batch_auto(const int64_t* arr,
         return 0;
     }
 
-    const int query_shape = keystone_detect_auto_query_shape(arr, n, items, num_items);
+    const keystone_query_profile_t profile =
+        keystone_detect_auto_query_profile(arr, n, items, num_items);
+    const int query_shape = profile.query_shape;
+
     if (!(query_shape == KEYSTONE_QUERY_SHAPE_DENSE_SORTED && num_items >= KEYSTONE_AUTO_FORTRAN_MIN_ITEMS) &&
         keystone_auto_scalar_fast_path(num_items, config, thread_count)) {
         const uint64_t start_ns = keystone_now_ns();
@@ -2048,6 +2126,7 @@ size_t keystone_search_batch_auto(const int64_t* arr,
         const uint64_t end_ns = keystone_now_ns();
         const double estimated_ns_per_key =
             keystone_elapsed_ns_per_key(start_ns, end_ns, num_items);
+        const int hit_rate_pct = (int)((found * 100) / num_items);
         keystone_record_backend_decision(
             KEYSTONE_BACKEND_SCALAR,
             n,
@@ -2058,7 +2137,10 @@ size_t keystone_search_batch_auto(const int64_t* arr,
             query_shape,
             KEYSTONE_DECISION_SOURCE_FAST_PATH,
             0,
-            0
+            0,
+            hit_rate_pct,
+            profile.avg_gap,
+            profile.detected_stride
         );
         return found;
     }
@@ -2066,6 +2148,10 @@ size_t keystone_search_batch_auto(const int64_t* arr,
     const uint32_t cpu_features = keystone_detect_cpu_features();
     const size_t array_size_bucket = keystone_power_of_two_bucket(n);
     const size_t query_count_bucket = keystone_power_of_two_bucket(num_items);
+    const int hit_rate_bucket = profile.hit_rate_pct >= 0 ? (profile.hit_rate_pct / 25) : -1;
+    const size_t gap_bucket = keystone_power_of_two_bucket(profile.avg_gap > 0 ? (size_t)profile.avg_gap : 1);
+    const int64_t detected_stride = profile.detected_stride;
+
     keystone_backend_cache_entry_t cached_decision;
     double cached_ns_per_key = 0.0;
     double cached_p95_ns_per_key = 0.0;
@@ -2080,6 +2166,9 @@ size_t keystone_search_batch_auto(const int64_t* arr,
             query_count_bucket,
             thread_count,
             query_shape,
+            hit_rate_bucket,
+            gap_bucket,
+            detected_stride,
             &cached_decision)) {
         selected_backend = cached_decision.backend;
         cached_ns_per_key = cached_decision.estimated_ns_per_key;
@@ -2104,18 +2193,24 @@ size_t keystone_search_batch_auto(const int64_t* arr,
         cached_calibration_runs = measured.calibration_runs;
         cached_candidates_measured = measured.candidates_measured;
         decision_source = measured.decision_source;
-        keystone_store_backend_cache(
-            cpu_features,
-            array_size_bucket,
-            query_count_bucket,
-            thread_count,
-            query_shape,
-            selected_backend,
-            cached_ns_per_key,
-            cached_p95_ns_per_key,
-            cached_calibration_runs,
-            cached_candidates_measured
-        );
+
+        if (measured.decision_source == KEYSTONE_DECISION_SOURCE_MEASURED) {
+            keystone_store_backend_cache(
+                cpu_features,
+                array_size_bucket,
+                query_count_bucket,
+                thread_count,
+                query_shape,
+                hit_rate_bucket,
+                gap_bucket,
+                detected_stride,
+                selected_backend,
+                cached_ns_per_key,
+                cached_p95_ns_per_key,
+                cached_calibration_runs,
+                cached_candidates_measured
+            );
+        }
     }
 
     const uint64_t start_ns = keystone_now_ns();
@@ -2139,6 +2234,7 @@ size_t keystone_search_batch_auto(const int64_t* arr,
         cached_p95_ns_per_key = estimated_ns_per_key;
     }
 
+    const int hit_rate_pct = (int)((found * 100) / num_items);
     keystone_record_backend_decision(
         selected_backend,
         n,
@@ -2149,7 +2245,10 @@ size_t keystone_search_batch_auto(const int64_t* arr,
         query_shape,
         decision_source,
         cached_calibration_runs,
-        cached_candidates_measured
+        cached_candidates_measured,
+        hit_rate_pct,
+        profile.avg_gap,
+        profile.detected_stride
     );
 
 #ifdef KEYSTONE_ENABLE_PLATFORM_TUNING

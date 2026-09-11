@@ -10,8 +10,9 @@ This file records the intended benchmark posture for SIMD-related work. Treat it
 | AVX-512 local scan | Build-gated; experimental until measured on target AVX-512 hardware |
 | OpenMP batch path | Optional; available when built with OpenMP |
 | Fortran batch path | Optional; available when built or auto-enabled by the native toolchain |
-| Auto backend calibration | Measures viable local candidates on first cache miss and caches the fastest median timing |
-| Decision provenance | Reports fast path, measured, cache, or static fallback source through `keystone_backend_decision_t` and public label helpers |
+| Auto backend calibration | Measures viable local candidates on first cache miss and caches the fastest median timing across workload profile keys |
+| Decision provenance | Reports fast path, measured, cache, or static fallback source, query shape, hit rate, average gap, and stride through `keystone_backend_decision_t` and public label helpers |
+| Host & build metadata | Automatically captures hostname, OS, CPU architecture, kernel release, compiler name, and compiler version in CSV and JSON output |
 | AMX | Feature detection only; no AMX search backend is currently claimed |
 
 ## Measurement Rules
@@ -27,7 +28,8 @@ Any SIMD result should include:
 - warmup policy;
 - whether the run used scalar, optimized C batch, OpenMP, Fortran, auto-calibrated backend selection, AVX2 local scan, or AVX-512 local scan;
 - transfer cost and device memory policy for any future GPU or NPU backend;
-- decision source and query shape from `keystone_get_last_backend_decision()`;
+- decision source, query shape, hit rate percentage, average gap, and stride from `keystone_get_last_backend_decision()`;
+- host and compiler metadata (hostname, OS, architecture, kernel release, compiler, compiler version);
 - readable backend/source/shape labels from the public `keystone_*_name()` helpers;
 - raw output or CSV from the benchmark run.
 

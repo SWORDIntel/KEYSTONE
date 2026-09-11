@@ -258,6 +258,31 @@ typedef struct keystone_tar_zst_stats {
 int keystone_tar_zst_get_stats(keystone_tar_zst_t* tz,
                                  keystone_tar_zst_stats_t* stats);
 
+/* ============================================================================
+ * Trigram Content Indexing Integration
+ * ============================================================================ */
+
+struct keystone_trigram_index;
+
+/**
+ * @brief Stream and index text members of an archive directly into a trigram index.
+ *
+ * Decompresses and streams entries from the archive matching member_pattern (or all entries if NULL)
+ * directly into the provided trigram index using streaming ingestion without writing to disk.
+ *
+ * @param tz Archive handle.
+ * @param idx Trigram index to populate (must not be finalized).
+ * @param member_pattern Optional glob filter (e.g. "*.txt", "*.log", or NULL for all).
+ * @param retain_content Non-zero to retain text content for exact verification, 0 for candidate-only.
+ * @return Number of members indexed on success, or negative error code on failure.
+ */
+int keystone_tar_zst_index_trigram(
+    keystone_tar_zst_t* tz,
+    struct keystone_trigram_index* idx,
+    const char* member_pattern,
+    int retain_content
+);
+
 #ifdef __cplusplus
 }
 #endif

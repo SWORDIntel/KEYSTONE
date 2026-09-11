@@ -110,6 +110,9 @@ static void test_small_batch_uses_scalar(void) {
     TEST_ASSERT(decision.decision_source == KEYSTONE_DECISION_SOURCE_FAST_PATH);
     TEST_ASSERT(decision.calibration_runs == 0);
     TEST_ASSERT(decision.candidates_measured == 0);
+    TEST_ASSERT(decision.hit_rate_pct == 100);
+    TEST_ASSERT(decision.avg_gap == 3);
+    TEST_ASSERT(decision.detected_stride == 3);
 
     keystone_anchor_table_destroy(table);
 }
@@ -465,6 +468,128 @@ static void test_large_multi_thread_batch_calibrates_viable_backend(void) {
     free(data);
 }
 
+static void test_partial_hit_rate_and_profile_fields(void) {
+    const size_t n = 2048;
+    int64_t* data = malloc(n * sizeof(int64_t));
+    keystone_batch_item_t* items = malloc(n * sizeof(keystone_batch_item_t));
+    keystone_backend_decision_t decision;
+    keystone_anchor_table_t* table = keystone_anchor_table_create();
+
+    TEST_ASSERT(data != NULL);
+    TEST_ASSERT(items != NULL);
+    TEST_ASSERT(table != NULL);
+    fill_data(data, n);
+
+    /* 50% hit, 50% miss: even keys exist in data, odd keys are large out-of-bounds */
+    for (size_t i = 0; i < n; ++i) {
+        if (i % 2 == 0) {
+            items[i].key = (int64_t)i * 3;
+        } else {
+            items[i].key = (int64_t)(n + i) * 1000;
+        }
+        items[i].result = KEYSTONE_NOT_FOUND;
+        items[i].ordinal = i;
+    }
+
+    size_t found = keystone_search_batch_auto(data, n, items, n, table, 8, NULL);
+    TEST_ASSERT(found == n / 2);
+    TEST_ASSERT(keystone_get_last_backend_decision(&decision) == 0);
+    TEST_ASSERT(decision.hit_rate_pct == 50);
+    TEST_ASSERT(decision.avg_gap > 0);
+    /* Not constant stride because alternating between close and far keys */
+    TEST_ASSERT(decision.detected_stride == 0);
+    TEST_ASSERT(decision.query_shape == KEYSTONE_QUERY_SHAPE_RANDOM);
+
+    keystone_anchor_table_destroy(table);
+    free(items);
+    free(data);
+}
+
+static void test_static_fallback_policy(void) {
+    const size_t n = 8192;
+    int64_t* data = malloc(n * sizeof(int64_t));
+    keystone_batch_item_t* items = malloc(n * sizeof(keystone_batch_item_t));
+    keystone_backend_decision_t decision;
+    keystone_parallel_config_t config = {
+        .num_threads = 4,
+        .use_thread_pool = 0,
+        .batch_chunk = 64
+    };
+    keystone_anchor_table_t* table = keystone_anchor_table_create();
+
+    TEST_ASSERT(data != NULL);
+    TEST_ASSERT(items != NULL);
+    TEST_ASSERT(table != NULL);
+    fill_data(data, n);
+    fill_items(items, n);
+
+    /* Force calibration measurement to fail, triggering static fallback */
+    setenv("KEYSTONE_FORCE_CALIBRATION_FALLBACK", "1", 1);
+
+    size_t found = keystone_search_batch_auto(data, n, items, n, table, 8, &config);
+    unsetenv("KEYSTONE_FORCE_CALIBRATION_FALLBACK");
+
+    TEST_ASSERT(found == n);
+    assert_all_found(items, n);
+    TEST_ASSERT(keystone_get_last_backend_decision(&decision) == 0);
+    TEST_ASSERT(decision.decision_source == KEYSTONE_DECISION_SOURCE_STATIC_FALLBACK);
+    TEST_ASSERT(decision.hit_rate_pct == 100);
+    TEST_ASSERT(decision.avg_gap == 3);
+    TEST_ASSERT(decision.detected_stride == 3);
+    TEST_ASSERT(decision.query_shape == KEYSTONE_QUERY_SHAPE_DENSE_SORTED);
+
+    /* Verify fallback backend matches static policy expectations */
+    if (keystone_fortran_backend_available()) {
+        TEST_ASSERT(decision.backend == KEYSTONE_BACKEND_FORTRAN);
+    } else {
+        TEST_ASSERT(decision.backend == KEYSTONE_BACKEND_C_OPENMP);
+    }
+
+    keystone_anchor_table_destroy(table);
+    free(items);
+    free(data);
+}
+
+static void test_cache_disable_and_fallback_policy(void) {
+    const size_t n = 8192;
+    int64_t* data = malloc(n * sizeof(int64_t));
+    keystone_batch_item_t* items = malloc(n * sizeof(keystone_batch_item_t));
+    keystone_backend_decision_t decision;
+    keystone_parallel_config_t config = {
+        .num_threads = 4,
+        .use_thread_pool = 0,
+        .batch_chunk = 64
+    };
+    keystone_anchor_table_t* table = keystone_anchor_table_create();
+
+    TEST_ASSERT(data != NULL);
+    TEST_ASSERT(items != NULL);
+    TEST_ASSERT(table != NULL);
+    fill_data(data, n);
+    fill_items(items, n);
+
+    /* Disable calibration cache so every call re-measures */
+    setenv("KEYSTONE_DISABLE_CALIBRATION_CACHE", "1", 1);
+
+    size_t found = keystone_search_batch_auto(data, n, items, n, table, 8, &config);
+    TEST_ASSERT(found == n);
+    TEST_ASSERT(keystone_get_last_backend_decision(&decision) == 0);
+    TEST_ASSERT(decision.decision_source == KEYSTONE_DECISION_SOURCE_MEASURED);
+
+    fill_items(items, n);
+    found = keystone_search_batch_auto(data, n, items, n, table, 8, &config);
+    TEST_ASSERT(found == n);
+    TEST_ASSERT(keystone_get_last_backend_decision(&decision) == 0);
+    /* Still measured because cache was bypassed */
+    TEST_ASSERT(decision.decision_source == KEYSTONE_DECISION_SOURCE_MEASURED);
+
+    unsetenv("KEYSTONE_DISABLE_CALIBRATION_CACHE");
+
+    keystone_anchor_table_destroy(table);
+    free(items);
+    free(data);
+}
+
 int main(void) {
     printf("Running auto backend selector tests\n");
     printf("===================================\n\n");
@@ -479,6 +604,9 @@ int main(void) {
     test_dense_sorted_cache_hit_preserves_results();
     test_random_shape_cache_hit_preserves_results();
     test_large_multi_thread_batch_calibrates_viable_backend();
+    test_partial_hit_rate_and_profile_fields();
+    test_static_fallback_policy();
+    test_cache_disable_and_fallback_policy();
 
     printf("Auto backend selector calibration verified.\n");
     return 0;

@@ -45,7 +45,14 @@ from .core import KeystoneSearch, AnchorTable, KeystoneBackend, WorkloadType, Ba
 from .telemetry import TelemetryProcessor, TelemetryEvent
 from .cluster import ClusterRouter, crc16_keystone
 from .neural import NeuralClassifier, SemanticClass
-from .trigram import TrigramIndex, TrigramStream, TrigramStats, extract_trigrams
+from .trigram import (
+    TrigramIndex,
+    TrigramStream,
+    TrigramStats,
+    extract_trigrams,
+    KEYSTONE_TRIGRAM_OPT_NONE,
+    KEYSTONE_TRIGRAM_OPT_CASE_INSENSITIVE,
+)
 from .hash_index import HashIndex
 
 __all__ = [
@@ -54,6 +61,7 @@ __all__ = [
     "ClusterRouter", "crc16_keystone",
     "NeuralClassifier", "SemanticClass",
     "TrigramIndex", "TrigramStream", "TrigramStats", "extract_trigrams",
+    "KEYSTONE_TRIGRAM_OPT_NONE", "KEYSTONE_TRIGRAM_OPT_CASE_INSENSITIVE",
     "HashIndex",
 ]
 __version__ = "1.1.0"

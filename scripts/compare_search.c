@@ -1,10 +1,11 @@
-#include "include/keystone.h"
+#include <keystone.h>
 #include <time.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <stdint.h>
 #include <string.h>
 #include <limits.h>
+#include <sys/utsname.h>
 
 typedef struct { int64_t key; } query_t;
 
@@ -337,8 +338,21 @@ int main(void) {
            data_gib,
            total_buffer_gib);
     printf("#effective_data_gib_s=dataset_gib/(backend_ns_per_key*queries);proxy_not_raw_dram_bandwidth\n");
+    struct utsname host_info;
+    if (uname(&host_info) == 0) {
+        printf("#host=%s,os=%s,release=%s,arch=%s\n",
+               host_info.nodename, host_info.sysname, host_info.release, host_info.machine);
+    }
+#if defined(__clang__)
+    const char* comp_name = "clang";
+#elif defined(__GNUC__)
+    const char* comp_name = "gcc";
+#else
+    const char* comp_name = "unknown";
+#endif
+    printf("#compiler=%s,compiler_version=\"%s\"\n", comp_name, __VERSION__);
     printf("#auto_backend_bench=%d\n", KEYSTONE_BENCH_AUTO ? 1 : 0);
-    printf("#run,binary_ns,keystone_ns,enhanced_ns,batch_parallel_ns,fortran_batch_ns,cuda_batch_ns,auto_batch_ns,fortran_available,cuda_available,auto_backend_bench,auto_decision_available,auto_backend,auto_decision_source,auto_query_shape,auto_cpu_features,auto_array_bucket,auto_query_bucket,auto_thread_count,auto_estimated_ns_per_key,auto_p95_ns_per_key,auto_calibration_runs,auto_candidates_measured,data_alloc_ms,data_init_ms,query_alloc_ms,query_init_ms,setup_total_ms,data_bytes,query_bytes,batch_bytes,total_buffer_bytes,data_gib,total_buffer_gib,binary_effective_gib_s,keystone_effective_gib_s,enhanced_effective_gib_s,batch_parallel_effective_gib_s,fortran_effective_gib_s,cuda_effective_gib_s,auto_effective_gib_s,bench_mode,warmup_runs\n");
+    printf("#run,binary_ns,keystone_ns,enhanced_ns,batch_parallel_ns,fortran_batch_ns,cuda_batch_ns,auto_batch_ns,fortran_available,cuda_available,auto_backend_bench,auto_decision_available,auto_backend,auto_decision_source,auto_query_shape,auto_cpu_features,auto_array_bucket,auto_query_bucket,auto_thread_count,auto_estimated_ns_per_key,auto_p95_ns_per_key,auto_calibration_runs,auto_candidates_measured,auto_hit_rate_pct,auto_avg_gap,auto_detected_stride,data_alloc_ms,data_init_ms,query_alloc_ms,query_init_ms,setup_total_ms,data_bytes,query_bytes,batch_bytes,total_buffer_bytes,data_gib,total_buffer_gib,binary_effective_gib_s,keystone_effective_gib_s,enhanced_effective_gib_s,batch_parallel_effective_gib_s,fortran_effective_gib_s,cuda_effective_gib_s,auto_effective_gib_s,bench_mode,warmup_runs\n");
     for (size_t run = 1; run <= runs; ++run) {
         uint64_t start, end;
         start = now_ns();
@@ -434,6 +448,9 @@ int main(void) {
         double auto_p95 = 0.0;
         size_t auto_calibration_runs = 0;
         size_t auto_candidates_measured = 0;
+        int auto_hit_rate_pct = -1;
+        int64_t auto_avg_gap = 0;
+        int64_t auto_detected_stride = 0;
 #if KEYSTONE_BENCH_AUTO
         start = now_ns();
         fill_batch(batch, queries, num_queries);
@@ -463,6 +480,9 @@ int main(void) {
             auto_p95 = decision.p95_ns_per_key;
             auto_calibration_runs = decision.calibration_runs;
             auto_candidates_measured = decision.candidates_measured;
+            auto_hit_rate_pct = decision.hit_rate_pct;
+            auto_avg_gap = decision.avg_gap;
+            auto_detected_stride = decision.detected_stride;
         } else {
             auto_backend = "unreported";
             auto_decision_source = "unreported";
@@ -485,7 +505,7 @@ int main(void) {
         const double auto_effective_gib_s =
             effective_data_gib_s(auto_avg, num_queries, data_bytes);
 
-        printf("%zu,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%d,%d,%d,%d,%s,%s,%s,%u,%zu,%zu,%d,%.2f,%.2f,%zu,%zu,%.3f,%.3f,%.3f,%.3f,%.3f,%zu,%zu,%zu,%zu,%.6f,%.6f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%s,%zu\n",
+        printf("%zu,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%d,%d,%d,%d,%s,%s,%s,%u,%zu,%zu,%d,%.2f,%.2f,%zu,%zu,%d,%ld,%ld,%.3f,%.3f,%.3f,%.3f,%.3f,%zu,%zu,%zu,%zu,%.6f,%.6f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%s,%zu\n",
                run,
                binary_avg,
                classic_avg,
@@ -509,6 +529,9 @@ int main(void) {
                auto_p95,
                auto_calibration_runs,
                auto_candidates_measured,
+               auto_hit_rate_pct,
+               (long)auto_avg_gap,
+               (long)auto_detected_stride,
                data_alloc_ms,
                data_init_ms,
                query_alloc_ms,

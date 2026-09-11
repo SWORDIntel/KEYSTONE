@@ -69,8 +69,11 @@ int main() {
         printf("Backend chosen: %s\n", keystone_backend_name(decision.backend));
         printf("Decision source: %s\n", keystone_decision_source_name(decision.decision_source));
         printf("Detected query shape: %s\n", keystone_query_shape_name(decision.query_shape));
-        printf("Estimated ns/key: %.2f\n", decision.estimated_ns_per_key);
-        printf("Calibration runs performed: %zu\n", decision.calibration_runs);
+        printf("Estimated ns/key: %.2f (p95: %.2f)\n", decision.estimated_ns_per_key, decision.p95_ns_per_key);
+        printf("Calibration runs: %zu, Candidates measured: %zu\n", decision.calibration_runs, decision.candidates_measured);
+        printf("Observed hit rate: %d%%\n", decision.hit_rate_pct);
+        printf("Average key gap: %ld\n", (long)decision.avg_gap);
+        printf("Detected stride: %ld\n", (long)decision.detected_stride);
     }
     
     // 4. Cleanup
@@ -78,6 +81,26 @@ int main() {
     keystone_anchor_table_destroy(table);
     return 0;
 }
+```
+
+### 2.1 Python SDK Batch Lookup & Decision Inspection
+
+```python
+import numpy as np
+import keystone
+
+arr = np.arange(0, 1000000, 3, dtype=np.int64)
+queries = np.array([300, 600, 900, 99999999], dtype=np.int64)
+
+# Fast zero-copy C batch search
+results = keystone.KeystoneSearch.search_batch_keys(arr, queries)
+print("Indices:", results)  # [100, 200, 300, -1]
+
+decision = keystone.KeystoneSearch.get_last_decision()
+if decision:
+    print(f"Backend: {decision.backend} | Source: {decision.decision_source}")
+    print(f"Shape: {decision.query_shape} | Est: {decision.estimated_ns_per_key:.2f} ns/key")
+    print(f"Hit Rate: {decision.hit_rate_pct}% | Avg Gap: {decision.avg_gap} | Stride: {decision.detected_stride}")
 ```
 
 ## 3. Compressed Archive Ingestion (.tar.zst)
@@ -284,4 +307,71 @@ int bridge_example(qihse_user_t* user_principal, void* kv_store) {
     keystone_qihse_bridge_shutdown();
     return rc;
 }
+```
+
+## 6. Trigram Content Indexing (tgrep-style)
+
+KEYSTONE includes a native inverted trigram index engine (`keystone_trigram.h`) designed for high-performance candidate rejection over large text files and log corpora before performing exact byte scans.
+
+### 6.1 Native C API
+
+```c
+#include "keystone.h"
+
+int trigram_example() {
+    // 1. Create trigram index (case-insensitive with SSE4.2 SIMD folding)
+    keystone_trigram_options_t opts = {
+        .flags = KEYSTONE_TRIGRAM_OPT_CASE_INSENSITIVE
+    };
+    keystone_trigram_index_t* index = keystone_trigram_index_create(&opts);
+
+    // 2. Add documents (or streaming archive members via keystone_tar_zst_index_trigram)
+    const char* log1 = "2026-09-11 12:00:00 [ERROR] Connection timed out on host-42";
+    const char* log2 = "2026-09-11 12:00:01 [INFO] Worker health check passed";
+    keystone_trigram_index_add_document(index, 101, (const uint8_t*)log1, strlen(log1), 1);
+    keystone_trigram_index_add_document(index, 102, (const uint8_t*)log2, strlen(log2), 1);
+    keystone_trigram_index_finalize(index);
+
+    // 3. Query candidate documents matching substring
+    uint64_t candidate_ids[16];
+    size_t num_candidates = 0;
+    keystone_trigram_index_search(index, "timed out", 9, candidate_ids, 16, &num_candidates);
+
+    for (size_t i = 0; i < num_candidates; i++) {
+        printf("Candidate doc ID: %lu\n", candidate_ids[i]);
+    }
+
+    // 4. Persistence: save and load index
+    keystone_trigram_index_save(index, "logs.trigram");
+    keystone_trigram_index_destroy(index);
+
+    // Zero-rebuild load
+    keystone_trigram_index_t* loaded = keystone_trigram_index_load("logs.trigram");
+    // ... search on loaded index ...
+    keystone_trigram_index_destroy(loaded);
+    return 0;
+}
+```
+
+### 6.2 Python SDK API
+
+```python
+from keystone import TrigramIndex
+
+# Create case-insensitive trigram index
+index = TrigramIndex(case_insensitive=True)
+
+# Add documents
+index.add_document(doc_id=1, text="CRITICAL: Out of memory on node 3")
+index.add_document(doc_id=2, text="INFO: Heartbeat acknowledged")
+index.finalize()
+
+# Search
+candidates = index.search("out of memory")
+print("Matching document IDs:", candidates)  # [1]
+
+# Save & Load
+index.save("index.bin")
+loaded = TrigramIndex.load("index.bin")
+print("Loaded search:", loaded.search("critical"))  # [1]
 ```

@@ -41,6 +41,18 @@ from .core import _lib
 _lib.keystone_trigram_index_create.argtypes = [ctypes.c_size_t]
 _lib.keystone_trigram_index_create.restype = ctypes.c_void_p
 
+_lib.keystone_trigram_index_create_options.argtypes = [ctypes.c_size_t, ctypes.c_uint32]
+_lib.keystone_trigram_index_create_options.restype = ctypes.c_void_p
+
+_lib.keystone_trigram_index_get_flags.argtypes = [ctypes.c_void_p]
+_lib.keystone_trigram_index_get_flags.restype = ctypes.c_uint32
+
+_lib.keystone_trigram_index_save.argtypes = [ctypes.c_void_p, ctypes.c_char_p]
+_lib.keystone_trigram_index_save.restype = ctypes.c_int
+
+_lib.keystone_trigram_index_load.argtypes = [ctypes.c_char_p]
+_lib.keystone_trigram_index_load.restype = ctypes.c_void_p
+
 _lib.keystone_trigram_index_destroy.argtypes = [ctypes.c_void_p]
 _lib.keystone_trigram_index_destroy.restype = None
 
@@ -109,6 +121,13 @@ _lib.keystone_trigram_begin_document.argtypes = [
     ctypes.c_char_p,
 ]
 _lib.keystone_trigram_begin_document.restype = ctypes.c_void_p
+
+_lib.keystone_trigram_begin_document_options.argtypes = [
+    ctypes.c_void_p,
+    ctypes.c_char_p,
+    ctypes.c_bool,
+]
+_lib.keystone_trigram_begin_document_options.restype = ctypes.c_void_p
 
 _lib.keystone_trigram_feed_bytes.argtypes = [
     ctypes.c_void_p,
@@ -202,6 +221,10 @@ class TrigramStats:
 # High-level TrigramIndex
 # ---------------------------------------------------------------------------
 
+KEYSTONE_TRIGRAM_OPT_NONE = 0
+KEYSTONE_TRIGRAM_OPT_CASE_INSENSITIVE = 1
+
+
 class TrigramIndex:
     """
     24-bit trigram content index for fast candidate filtering.
@@ -214,8 +237,15 @@ class TrigramIndex:
     must be verified against the authoritative data source.
     """
 
-    def __init__(self, initial_doc_capacity: int = 0):
-        self._ptr = _lib.keystone_trigram_index_create(initial_doc_capacity)
+    def __init__(
+        self,
+        initial_doc_capacity: int = 0,
+        case_insensitive: bool = False,
+        flags: int = KEYSTONE_TRIGRAM_OPT_NONE,
+    ):
+        if case_insensitive:
+            flags |= KEYSTONE_TRIGRAM_OPT_CASE_INSENSITIVE
+        self._ptr = _lib.keystone_trigram_index_create_options(initial_doc_capacity, flags)
         if not self._ptr:
             raise RuntimeError("Failed to create trigram index")
 
@@ -232,6 +262,34 @@ class TrigramIndex:
         if self._ptr:
             _lib.keystone_trigram_index_destroy(self._ptr)
             self._ptr = None
+
+    @property
+    def flags(self) -> int:
+        if not self._ptr:
+            return 0
+        return int(_lib.keystone_trigram_index_get_flags(self._ptr))
+
+    def save(self, filepath: str) -> None:
+        """Serialize a finalized trigram index to a binary file on disk."""
+        if not self._ptr:
+            raise RuntimeError("TrigramIndex is closed")
+        c_path = filepath.encode("utf-8")
+        rc = _lib.keystone_trigram_index_save(self._ptr, c_path)
+        if rc != 0:
+            raise RuntimeError(f"save failed with code {rc}")
+
+    @classmethod
+    def load(cls, filepath: str) -> "TrigramIndex":
+        """Load and reconstruct a finalized trigram index from a binary file."""
+        if not os.path.exists(filepath):
+            raise FileNotFoundError(f"Index file not found: {filepath}")
+        c_path = filepath.encode("utf-8")
+        ptr = _lib.keystone_trigram_index_load(c_path)
+        if not ptr:
+            raise RuntimeError(f"Failed to load trigram index from {filepath}")
+        inst = cls.__new__(cls)
+        inst._ptr = ptr
+        return inst
 
     @property
     def document_count(self) -> int:
@@ -259,12 +317,8 @@ class TrigramIndex:
     def add_document_external(self, name: Optional[str], text: bytes) -> int:
         """Add a document without content retention (candidate-only indexing).
 
-        The text is consumed to build trigram postings but is NOT stored.
-        Preferred for security-sensitive integrations where the caller
-        owns the authoritative data.
-
         Args:
-            name: Optional document name/path.
+            name: Optional document name/path (None or string).
             text: Document content bytes.
 
         Returns:
@@ -279,13 +333,13 @@ class TrigramIndex:
             raise RuntimeError(f"add_document_external failed with code {rc}")
         return int(doc_id.value)
 
-    def begin_document(self, name: Optional[str] = None) -> "TrigramStream":
+    def begin_document(self, name: Optional[str] = None, retain_content: bool = False) -> "TrigramStream":
         """Begin streaming document ingestion.
 
         Returns a TrigramStream that can be fed bytes incrementally.
         """
         c_name = name.encode("utf-8") if name else None
-        stream_ptr = _lib.keystone_trigram_begin_document(self._ptr, c_name)
+        stream_ptr = _lib.keystone_trigram_begin_document_options(self._ptr, c_name, retain_content)
         if not stream_ptr:
             raise RuntimeError("begin_document failed")
         return TrigramStream(stream_ptr)
@@ -456,3 +510,13 @@ def extract_trigrams(pattern: bytes) -> List[int]:
     buf = (ctypes.c_uint32 * max_grams)()
     n = _lib.keystone_trigram_extract(pattern, len(pattern), buf, max_grams)
     return [int(buf[i]) for i in range(n)]
+
+
+__all__ = [
+    "TrigramIndex",
+    "TrigramStream",
+    "TrigramStats",
+    "extract_trigrams",
+    "KEYSTONE_TRIGRAM_OPT_NONE",
+    "KEYSTONE_TRIGRAM_OPT_CASE_INSENSITIVE",
+]

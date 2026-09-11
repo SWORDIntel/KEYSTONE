@@ -34,7 +34,7 @@ keystone_bench_writer_t* keystone_bench_writer_create(const keystone_bench_write
     writer->needs_header = (config->append == 0 || writer->is_stdout);
 
     if (writer->format == KEYSTONE_BENCH_FORMAT_CSV && writer->needs_header) {
-        fprintf(writer->f, "host,compiler,cpu_features,profile,n,queries,hit_rate,gap,jitter,stride,threads,backend,source,shape,calibration_runs,candidates,throughput_gib_s,median_ns,p95_ns,rss_kb,page_faults\n");
+        fprintf(writer->f, "host,os,arch,release,compiler,compiler_version,cpu_features,profile,n,queries,hit_rate,gap,jitter,stride,threads,backend,source,shape,calibration_runs,candidates,throughput_gib_s,median_ns,p95_ns,rss_kb,page_faults\n");
     } else if (writer->format == KEYSTONE_BENCH_FORMAT_JSON && writer->needs_header) {
         fprintf(writer->f, "[\n");
         writer->needs_header = 0; /* use as 'is_first_item' flag for JSON */
@@ -61,6 +61,9 @@ int keystone_bench_writer_record(keystone_bench_writer_t* writer, const keystone
     struct utsname name;
     if (uname(&name) < 0) {
         strcpy(name.nodename, "unknown");
+        strcpy(name.sysname, "unknown");
+        strcpy(name.machine, "unknown");
+        strcpy(name.release, "unknown");
     }
 
     const char* compiler = "unknown";
@@ -69,6 +72,7 @@ int keystone_bench_writer_record(keystone_bench_writer_t* writer, const keystone
 #elif defined(__GNUC__)
     compiler = "gcc";
 #endif
+    const char* compiler_version = __VERSION__;
 
     struct rusage usage;
     long rss_kb = 0;
@@ -79,8 +83,9 @@ int keystone_bench_writer_record(keystone_bench_writer_t* writer, const keystone
     }
 
     if (writer->format == KEYSTONE_BENCH_FORMAT_CSV) {
-        fprintf(writer->f, "%s,%s,0x%08x,%s,%zu,%zu,%d,%d,%d,%d,%d,%s,%s,%s,%zu,%zu,%.3f,%.2f,%.2f,%ld,%ld\n",
-                name.nodename, compiler, record->cpu_features, record->profile_name ? record->profile_name : "none",
+        fprintf(writer->f, "%s,%s,%s,%s,%s,\"%s\",0x%08x,%s,%zu,%zu,%d,%d,%d,%d,%d,%s,%s,%s,%zu,%zu,%.3f,%.2f,%.2f,%ld,%ld\n",
+                name.nodename, name.sysname, name.machine, name.release,
+                compiler, compiler_version, record->cpu_features, record->profile_name ? record->profile_name : "none",
                 record->array_size, record->num_queries, record->hit_rate_pct, record->data_gap,
                 record->data_gap_jitter, record->query_stride, record->thread_count,
                 record->decision_available ? record->backend_name : "none",
@@ -97,7 +102,11 @@ int keystone_bench_writer_record(keystone_bench_writer_t* writer, const keystone
         
         fprintf(writer->f, "  {\n");
         fprintf(writer->f, "    \"host\": \"%s\",\n", name.nodename);
+        fprintf(writer->f, "    \"os\": \"%s\",\n", name.sysname);
+        fprintf(writer->f, "    \"arch\": \"%s\",\n", name.machine);
+        fprintf(writer->f, "    \"release\": \"%s\",\n", name.release);
         fprintf(writer->f, "    \"compiler\": \"%s\",\n", compiler);
+        fprintf(writer->f, "    \"compiler_version\": \"%s\",\n", compiler_version);
         fprintf(writer->f, "    \"cpu_features\": %u,\n", record->cpu_features);
         fprintf(writer->f, "    \"profile\": \"%s\",\n", record->profile_name ? record->profile_name : "none");
         fprintf(writer->f, "    \"n\": %zu,\n", record->array_size);

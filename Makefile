@@ -184,39 +184,43 @@ benchmarks/%.o: benchmarks/%.c
 	$(CC) $(CFLAGS) -c $< -o $@
 
 # Test binaries
-bin/test_enhanced: $(OBJS) tests/dsmil_integration_test.o | bin
+bin/test_enhanced: $(OBJS) $(FORTRAN_OBJ) tests/dsmil_integration_test.o | bin
 	$(CC) -o $@ $^ $(LDFLAGS)
 
-bin/test_core_native: $(OBJS) tests/test_core_native.o | bin
+bin/test_core_native: $(OBJS) $(FORTRAN_OBJ) tests/test_core_native.o | bin
 	$(CC) -o $@ $^ $(LDFLAGS)
 
-bin/test_fortran_backend: $(OBJS) tests/test_fortran_backend.o | bin
+bin/test_fortran_backend: $(OBJS) $(FORTRAN_OBJ) tests/test_fortran_backend.o | bin
 	$(CC) -o $@ $^ $(LDFLAGS)
 
-bin/test_auto_backend: $(OBJS) tests/test_auto_backend.o | bin
+bin/test_auto_backend: $(OBJS) $(FORTRAN_OBJ) tests/test_auto_backend.o | bin
 	$(CC) -o $@ $^ $(LDFLAGS)
 
-bin/test_telemetry_processor_perf: $(OBJS) tests/test_telemetry_processor_perf.o | bin
+bin/test_telemetry_processor_perf: $(OBJS) $(FORTRAN_OBJ) tests/test_telemetry_processor_perf.o | bin
 	$(CC) -o $@ $^ $(LDFLAGS)
 
-bin/test_performance_fix: $(OBJS) tests/test_performance_fix.o | bin
+bin/test_performance_fix: $(OBJS) $(FORTRAN_OBJ) tests/test_performance_fix.o | bin
 	$(CC) -o $@ $^ $(LDFLAGS)
 
 bin/test_trigram_index: $(OBJS) $(FORTRAN_OBJ) tests/test_trigram_index.o | bin
 	$(CC) -o $@ $^ $(LDFLAGS)
 
-bin/test_tar_zst: $(OBJS) tests/test_tar_zst.o | bin
+bin/test_tar_zst: $(OBJS) $(FORTRAN_OBJ) tests/test_tar_zst.o | bin
 	$(CC) -o $@ $^ $(LDFLAGS)
 
 # Benchmark binaries
-benchmarks/dsmil_benchmark: $(OBJS) benchmarks/dsmil_benchmark.o benchmarks/benchmark_writer.o
+benchmarks/dsmil_benchmark: $(OBJS) $(FORTRAN_OBJ) benchmarks/dsmil_benchmark.o benchmarks/benchmark_writer.o
 	$(CC) -o $@ $^ $(LDFLAGS)
 
-benchmarks/performance_proof: $(OBJS) benchmarks/performance_proof.o benchmarks/benchmark_writer.o
+benchmarks/performance_proof: $(OBJS) $(FORTRAN_OBJ) benchmarks/performance_proof.o benchmarks/benchmark_writer.o
 	$(CC) -o $@ $^ $(LDFLAGS)
 
 benchmarks/trigram_benchmark: $(OBJS) $(FORTRAN_OBJ) benchmarks/trigram_benchmark.o
 	$(CC) -o $@ $^ $(LDFLAGS)
+
+scripts/compare_search_auto: $(OBJS) $(FORTRAN_OBJ) scripts/compare_search.c
+	$(CC) $(CFLAGS) -DKEYSTONE_BENCH_AUTO=1 -c scripts/compare_search.c -o scripts/compare_search_auto.o
+	$(CC) -o $@ scripts/compare_search_auto.o $(OBJS) $(FORTRAN_OBJ) $(LDFLAGS)
 
 # Fortran backend (optional) — compiled into libkeystone.so directly
 FORTRAN_ENABLED := no

@@ -56,14 +56,34 @@ typedef struct keystone_trigram_stats {
  */
 typedef struct keystone_trigram_index keystone_trigram_index_t;
 
+/* Options flags for trigram indexing */
+#define KEYSTONE_TRIGRAM_OPT_NONE             0u
+#define KEYSTONE_TRIGRAM_OPT_CASE_INSENSITIVE (1u << 0)
+
 /**
- * @brief Create a new trigram content index.
+ * @brief Create a new trigram content index with default options.
  * @param initial_doc_capacity Expected number of documents. 0 selects a safe
  *        implementation default.
  * @return Pointer to new index, or NULL on invalid capacity / allocation
  *         failure.
  */
 keystone_trigram_index_t* keystone_trigram_index_create(size_t initial_doc_capacity);
+
+/**
+ * @brief Create a new trigram content index with specific options.
+ * @param initial_doc_capacity Expected number of documents.
+ * @param flags Bitwise OR of KEYSTONE_TRIGRAM_OPT_* flags.
+ * @return Pointer to new index, or NULL on failure.
+ */
+keystone_trigram_index_t* keystone_trigram_index_create_options(
+    size_t initial_doc_capacity,
+    uint32_t flags
+);
+
+/**
+ * @brief Return the options flags configured for this index.
+ */
+uint32_t keystone_trigram_index_get_flags(const keystone_trigram_index_t* idx);
 
 /**
  * @brief Destroy a trigram content index and free all owned memory.
@@ -197,6 +217,12 @@ keystone_trigram_stream_t* keystone_trigram_begin_document(
     const char* name
 );
 
+keystone_trigram_stream_t* keystone_trigram_begin_document_options(
+    keystone_trigram_index_t* idx,
+    const char* name,
+    bool retain_content
+);
+
 int keystone_trigram_feed_bytes(
     keystone_trigram_stream_t* stream,
     const char* data,
@@ -261,6 +287,36 @@ void keystone_trigram_candidates_free(
 
 size_t keystone_trigram_index_memory_usage(
     const keystone_trigram_index_t* idx
+);
+
+/* --- Change 7: Binary Persistence --- */
+
+/**
+ * @brief Serialize a finalized trigram index to a binary file on disk.
+ *
+ * Persists the document records (including owned content), posting lists,
+ * and configuration flags. The index must be finalized before saving.
+ *
+ * @param idx Finalized trigram index.
+ * @param filepath Path to target binary file.
+ * @return KEYSTONE_TRIGRAM_OK on success, or a negative error code.
+ */
+int keystone_trigram_index_save(
+    const keystone_trigram_index_t* idx,
+    const char* filepath
+);
+
+/**
+ * @brief Load and reconstruct a finalized trigram index from a binary file.
+ *
+ * Validates the file header, version, and rebuilds the hash table and
+ * posting lists directly into an immutable, finalized state.
+ *
+ * @param filepath Path to the saved trigram index file.
+ * @return Pointer to loaded index, or NULL on I/O or format error.
+ */
+keystone_trigram_index_t* keystone_trigram_index_load(
+    const char* filepath
 );
 
 #ifdef __cplusplus

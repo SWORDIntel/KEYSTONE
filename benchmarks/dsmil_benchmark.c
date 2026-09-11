@@ -200,10 +200,10 @@ static void benchmark_auto_batch_search(const char* label,
             record.throughput_gib_s = 0; /* not computed here */
             record.median_latency_ns = decision.estimated_ns_per_key;
             record.p95_latency_ns = decision.p95_ns_per_key;
-            record.hit_rate_pct = -1;
-            record.data_gap = -1;
+            record.hit_rate_pct = decision.hit_rate_pct;
+            record.data_gap = (int)decision.avg_gap;
             record.data_gap_jitter = -1;
-            record.query_stride = -1;
+            record.query_stride = (int)decision.detected_stride;
             record.decision_available = 1;
             record.backend_name = keystone_backend_name(decision.backend);
             record.decision_source = keystone_decision_source_name((keystone_backend_decision_source_t)decision.decision_source);
