@@ -10,8 +10,12 @@
  * - DSMIL workload optimizations
  */
 
+#ifndef _GNU_SOURCE
 #define _GNU_SOURCE  /* For M_PI, clock_gettime, CLOCK_MONOTONIC */
+#endif
+#ifndef _POSIX_C_SOURCE
 #define _POSIX_C_SOURCE 200809L  /* For POSIX time functions */
+#endif
 
 #include "../include/keystone.h"
 #ifdef KEYSTONE_ENABLE_FORTRAN

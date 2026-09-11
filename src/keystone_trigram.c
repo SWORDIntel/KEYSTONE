@@ -640,20 +640,6 @@ static int compare_uint32(const void* a, const void* b) {
     return (u1 > u2) - (u1 < u2);
 }
 
-/* Counting sort using a caller-provided shared counts array (zeroed and
- * reused across posting lists to eliminate per-list allocation churn). */
-static void counting_sort_doc_ids(
-    uint32_t* arr, size_t count, size_t max_val, size_t* counts
-) {
-    if (count <= 1u) return;
-    memset(counts, 0, (max_val + 1u) * sizeof(size_t));
-    for (size_t i = 0u; i < count; i++) counts[arr[i]]++;
-    size_t pos = 0u;
-    for (size_t v = 0u; v <= max_val; v++) {
-        for (size_t c = 0u; c < counts[v]; c++) arr[pos++] = (uint32_t)v;
-    }
-}
-
 int keystone_trigram_index_finalize(keystone_trigram_index_t* idx) {
     if (!idx) return KEYSTONE_TRIGRAM_EINVAL;
     if (idx->failed) return idx->failure_code ? idx->failure_code : KEYSTONE_TRIGRAM_ESTATE;
