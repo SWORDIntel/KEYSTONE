@@ -2,8 +2,10 @@ setup.py
 keystone/__init__.py
 keystone/cluster.py
 keystone/core.py
+keystone/hash_index.py
 keystone/neural.py
 keystone/telemetry.py
+keystone/trigram.py
 keystone_sdk.egg-info/PKG-INFO
 keystone_sdk.egg-info/SOURCES.txt
 keystone_sdk.egg-info/dependency_links.txt
