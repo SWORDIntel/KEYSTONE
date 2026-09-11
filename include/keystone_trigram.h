@@ -184,6 +184,85 @@ void keystone_trigram_index_get_stats(
     keystone_trigram_stats_t* stats
 );
 
+/* ══════════════════════════════════════════════════════════════════
+ * tgrep extension APIs (Changes 1-6)
+ * ══════════════════════════════════════════════════════════════════ */
+
+/* --- Change 1: Streaming ingestion --- */
+
+typedef struct keystone_trigram_stream keystone_trigram_stream_t;
+
+keystone_trigram_stream_t* keystone_trigram_begin_document(
+    keystone_trigram_index_t* idx,
+    const char* name
+);
+
+int keystone_trigram_feed_bytes(
+    keystone_trigram_stream_t* stream,
+    const char* data,
+    size_t len
+);
+
+int keystone_trigram_end_document(
+    keystone_trigram_stream_t* stream,
+    uint32_t* out_doc_id
+);
+
+void keystone_trigram_cancel_document(
+    keystone_trigram_stream_t* stream
+);
+
+/* --- Change 2: Posting export visitor --- */
+
+typedef int (*keystone_trigram_posting_visitor_t)(
+    uint32_t gram,
+    const uint32_t* doc_ids,
+    size_t count,
+    void* ctx
+);
+
+int keystone_trigram_visit_postings(
+    const keystone_trigram_index_t* idx,
+    keystone_trigram_posting_visitor_t visitor,
+    void* ctx
+);
+
+/* --- Change 3: Frequency lookup --- */
+
+size_t keystone_trigram_index_frequency(
+    const keystone_trigram_index_t* idx,
+    uint32_t gram
+);
+
+/* --- Change 4: Paginated candidate iterator --- */
+
+typedef struct keystone_trigram_candidate_iter
+    keystone_trigram_candidate_iter_t;
+
+keystone_trigram_candidate_iter_t* keystone_trigram_candidates_begin(
+    const keystone_trigram_index_t* idx,
+    const char* pattern,
+    size_t pattern_len
+);
+
+int keystone_trigram_candidates_next(
+    keystone_trigram_candidate_iter_t* iter,
+    uint32_t* out_buf,
+    size_t capacity,
+    size_t* out_count,
+    int* out_exhausted
+);
+
+void keystone_trigram_candidates_free(
+    keystone_trigram_candidate_iter_t* iter
+);
+
+/* --- Change 6: Memory usage reporting --- */
+
+size_t keystone_trigram_index_memory_usage(
+    const keystone_trigram_index_t* idx
+);
+
 #ifdef __cplusplus
 }
 #endif

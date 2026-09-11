@@ -60,6 +60,44 @@ int dsmil_hash_index_finalize(dsmil_hash_index_t* idx);
  */
 keystone_result_t dsmil_hash_index_search(dsmil_hash_index_t* idx, const char* query_str, uint64_t* out_offset);
 
+/**
+ * @brief Search for all entries matching the target string.
+ *
+ * Like dsmil_hash_index_search, but returns ALL matching offsets (doc IDs)
+ * rather than just the first.  Caller provides a buffer and receives the
+ * count of matches found.
+ *
+ * @param idx       Finalized hash index.
+ * @param query_str String to search for.
+ * @param out_offsets Caller-provided buffer for results.
+ * @param max_offsets Size of out_offsets buffer.
+ * @param out_count Number of matches written to out_offsets.
+ * @return KEYSTONE_OK on success (including zero matches), KEYSTONE_NOT_FOUND on error.
+ */
+keystone_result_t dsmil_hash_index_search_all(
+    dsmil_hash_index_t* idx,
+    const char* query_str,
+    uint64_t* out_offsets,
+    size_t max_offsets,
+    size_t* out_count);
+
+/**
+ * @brief Serialize a finalized hash index to a file.
+ *
+ * @param idx  Finalized hash index.
+ * @param path Output file path.
+ * @return 0 on success, -1 on error.
+ */
+int dsmil_hash_index_save(dsmil_hash_index_t* idx, const char* path);
+
+/**
+ * @brief Deserialize a hash index from a file.
+ *
+ * @param path Input file path.
+ * @return Pointer to a new hash index, or NULL on error.
+ */
+dsmil_hash_index_t* dsmil_hash_index_load(const char* path);
+
 #ifdef __cplusplus
 }
 #endif

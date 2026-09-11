@@ -238,38 +238,210 @@ keystone_result_t dsmil_hash_index_search(dsmil_hash_index_t* idx, const char* q
     size_t query_len = strlen(query_str);
     int64_t target_hash = dsmil_hash_string(query_str, query_len);
 
-    keystone_config_t cfg;
-    keystone_config_init(&cfg, KEYSTONE_WORKLOAD_IDS);
-
-    /* KEYSTONE finds a candidate index whose hash matches.  Because FNV-1a
-     * is not collision-free, we must verify the original string bytes. */
-    keystone_result_t result = keystone_search_enhanced(
-        idx->hashes, idx->count, target_hash, idx->anchor_table, &cfg
-    );
-
-    if (result == KEYSTONE_NOT_FOUND) {
-        return KEYSTONE_NOT_FOUND;
-    }
-
-    /* Collision verification: compare the original string bytes.
-     * If the hash matched but the string didn't, this is a false positive
-     * from a hash collision — return NOT_FOUND.  (For a truly collision-
-     * resistant index, use a 128-bit fingerprint; here we trade a small
-     * false-negative risk on collisions for the speed of 64-bit KEYSTONE.) */
-    if (idx->strings && idx->string_lens) {
-        if (idx->string_lens[result] != query_len ||
-            memcmp(idx->strings[result], query_str, query_len) != 0) {
-            /* Hash collision — the key is not actually present.
-             * (If duplicate hashes with different strings are expected,
-             * a linear probe around this index would find the real match.
-             * For now, we treat collision as not-found, which is safe.) */
-            return KEYSTONE_NOT_FOUND;
+    /* Binary search (unsigned comparison to match radix sort order) */
+    uint64_t target_u = (uint64_t)target_hash;
+    size_t lo = 0, hi = idx->count;
+    while (lo < hi) {
+        size_t mid = lo + (hi - lo) / 2;
+        uint64_t mid_hash = (uint64_t)idx->hashes[mid];
+        if (mid_hash < target_u) {
+            lo = mid + 1;
+        } else {
+            hi = mid;
         }
     }
 
-    if (out_offset) {
-        *out_offset = idx->offsets[result];
+    if (lo >= idx->count || (uint64_t)idx->hashes[lo] != target_u) {
+        return KEYSTONE_NOT_FOUND;
     }
 
-    return result;
+    /* Verify string match (handle hash collisions) */
+    for (size_t i = lo; i < idx->count && (uint64_t)idx->hashes[i] == target_u; i++) {
+        if (idx->string_lens[i] == query_len &&
+            memcmp(idx->strings[i], query_str, query_len) == 0) {
+            if (out_offset) {
+                *out_offset = idx->offsets[i];
+            }
+            return (keystone_result_t)i;
+        }
+    }
+
+    return KEYSTONE_NOT_FOUND;
+}
+
+keystone_result_t dsmil_hash_index_search_all(
+    dsmil_hash_index_t* idx,
+    const char* query_str,
+    uint64_t* out_offsets,
+    size_t max_offsets,
+    size_t* out_count)
+{
+    if (!idx || !query_str || !idx->is_sorted || idx->count == 0) {
+        if (out_count) *out_count = 0;
+        return KEYSTONE_NOT_FOUND;
+    }
+
+    size_t query_len = strlen(query_str);
+    int64_t target_hash = dsmil_hash_string(query_str, query_len);
+
+    /* Binary search for the first entry with hash == target_hash.
+     * The hash array is sorted by unsigned 64-bit key value (radix sort).
+     * We use unsigned comparison to match the sort order. */
+    uint64_t target_u = (uint64_t)target_hash;
+    size_t lo = 0, hi = idx->count;
+    while (lo < hi) {
+        size_t mid = lo + (hi - lo) / 2;
+        uint64_t mid_hash = (uint64_t)idx->hashes[mid];
+        if (mid_hash < target_u) {
+            lo = mid + 1;
+        } else {
+            hi = mid;
+        }
+    }
+
+    /* lo is now the first index where hash >= target_hash */
+    if (lo >= idx->count || (uint64_t)idx->hashes[lo] != target_u) {
+        if (out_count) *out_count = 0;
+        return KEYSTONE_NOT_FOUND;
+    }
+
+    /* Collect all entries in the target_hash range whose string matches */
+    size_t count = 0;
+    for (size_t i = lo; i < idx->count; i++) {
+        if ((uint64_t)idx->hashes[i] != target_u) break;
+        /* Check string match (handles hash collisions) */
+        if (idx->string_lens[i] == query_len &&
+            memcmp(idx->strings[i], query_str, query_len) == 0) {
+            if (count < max_offsets) {
+                out_offsets[count] = idx->offsets[i];
+            }
+            count++;
+        }
+    }
+
+    if (out_count) *out_count = count;
+    return (count > 0) ? 0 : KEYSTONE_NOT_FOUND;
+}
+
+/* ── Serialization ─────────────────────────────────────────────────── */
+
+int dsmil_hash_index_save(dsmil_hash_index_t* idx, const char* path) {
+    if (!idx || !path) return -1;
+
+    FILE* f = fopen(path, "wb");
+    if (!f) return -1;
+
+    /* Header: magic(4) + version(4) + count(8) + is_sorted(4) */
+    const char magic[4] = {'T','G','H','I'};
+    uint32_t version = 1;
+    fwrite(magic, 1, 4, f);
+    fwrite(&version, 4, 1, f);
+    fwrite(&idx->count, sizeof(size_t), 1, f);
+    fwrite(&idx->is_sorted, sizeof(int), 1, f);
+
+    /* Hashes array */
+    fwrite(idx->hashes, sizeof(int64_t), idx->count, f);
+    /* Offsets array */
+    fwrite(idx->offsets, sizeof(uint64_t), idx->count, f);
+    /* String lengths array */
+    fwrite(idx->string_lens, sizeof(size_t), idx->count, f);
+
+    /* String data: all strings concatenated */
+    for (size_t i = 0; i < idx->count; i++) {
+        fwrite(idx->strings[i], 1, idx->string_lens[i], f);
+    }
+
+    fclose(f);
+    return 0;
+}
+
+dsmil_hash_index_t* dsmil_hash_index_load(const char* path) {
+    if (!path) return NULL;
+
+    FILE* f = fopen(path, "rb");
+    if (!f) return NULL;
+
+    /* Header */
+    char magic[4];
+    uint32_t version;
+    size_t count;
+    int is_sorted;
+    if (fread(magic, 1, 4, f) != 4 || memcmp(magic, "TGHI", 4) != 0) {
+        fclose(f); return NULL;
+    }
+    if (fread(&version, 4, 1, f) != 1 || version != 1) {
+        fclose(f); return NULL;
+    }
+    if (fread(&count, sizeof(size_t), 1, f) != 1) {
+        fclose(f); return NULL;
+    }
+    if (fread(&is_sorted, sizeof(int), 1, f) != 1) {
+        fclose(f); return NULL;
+    }
+
+    dsmil_hash_index_t* idx = dsmil_hash_index_create(count > 0 ? count : 1);
+    if (!idx) { fclose(f); return NULL; }
+
+    /* Ensure capacity */
+    if (count > idx->capacity) {
+        /* Grow to fit */
+        size_t new_cap = count;
+        int64_t* new_h = realloc(idx->hashes, new_cap * sizeof(int64_t));
+        uint64_t* new_o = realloc(idx->offsets, new_cap * sizeof(uint64_t));
+        char** new_s = realloc(idx->strings, new_cap * sizeof(char*));
+        size_t* new_l = realloc(idx->string_lens, new_cap * sizeof(size_t));
+        if (!new_h || !new_o || !new_s || !new_l) {
+            fclose(f);
+            dsmil_hash_index_destroy(idx);
+            return NULL;
+        }
+        memset(new_s, 0, new_cap * sizeof(char*));
+        idx->hashes = new_h;
+        idx->offsets = new_o;
+        idx->strings = new_s;
+        idx->string_lens = new_l;
+        idx->capacity = new_cap;
+    }
+
+    idx->count = count;
+    idx->is_sorted = is_sorted;
+
+    /* Read arrays */
+    if (count > 0) {
+        if (fread(idx->hashes, sizeof(int64_t), count, f) != count) {
+            fclose(f); dsmil_hash_index_destroy(idx); return NULL;
+        }
+        if (fread(idx->offsets, sizeof(uint64_t), count, f) != count) {
+            fclose(f); dsmil_hash_index_destroy(idx); return NULL;
+        }
+        if (fread(idx->string_lens, sizeof(size_t), count, f) != count) {
+            fclose(f); dsmil_hash_index_destroy(idx); return NULL;
+        }
+
+        /* Read string data */
+        for (size_t i = 0; i < count; i++) {
+            char* s = malloc(idx->string_lens[i] + 1);
+            if (!s) { fclose(f); dsmil_hash_index_destroy(idx); return NULL; }
+            if (idx->string_lens[i] > 0) {
+                if (fread(s, 1, idx->string_lens[i], f) != idx->string_lens[i]) {
+                    free(s); fclose(f); dsmil_hash_index_destroy(idx); return NULL;
+                }
+            }
+            s[idx->string_lens[i]] = '\0';
+            idx->strings[i] = s;
+        }
+    }
+
+    fclose(f);
+
+    /* Re-warm the anchor table for KEYSTONE acceleration */
+    if (idx->count > 0 && idx->is_sorted) {
+        keystone_config_t cfg;
+        keystone_config_init(&cfg, KEYSTONE_WORKLOAD_IDS);
+        keystone_search_enhanced(idx->hashes, idx->count,
+                                  idx->hashes[idx->count / 2],
+                                  idx->anchor_table, &cfg);
+    }
+
+    return idx;
 }
