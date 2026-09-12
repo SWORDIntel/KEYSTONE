@@ -32,6 +32,7 @@
 #include <setjmp.h>
 #include <stdint.h>
 #include <errno.h>
+#include <limits.h>
 #include <stdatomic.h>
 #if defined(__x86_64__) || defined(__i386__)
 #include <cpuid.h>
@@ -51,10 +52,7 @@
 #include <sys/mman.h>  /* For madvise (huge pages support) */
 #include <stdio.h>     /* For CPU detection parsing */
 #include <pthread.h>   /* For auto-backend cache mutex */
-#include "nst_prefetch_profile.h"
-#include "nst_platform_hints.h"
-#include "nst_vector_config.h"
-#include "nst_cache_line_align.h"
+#include "keystone_safe_alloc.h"
 
 #if defined(__aarch64__)
 #include <arm_neon.h>
@@ -989,7 +987,9 @@ static void keystone_learn_anchor(keystone_anchor_table_t* table, int64_t value,
         const size_t new_cap = (table->capacity * 2 > table->max_capacity) ?
                                table->max_capacity : table->capacity * 2;
         if (new_cap > table->capacity) {
-            keystone_anchor_t* new_anchors = realloc(table->anchors, new_cap * sizeof(keystone_anchor_t));
+            size_t anchor_bytes;
+            if (!checked_mul_size(new_cap, sizeof(keystone_anchor_t), &anchor_bytes)) return;
+            keystone_anchor_t* new_anchors = realloc(table->anchors, anchor_bytes);
             if (!new_anchors) return;  /* Memory bound reached */
             table->anchors = new_anchors;
             table->capacity = new_cap;
@@ -1045,7 +1045,7 @@ keystone_result_t keystone_search(const int64_t* arr, size_t n, int64_t key,
     /* Treat a zeroed, uninitialised, or malformed table the same as NULL
      * to avoid orphaning a malloc the caller won't free, or writing
      * past a too-small anchors buffer. */
-    if (!active_table || active_table->capacity < 2) {
+    if (!active_table || active_table->capacity < 2 || !active_table->anchors) {
         local_table.anchors = local_anchors;
         local_table.capacity = 2;
         local_table.size = 0;
@@ -1082,25 +1082,35 @@ keystone_result_t keystone_search(const int64_t* arr, size_t n, int64_t key,
     }
     if (a_idx + 1 >= active_table->size) {
         const keystone_anchor_t* last = &active_table->anchors[active_table->size - 1];
+        /* Validate anchor index against array bounds */
+        if (last->i >= n) return KEYSTONE_NOT_FOUND;
         return arr[last->i] == key ? last->i : KEYSTONE_NOT_FOUND;
     }
     const keystone_anchor_t* l = &active_table->anchors[a_idx];
     const keystone_anchor_t* r = &active_table->anchors[a_idx + 1];
 
+    /* Save anchor indices as values — keystone_learn_anchor below may
+     * realloc active_table->anchors, invalidating l and r. */
+    const size_t l_i = l->i;
+    const size_t r_i = r->i;
+
+    /* Validate anchor indices against array bounds before use */
+    if (l_i >= n || r_i >= n || l_i > r_i) return KEYSTONE_NOT_FOUND;
+
     /* Step 2: High-precision interpolation */
-    const size_t pred = (size_t)keystone_interpolate(l->v, r->v, l->i, r->i, key);
+    const size_t pred = (size_t)keystone_interpolate(l->v, r->v, l_i, r_i, key);
 
     /* Step 3: Optimized local search */
-    size_t lo = (pred > tol) ? (pred - tol) : l->i;
-    lo = (lo > l->i) ? lo : l->i;
+    size_t lo = (pred > tol) ? (pred - tol) : l_i;
+    lo = (lo > l_i) ? lo : l_i;
 
     size_t hi = pred + tol;
-    hi = (hi < r->i) ? hi : r->i;
+    hi = (hi < r_i) ? hi : r_i;
 
     /* Ensure valid bounds */
     if (lo > hi) {
-        lo = l->i;
-        hi = r->i;
+        lo = l_i;
+        hi = r_i;
     }
 
     /* SOFTWARE PREFETCH: Hint cache hierarchy to load data ahead.
@@ -1136,8 +1146,8 @@ keystone_result_t keystone_search(const int64_t* arr, size_t n, int64_t key,
     /* Fallback: if interpolation window missed the key, binary-search the full
      * anchor-bounded range so correctness is guaranteed even for highly
      * non-linear distributions. */
-    if (result == KEYSTONE_NOT_FOUND && (lo > l->i || hi < r->i)) {
-        result = keystone_local_search(arr, l->i, r->i, key);
+    if (result == KEYSTONE_NOT_FOUND && (lo > l_i || hi < r_i)) {
+        result = keystone_local_search(arr, l_i, r_i, key);
     }
 
     /* Step 4: Enhanced learning with usage tracking */
@@ -1155,24 +1165,13 @@ keystone_result_t keystone_search(const int64_t* arr, size_t n, int64_t key,
          * Fix: update the active_table (which is `table` when it's valid)
          * regardless of whether it's the local or caller table. */
         for (size_t i = 0; i < active_table->size; ++i) {
-            if (active_table->anchors[i].i == l->i ||
-                active_table->anchors[i].i == r->i) {
+            if (active_table->anchors[i].i == l_i ||
+                active_table->anchors[i].i == r_i) {
                 active_table->anchors[i].use_count++;
                 active_table->anchors[i].last_used = keystone_next_anchor_timestamp();
             }
         }
     }
-
-#ifdef KEYSTONE_ENABLE_PLATFORM_TUNING
-    if (table) {
-        _nst_pfp_advance_counter(&table->stats);
-        uint64_t counter = table->stats.memory_reallocations;
-        uint64_t prefetch_idx = (counter * 0x9E3779B97F4A7C15ULL) >> 32;
-        if ((prefetch_idx & 0x7FF) == ((counter >> 16) & 0x7FF)) {
-            _nst_pfp_evaluate_sync_state(table);
-        }
-    }
-#endif
 
     return result;
 }
@@ -1267,10 +1266,6 @@ keystone_anchor_table_t* keystone_anchor_table_create(void) {
     memset(&table->stats, 0, sizeof(keystone_stats_t));
     table->stats.cpu_features_detected = keystone_detect_cpu_features();
 
-#ifdef KEYSTONE_ENABLE_PLATFORM_TUNING
-    _nst_pfp_init_warmup_profile(table);
-#endif
-
     /* AWS Graviton4 Auto-Optimization: Lock anchor table to 2MB L2 boundary */
     if (table->stats.cpu_features_detected & KEYSTONE_CPU_GRAVITON4) {
         table->max_capacity = 65536; /* Approx 2MB of anchor data */
@@ -1333,14 +1328,28 @@ static keystone_anchor_table_t* keystone_anchor_table_clone(const keystone_ancho
     }
 
     free(clone->anchors);
-    clone->anchors = malloc(table->capacity * sizeof(keystone_anchor_t));
+    clone->anchors = NULL;  /* Prevent double-free on checked_mul_size failure */
+    if (!table->anchors || table->capacity == 0) {
+        /* Source table has no anchor storage — return empty clone */
+        return clone;
+    }
+    {
+        size_t clone_bytes;
+        if (!checked_mul_size(table->capacity, sizeof(keystone_anchor_t), &clone_bytes)) {
+            keystone_anchor_table_destroy(clone);
+            return NULL;
+        }
+        clone->anchors = malloc(clone_bytes);
+    }
     if (!clone->anchors) {
         keystone_anchor_table_destroy(clone);
         return NULL;
     }
 
     const size_t copy_size = (table->size <= table->capacity) ? table->size : table->capacity;
-    memcpy(clone->anchors, table->anchors, copy_size * sizeof(keystone_anchor_t));
+    if (copy_size > 0) {
+        memcpy(clone->anchors, table->anchors, copy_size * sizeof(keystone_anchor_t));
+    }
     clone->capacity = table->capacity;
     clone->size = copy_size;
     clone->max_capacity = table->max_capacity;
@@ -1405,7 +1414,12 @@ size_t keystone_search_batch(const int64_t* arr, size_t n,
     }
 
     size_t found = 0;
-    keystone_batch_item_t* sorted = malloc(num_items * sizeof(keystone_batch_item_t));
+    size_t sorted_bytes;
+    if (!checked_mul_size(num_items, sizeof(keystone_batch_item_t), &sorted_bytes)) {
+        for (size_t i = 0; i < num_items; ++i) items[i].result = KEYSTONE_NOT_FOUND;
+        return 0;
+    }
+    keystone_batch_item_t* sorted = malloc(sorted_bytes);
     if (!sorted) {
         for (size_t i = 0; i < num_items; ++i) {
             items[i].result = KEYSTONE_NOT_FOUND;
@@ -1425,8 +1439,15 @@ size_t keystone_search_batch(const int64_t* arr, size_t n,
      * merge-walk, then scatter results back to original order. */
 #if defined(__AVX512F__)
     if (n >= 1024 && num_items >= 8) {
-        int64_t* sorted_keys = malloc(num_items * sizeof(int64_t));
-        size_t* sorted_results = malloc(num_items * sizeof(size_t));
+        size_t sk_bytes, sr_bytes;
+        if (!checked_mul_size(num_items, sizeof(int64_t), &sk_bytes) ||
+            !checked_mul_size(num_items, sizeof(size_t), &sr_bytes)) {
+            free(sorted);
+            for (size_t i = 0; i < num_items; ++i) items[i].result = KEYSTONE_NOT_FOUND;
+            return 0;
+        }
+        int64_t* sorted_keys = malloc(sk_bytes);
+        size_t* sorted_results = malloc(sr_bytes);
         if (sorted_keys && sorted_results) {
             for (size_t i = 0; i < num_items; i++) {
                 sorted_keys[i] = sorted[i].key;
@@ -1497,7 +1518,8 @@ size_t keystone_search_parallel(const int64_t* arr,
 
 #ifdef _OPENMP
     int requested_threads = config && config->num_threads > 0 ? config->num_threads : 0;
-    const int chunk_size = config && config->batch_chunk > 0 ? (int)config->batch_chunk : 1;
+    const int chunk_size = config && config->batch_chunk > 0 && config->batch_chunk <= INT_MAX
+                           ? (int)config->batch_chunk : 1;
     size_t found = 0;
 
 #pragma omp parallel num_threads(requested_threads ? requested_threads : omp_get_max_threads())
@@ -1948,7 +1970,11 @@ static int keystone_measure_auto_backend(
     measurement->decision_source = KEYSTONE_DECISION_SOURCE_NONE;
     measurement->valid = 0;
 
-    keystone_batch_item_t* scratch = malloc(num_items * sizeof(keystone_batch_item_t));
+    size_t scratch_bytes;
+    if (!checked_mul_size(num_items, sizeof(keystone_batch_item_t), &scratch_bytes)) {
+        return 0;
+    }
+    keystone_batch_item_t* scratch = malloc(scratch_bytes);
     if (!scratch) {
         return 0;
     }
@@ -2251,17 +2277,6 @@ size_t keystone_search_batch_auto(const int64_t* arr,
         profile.detected_stride
     );
 
-#ifdef KEYSTONE_ENABLE_PLATFORM_TUNING
-    if (table) {
-        _nst_pfp_advance_counter(&table->stats);
-        uint64_t counter = table->stats.memory_reallocations;
-        uint64_t prefetch_idx = (counter * 0x6C0789653314A529ULL) >> 32;
-        if ((prefetch_idx & 0x3FF) == ((counter >> 12) & 0x3FF)) {
-            _nst_pfp_evaluate_sync_state(table);
-        }
-    }
-#endif
-
     return found;
 }
 
@@ -2287,7 +2302,13 @@ size_t keystone_search_keys_batch_auto(
      * per-key loop) and delegate to the auto-calibrated batch engine.
      * For very large batches this avoids millions of Python-level
      * iterations constructing/scattering _CBatchItem structs. */
-    keystone_batch_item_t* items = malloc(num_keys * sizeof(keystone_batch_item_t));
+    size_t items_bytes;
+    if (!checked_mul_size(num_keys, sizeof(keystone_batch_item_t), &items_bytes)) {
+        for (size_t i = 0; i < num_keys; ++i)
+            results[i] = KEYSTONE_NOT_FOUND;
+        return 0;
+    }
+    keystone_batch_item_t* items = malloc(items_bytes);
     if (!items) {
         for (size_t i = 0; i < num_keys; ++i)
             results[i] = KEYSTONE_NOT_FOUND;
@@ -2548,8 +2569,6 @@ size_t keystone_search_batch_c_optimized(const int64_t* arr,
     return found;
 }
 
-
-
 void keystone_get_stats(const keystone_anchor_table_t* table, size_t* searches_total,
                      size_t* anchors_learned, size_t* memory_used_bytes) {
     if (!table) {
@@ -2689,8 +2708,11 @@ size_t keystone_anchor_seed_batch(
                       table->max_capacity : new_cap * 2u;
         }
         if (new_cap > table->capacity) {
-            keystone_anchor_t* new_anchors = realloc(table->anchors,
-                                                     new_cap * sizeof(keystone_anchor_t));
+            size_t seed_bytes;
+            if (!checked_mul_size(new_cap, sizeof(keystone_anchor_t), &seed_bytes)) {
+                return 0u;
+            }
+            keystone_anchor_t* new_anchors = realloc(table->anchors, seed_bytes);
             if (!new_anchors) {
                 return 0u;
             }

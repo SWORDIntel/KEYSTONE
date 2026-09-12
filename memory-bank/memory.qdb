@@ -16,10 +16,6 @@
       "description": "Evaluates query shape (sorted/dense) using `keystone_detect_auto_query_shape()` and tests viable backends at runtime to select and cache the fastest execution path."
     },
     {
-      "name": "Native System Tuning (NST)",
-      "description": "An autonomous tuning layer (`nst_*`) that tracks memory topology, DRAM row-buffer locality, aligns cache-lines, profiles prefetch hits to adapt distances, and provides BTB seeds to warm up branch predictors for tight search loops."
-    },
-    {
       "name": "DSMIL Telemetry & Wrapper",
       "description": "Wrappers (`dsmil_keystone_wrapper.c`) bridge domain events (logs, security events) by extracting targets into primitive `int64_t` contiguous arrays for zero-overhead vector querying."
     },
@@ -34,7 +30,6 @@
   ],
   "retrieval_notes": [
     "Core entrypoints: `keystone_search()`, `keystone_search_batch_auto()` in `src/keystone.c`.",
-    "Tuning logic: `nst_*` files in `src/` and `include/`.",
     "Wrapper/Telemetry APIs: `dsmil_search_create()`, `dsmil_telemetry_processor_add_event()` in `src/dsmil_*`.",
     "Fortran bind(C): `keystone_batch_search_i64` in `fortran/keystone_batch.f90`."
   ]

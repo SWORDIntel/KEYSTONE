@@ -8,6 +8,7 @@
  * p = 1 - theta/pi, where theta is the angle between them.
  */
 #include "lsh.h"
+#include "keystone_safe_alloc.h"
 #include <stdlib.h>
 #include <string.h>
 #include <math.h>
@@ -39,9 +40,12 @@ static float gaussian_random(void) {
 
 /* Generate a random Gaussian projection matrix */
 static float *generate_projection(uint32_t hash_bits, uint32_t dim) {
-    float *proj = (float *)malloc((size_t)hash_bits * dim * sizeof(float));
+    size_t proj_count, proj_bytes;
+    if (!checked_mul_size((size_t)hash_bits, dim, &proj_count) ||
+        !checked_mul_size(proj_count, sizeof(float), &proj_bytes)) return NULL;
+    float *proj = (float *)malloc(proj_bytes);
     if (!proj) return NULL;
-    for (uint32_t i = 0; i < hash_bits * dim; i++) {
+    for (size_t i = 0; i < proj_count; i++) {
         proj[i] = gaussian_random() / sqrtf((float)dim);
     }
     return proj;
@@ -96,7 +100,12 @@ keystone_error_t keystone_lsh_create(keystone_lsh_index_t **idx,
     lsh->dim = dim;
     lsh->probes = probes;
 
-    lsh->tables = (keystone_lsh_table_t *)calloc(num_tables, sizeof(keystone_lsh_table_t));
+    size_t tables_bytes;
+    if (!checked_mul_size((size_t)num_tables, sizeof(keystone_lsh_table_t), &tables_bytes)) {
+        free(lsh);
+        return KEYSTONE_ERR_OOM;
+    }
+    lsh->tables = (keystone_lsh_table_t *)calloc(1, tables_bytes);
     if (!lsh->tables) {
         free(lsh);
         return KEYSTONE_ERR_OOM;
@@ -179,11 +188,22 @@ static uint32_t find_or_create_bucket(keystone_lsh_table_t *tbl, int64_t key) {
     /* New bucket — check capacity */
     if (tbl->n_buckets >= tbl->bucket_capacity) {
         uint32_t new_cap = tbl->bucket_capacity * 2;
-        int64_t *new_keys = (int64_t *)realloc(tbl->bucket_keys, new_cap * sizeof(int64_t));
-        uint32_t *new_offs = (uint32_t *)realloc(tbl->bucket_offsets, new_cap * sizeof(uint32_t));
-        uint32_t *new_counts = (uint32_t *)realloc(tbl->bucket_counts, new_cap * sizeof(uint32_t));
+        if (new_cap < tbl->bucket_capacity) return (uint32_t)-1; /* uint32_t doubling overflow */
+        size_t bk_bytes, bo_bytes, bc_bytes;
+        if (!checked_mul_size((size_t)new_cap, sizeof(int64_t), &bk_bytes) ||
+            !checked_mul_size((size_t)new_cap, sizeof(uint32_t), &bo_bytes) ||
+            !checked_mul_size((size_t)new_cap, sizeof(uint32_t), &bc_bytes)) {
+            return (uint32_t)-1;
+        }
+        int64_t *new_keys = (int64_t *)realloc(tbl->bucket_keys, bk_bytes);
+        uint32_t *new_offs = (uint32_t *)realloc(tbl->bucket_offsets, bo_bytes);
+        uint32_t *new_counts = (uint32_t *)realloc(tbl->bucket_counts, bc_bytes);
         if (!new_keys || !new_offs || !new_counts) {
-            free(new_keys); free(new_offs); free(new_counts);
+            /* Commit successful reallocs so destroy won't double-free.
+             * Failed reallocs leave the original pointer valid. */
+            if (new_keys) tbl->bucket_keys = new_keys;
+            if (new_offs) tbl->bucket_offsets = new_offs;
+            if (new_counts) tbl->bucket_counts = new_counts;
             return (uint32_t)-1;
         }
         tbl->bucket_keys = new_keys;
@@ -217,8 +237,11 @@ keystone_error_t keystone_lsh_insert(keystone_lsh_index_t *idx,
         size_t capacity = (size_t)tbl->bucket_capacity * 16;
         if (needed > capacity) {
             /* Grow to accommodate, with 2x growth factor */
-            size_t new_cap = needed * 2;
-            uint32_t *new_indices = (uint32_t *)realloc(tbl->indices, new_cap * sizeof(uint32_t));
+            size_t new_cap;
+            if (!checked_mul_size(needed, 2, &new_cap)) return KEYSTONE_ERR_OOM;
+            size_t ind_bytes;
+            if (!checked_mul_size(new_cap, sizeof(uint32_t), &ind_bytes)) return KEYSTONE_ERR_OOM;
+            uint32_t *new_indices = (uint32_t *)realloc(tbl->indices, ind_bytes);
             if (!new_indices) return KEYSTONE_ERR_OOM;
             tbl->indices = new_indices;
             /* Update capacity tracking — use n_vectors as the real capacity marker */

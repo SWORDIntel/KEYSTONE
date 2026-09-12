@@ -39,6 +39,12 @@ void keystone_multi_search_avx512(
     const int64_t* keys, size_t num_keys,
     size_t* results
 ) {
+    /* The 8-key SIMD path only handles up to 8 keys; reject larger
+     * requests to avoid OOB reads on keys[] and results[] in the
+     * scalar tail.  Caller must provide results[] with >= num_keys
+     * entries, but we cap at 8 for safety. */
+    if (num_keys > 8) num_keys = 8;
+
     /* Initialize all results to NOT_FOUND */
     for (size_t k = 0; k < num_keys; k++) results[k] = KEYSTONE_NOT_FOUND;
 
@@ -294,7 +300,7 @@ size_t keystone_range_search_avx512(
         /* Extract matching indices using popcount + bit extraction */
         while (mask_in) {
             int bit = __builtin_ctz(mask_in);
-            if (count < out_capacity) {
+            if (out_indices && count < out_capacity) {
                 out_indices[count] = base + (size_t)bit;
             }
             count++;
@@ -306,7 +312,7 @@ size_t keystone_range_search_avx512(
     const size_t rem = full_chunks * 8;
     for (size_t i = rem; i < n; i++) {
         if (arr[i] >= lo_key && arr[i] <= hi_key) {
-            if (count < out_capacity) {
+            if (out_indices && count < out_capacity) {
                 out_indices[count] = i;
             }
             count++;

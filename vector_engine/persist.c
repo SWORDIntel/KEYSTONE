@@ -10,6 +10,7 @@
 #include "keystone_vector_engine.h"
 #include "kernel_dispatch.h"
 #include "lsh.h"
+#include "keystone_safe_alloc.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -145,14 +146,28 @@ keystone_error_t keystone_vec_load(keystone_vec_engine_t **out,
 
     keystone_vec_engine_t *e = *out;
 
-    /* Read IDs and vectors */
+    /* Helper: destroy engine, null out caller's pointer, close file, return. */
+#define LOAD_FAIL(ret) do { keystone_vec_engine_destroy(e); *out = NULL; fclose(f); return (ret); } while (0)
+
+    /* Cross-validate header fields against the created engine's actual
+     * allocation.  A crafted file can set count <= header-capacity but
+     * count > cfg.capacity, or dim != cfg.dim, causing OOB writes below. */
+    if (dim != e->dim || capacity != e->capacity || count > e->capacity) {
+        LOAD_FAIL(KEYSTONE_ERR_IO);
+    }
+
+    /* Read IDs and vectors — validate count against capacity */
     if (count > 0) {
-        if (fread(e->ids, sizeof(uint64_t), count, f) != count) {
-            keystone_vec_engine_destroy(e); fclose(f); return KEYSTONE_ERR_IO;
+        size_t vec_elements;
+        if (!checked_mul_size((size_t)count, dim, &vec_elements)) {
+            LOAD_FAIL(KEYSTONE_ERR_IO);
         }
-        if (fread(e->vectors, sizeof(float), (size_t)count * dim, f)
-            != (size_t)count * dim) {
-            keystone_vec_engine_destroy(e); fclose(f); return KEYSTONE_ERR_IO;
+        if (fread(e->ids, sizeof(uint64_t), count, f) != count) {
+            LOAD_FAIL(KEYSTONE_ERR_IO);
+        }
+        if (fread(e->vectors, sizeof(float), vec_elements, f)
+            != vec_elements) {
+            LOAD_FAIL(KEYSTONE_ERR_IO);
         }
         e->count = count;
         e->ids_sorted = 0;
@@ -161,7 +176,7 @@ keystone_error_t keystone_vec_load(keystone_vec_engine_t **out,
     /* Read LSH state */
     uint32_t has_lsh;
     if (fread(&has_lsh, sizeof(has_lsh), 1, f) != 1) {
-        keystone_vec_engine_destroy(e); fclose(f); return KEYSTONE_ERR_IO;
+        LOAD_FAIL(KEYSTONE_ERR_IO);
     }
 
     if (has_lsh && e->lsh) {
@@ -174,12 +189,18 @@ keystone_error_t keystone_vec_load(keystone_vec_engine_t **out,
             fread(&hash_bits, sizeof(hash_bits), 1, f) != 1 ||
             fread(&lsh_dim, sizeof(lsh_dim), 1, f) != 1 ||
             fread(&probes, sizeof(probes), 1, f) != 1) {
-            keystone_vec_engine_destroy(e); fclose(f); return KEYSTONE_ERR_IO;
+            LOAD_FAIL(KEYSTONE_ERR_IO);
+        }
+
+        /* Validate lsh_dim matches the engine's dim — otherwise every
+         * hash/query would read past the vector buffer. */
+        if (lsh_dim != e->dim) {
+            LOAD_FAIL(KEYSTONE_ERR_IO);
         }
 
         rc = keystone_lsh_create(&e->lsh, lsh_dim, num_tables, hash_bits, probes);
         if (rc != KEYSTONE_OK) {
-            keystone_vec_engine_destroy(e); fclose(f); return rc;
+            LOAD_FAIL(rc);
         }
 
         for (uint32_t t = 0; t < num_tables; t++) {
@@ -187,11 +208,16 @@ keystone_error_t keystone_vec_load(keystone_vec_engine_t **out,
             if (fread(tbl->projection, sizeof(float),
                       (size_t)hash_bits * lsh_dim, f)
                 != (size_t)hash_bits * lsh_dim) {
-                keystone_vec_engine_destroy(e); fclose(f); return KEYSTONE_ERR_IO;
+                LOAD_FAIL(KEYSTONE_ERR_IO);
             }
             if (fread(&tbl->n_buckets, sizeof(tbl->n_buckets), 1, f) != 1 ||
                 fread(&tbl->n_vectors, sizeof(tbl->n_vectors), 1, f) != 1) {
-                keystone_vec_engine_destroy(e); fclose(f); return KEYSTONE_ERR_IO;
+                LOAD_FAIL(KEYSTONE_ERR_IO);
+            }
+            /* Validate file-driven counts against allocated buffers */
+            if (tbl->n_buckets > tbl->bucket_capacity ||
+                tbl->n_vectors > 65536) {
+                LOAD_FAIL(KEYSTONE_ERR_IO);
             }
             if (tbl->n_buckets > 0) {
                 if (fread(tbl->bucket_keys, sizeof(int64_t), tbl->n_buckets, f)
@@ -204,16 +230,30 @@ keystone_error_t keystone_vec_load(keystone_vec_engine_t **out,
             if (tbl->n_vectors > 0) {
                 if (fread(tbl->indices, sizeof(uint32_t), tbl->n_vectors, f)
                     != tbl->n_vectors) goto lsh_err;
+                /* Validate each index value is within the vector store */
+                for (uint32_t vi = 0; vi < tbl->n_vectors; vi++) {
+                    if (tbl->indices[vi] >= e->count) goto lsh_err;
+                }
+            }
+            /* Validate bucket offset+count pairs don't exceed n_vectors */
+            for (uint32_t bi = 0; bi < tbl->n_buckets; bi++) {
+                uint32_t off = tbl->bucket_offsets[bi];
+                uint32_t cnt = tbl->bucket_counts[bi];
+                if (off > tbl->n_vectors || cnt > tbl->n_vectors - off) {
+                    goto lsh_err;
+                }
             }
         }
         e->lsh_finalized = 1;
     }
 
+#undef LOAD_FAIL
     fclose(f);
     return KEYSTONE_OK;
 
 lsh_err:
     keystone_vec_engine_destroy(e);
+    *out = NULL;
     fclose(f);
     return KEYSTONE_ERR_IO;
 }

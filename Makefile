@@ -3,7 +3,7 @@
 
 CC      := gcc
 MARCH   ?= native
-CFLAGS  := -O3 -march=$(MARCH) -fPIC -Wall -Wextra -Werror=implicit-function-declaration -I./include -DKEYSTONE_ENABLE_PLATFORM_TUNING
+CFLAGS  := -O3 -march=$(MARCH) -fPIC -Wall -Wextra -Werror=implicit-function-declaration -I./include
 LDFLAGS := -lm
 
 # Optional OpenMP (default: auto-enabled if the compiler supports it,
@@ -105,9 +105,7 @@ else
 endif
 
 SRC     := src/keystone.c src/dsmil_keystone_wrapper.c src/dsmil_telemetry_processor.c \
-           src/nst_prefetch_profile.c src/nst_platform_hints.c src/nst_memory_topology.c \
-           src/nst_vector_config.c src/nst_batch_scheduler.c src/nst_cache_line_align.c \
-           src/nst_branch_predict.c src/nst_dram_locality.c src/keystone_avx512.c \
+           src/keystone_avx512.c \
            src/keystone_avx512_search.c src/qihse_keystone_bridge.c
 OBJS    := $(SRC:.c=.o)
 

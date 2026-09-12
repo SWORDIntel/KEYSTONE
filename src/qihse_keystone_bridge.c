@@ -173,46 +173,6 @@ int keystone_qihse_bridge_dispatch_credential_authenticated(
     return stored ? 0 : -1;
 }
 
-int keystone_qihse_bridge_dispatch_credential_authenticated(
-    const char* email,
-    const char* pass,
-    int semantic_class
-) {
-    if (!email || !pass || email[0] == '\0') return -1;
-
-    keystone_qihse_bridge_config_t cfg;
-    if (snapshot_bridge_config(&cfg) != 0) return -1;
-
-    qihse_user_t* principal = (qihse_user_t*)cfg.ingestion_principal;
-    if (!principal) return -1;
-
-    qihse_kv_store_t* kv = select_target(&cfg, email);
-    if (!kv) return -1;
-
-    char enriched_value[512];
-    int written = snprintf(
-        enriched_value, sizeof(enriched_value), "class=%d|pass=%s", semantic_class, pass);
-    if (written < 0 || (size_t)written >= sizeof(enriched_value)) {
-        secure_zero(enriched_value, sizeof(enriched_value));
-        return -1;
-    }
-
-    bool stored = qihse_kv_set_user(
-        kv,
-        email,
-        enriched_value,
-        cfg.default_clearance,
-        cfg.default_compartment,
-        principal);
-
-    secure_zero(enriched_value, sizeof(enriched_value));
-
-    /* Preserve the public bridge ABI: zero is success, negative is failure.
-     * QIHSE's KV API is boolean, so never leak its 1/0 convention through the
-     * bridge boundary. */
-    return stored ? 0 : -1;
-}
-
 #else
 
 int keystone_qihse_bridge_init(const keystone_qihse_bridge_config_t* config) {

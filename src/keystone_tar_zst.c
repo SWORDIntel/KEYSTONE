@@ -7,6 +7,7 @@
 
 #include "../include/keystone_tar_zst.h"
 #include "../include/keystone.h"
+#include "keystone_safe_alloc.h"
 #include <archive.h>
 #include <archive_entry.h>
 #include <stdlib.h>
@@ -72,7 +73,7 @@ static void* arena_alloc(keystone_arena_t* arena, size_t n) {
     /* Try existing slabs */
     keystone_arena_slab_t* s = arena->slabs;
     while (s) {
-        if (s->used + n <= s->size) {
+        if (n <= s->size - s->used) {  /* overflow-safe: size >= used always */
             void* p = &s->data[s->used];
             s->used += n;
             return p;
@@ -82,7 +83,9 @@ static void* arena_alloc(keystone_arena_t* arena, size_t n) {
     /* Need new slab */
     size_t alloc_size = arena->slab_size;
     if (n > alloc_size) alloc_size = n;
-    keystone_arena_slab_t* slab = malloc(sizeof(keystone_arena_slab_t) + alloc_size);
+    size_t slab_total;
+    if (!checked_add_size(sizeof(keystone_arena_slab_t), alloc_size, &slab_total)) return NULL;
+    keystone_arena_slab_t* slab = malloc(slab_total);
     if (!slab) return NULL;
     slab->next = arena->slabs;
     slab->size = alloc_size;
@@ -186,15 +189,19 @@ static int tar_zst_index_add(tar_zst_index_t* idx,
 
     if (count >= cap) {
         size_t new_cap = cap ? cap * 2 : 4;
-        tar_zst_index_entry_t* new_entries = realloc(entries,
-                                                        new_cap * sizeof(*new_entries));
+        if (new_cap < cap) return -1; /* size_t doubling overflow */
+        size_t entries_bytes;
+        if (!checked_mul_size(new_cap, sizeof(tar_zst_index_entry_t), &entries_bytes)) return -1;
+        tar_zst_index_entry_t* new_entries = realloc(entries, entries_bytes);
         if (!new_entries) return -1;
         idx->buckets[b] = new_entries;
         idx->bucket_caps[b] = new_cap;
         entries = new_entries;
     }
 
-    char* name_copy = malloc(name_len + 1);
+    size_t name_alloc;
+    if (!checked_add_size(name_len, 1, &name_alloc)) return -1;
+    char* name_copy = malloc(name_alloc);
     if (!name_copy) return -1;
     memcpy(name_copy, name, name_len);
     name_copy[name_len] = '\0';
@@ -203,12 +210,17 @@ static int tar_zst_index_add(tar_zst_index_t* idx,
      * can search directly without re-decompressing the archive member. */
     int64_t* keys_copy = NULL;
     if (sorted_keys && key_count > 0) {
-        keys_copy = malloc(key_count * sizeof(int64_t));
+        size_t keys_bytes;
+        if (!checked_mul_size(key_count, sizeof(int64_t), &keys_bytes)) {
+            free(name_copy);
+            return -1;
+        }
+        keys_copy = malloc(keys_bytes);
         if (!keys_copy) {
             free(name_copy);
             return -1;
         }
-        memcpy(keys_copy, sorted_keys, key_count * sizeof(int64_t));
+        memcpy(keys_copy, sorted_keys, keys_bytes);
     }
 
     entries[count].name = name_copy;
@@ -261,10 +273,24 @@ static tar_zst_bloom_t* tar_zst_bloom_create(size_t expected_elements) {
     tar_zst_bloom_t *b = calloc(1, sizeof(tar_zst_bloom_t));
     if (!b) return NULL;
     b->num_hashes = 2;
-    size_t num_bits = expected_elements * 8;
+    size_t num_bits;
+    if (!checked_mul_size(expected_elements, 8, &num_bits)) {
+        free(b);
+        return NULL;
+    }
     if (num_bits < 1024) num_bits = 1024;
-    size_t words = (num_bits + 63) / 64;
-    b->bits = calloc(words, sizeof(uint64_t));
+    size_t words;
+    if (!checked_add_size(num_bits, 63, &words)) {
+        free(b);
+        return NULL;
+    }
+    words /= 64;
+    size_t bits_bytes;
+    if (!checked_mul_size(words, sizeof(uint64_t), &bits_bytes)) {
+        free(b);
+        return NULL;
+    }
+    b->bits = calloc(1, bits_bytes);
     if (!b->bits) {
         free(b);
         return NULL;
@@ -336,7 +362,10 @@ typedef struct parse_ctx {
 static inline int parse_ctx_grow(parse_ctx_t* ctx) {
     if (ctx->count < ctx->capacity) return 0;
     size_t new_cap = ctx->capacity ? ctx->capacity * 2 : 1024;
-    int64_t* new_keys = arena_alloc(ctx->arena, new_cap * sizeof(int64_t));
+    if (new_cap < ctx->capacity) return -1; /* size_t doubling overflow */
+    size_t new_keys_bytes;
+    if (!checked_mul_size(new_cap, sizeof(int64_t), &new_keys_bytes)) return -1;
+    int64_t* new_keys = arena_alloc(ctx->arena, new_keys_bytes);
     if (!new_keys) return -1;
     if (ctx->keys && ctx->count > 0) {
         memcpy(new_keys, ctx->keys, ctx->count * sizeof(int64_t));
@@ -1206,9 +1235,12 @@ int keystone_tar_zst_build_index(keystone_tar_zst_t* tz) {
             }
         }
 
-        tar_zst_index_add(tz->index, tz->member_name, tz->member_name_len,
+        int add_rc = tar_zst_index_add(tz->index, tz->member_name, tz->member_name_len,
                            comp_off, uncomp_off, count, first_key, last_key, bloom,
                            (tz->options.retain_keys && keys && count > 0) ? keys : NULL);
+        if (add_rc != 0 && bloom) {
+            tar_zst_bloom_destroy(bloom);
+        }
     }
 
     tz->index_built = 1;
@@ -1475,14 +1507,26 @@ int keystone_tar_zst_load_index(keystone_tar_zst_t* tz, const char* path) {
         val = json_find_key(obj_start, obj_end, "bloom_hex");
         if (val && *val == '"' && bloom_bits > 0) {
             val++;
-            size_t words = (bloom_bits + 63) / 64;
+            /* Find the closing quote to bound the hex string */
+            const char* hex_end = strchr(val, '"');
+            if (!hex_end) goto skip_bloom;
+            size_t hex_len = (size_t)(hex_end - val);
+            size_t bloom_words;
+            if (!checked_add_size(bloom_bits, 63, &bloom_words)) goto skip_bloom;
+            bloom_words /= 64;
+            /* Validate hex string has enough characters for all words */
+            size_t hex_needed;
+            if (!checked_mul_size(bloom_words, 16, &hex_needed) ||
+                hex_needed > hex_len) goto skip_bloom;
+            size_t bloom_bits_bytes;
+            if (!checked_mul_size(bloom_words, sizeof(uint64_t), &bloom_bits_bytes)) goto skip_bloom;
             bloom = calloc(1, sizeof(tar_zst_bloom_t));
             if (bloom) {
-                bloom->bits = calloc(words, sizeof(uint64_t));
+                bloom->bits = calloc(1, bloom_bits_bytes);
                 if (bloom->bits) {
                     bloom->num_bits = bloom_bits;
                     bloom->num_hashes = bloom_hashes;
-                    for (size_t w = 0; w < words; w++) {
+                    for (size_t w = 0; w < bloom_words; w++) {
                         char word_hex[17];
                         memcpy(word_hex, val + (w * 16), 16);
                         word_hex[16] = '\0';
@@ -1494,12 +1538,19 @@ int keystone_tar_zst_load_index(keystone_tar_zst_t* tz, const char* path) {
                 }
             }
         }
+        skip_bloom:;
 
         if (name[0]) {
-            tar_zst_index_add(tz->index, name, strlen(name),
+            int add_rc = tar_zst_index_add(tz->index, name, strlen(name),
                               comp_off, uncomp_off, key_count,
                               first_key, last_key, bloom, NULL);
+            if (add_rc != 0 && bloom) {
+                tar_zst_bloom_destroy(bloom);
+            }
+        } else if (bloom) {
+            tar_zst_bloom_destroy(bloom);
         }
+        bloom = NULL;
 
         p = obj_end;
     }
@@ -1540,8 +1591,14 @@ keystone_tar_zst_batch_t* keystone_tar_zst_batch_open(
     }
     batch->options.auto_load_index = 1;
 
-    batch->archives = calloc(num_archives, sizeof(keystone_tar_zst_t*));
-    batch->paths = calloc(num_archives, sizeof(char*));
+    size_t arch_bytes, path_bytes;
+    if (!checked_mul_size(num_archives, sizeof(keystone_tar_zst_t*), &arch_bytes) ||
+        !checked_mul_size(num_archives, sizeof(char*), &path_bytes)) {
+        free(batch);
+        return NULL;
+    }
+    batch->archives = calloc(1, arch_bytes);
+    batch->paths = calloc(1, path_bytes);
     if (!batch->archives || !batch->paths) {
         keystone_tar_zst_batch_close(batch);
         return NULL;

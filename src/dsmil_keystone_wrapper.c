@@ -1,6 +1,6 @@
 #include "dsmil_keystone_wrapper.h"
 #include "keystone.h"
-#include "nst_platform_hints.h"
+#include "keystone_safe_alloc.h"
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
@@ -41,13 +41,6 @@ static bool check_avx2_support(void) {
     return (keystone_detect_cpu_features() & KEYSTONE_CPU_AVX2) != 0;
 }
 
-/* Evaluate local host context for backend dispatch routing decisions. */
-__attribute__((unused)) static int _dsmil_evaluate_host_context(_nst_numa_placement_hint_t* hint) {
-    if (!hint) return 0;
-    _nst_hints_extract_domain_context(hint);
-    return _nst_hints_score_environment(hint);
-}
-
 /* ============================================================================
  * Core API Implementation
  * ============================================================================ */
@@ -71,13 +64,6 @@ dsmil_search_context_t* dsmil_search_create(void) {
 
     ctx->initialized = true;
     clear_error(ctx);
-
-#ifdef KEYSTONE_ENABLE_PLATFORM_TUNING
-    {
-        _nst_numa_placement_hint_t hint = {0};
-        _dsmil_evaluate_host_context(&hint);
-    }
-#endif
 
     return ctx;
 }
@@ -902,7 +888,12 @@ int dsmil_search_batch_tar_zst(
     }
 
     /* Track which keys have been found */
-    int *found = calloc(num_keys, sizeof(int));
+    size_t found_bytes;
+    if (!checked_mul_size(num_keys, sizeof(int), &found_bytes)) {
+        keystone_tar_zst_close(tz);
+        return DSMIL_SEARCH_ERROR_MEMORY;
+    }
+    int *found = calloc(1, found_bytes);
     if (!found) {
         keystone_tar_zst_close(tz);
         return DSMIL_SEARCH_ERROR_MEMORY;

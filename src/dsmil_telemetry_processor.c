@@ -8,7 +8,7 @@
 
 #include "dsmil_keystone_wrapper.h"
 #include "keystone.h"
-#include "nst_platform_hints.h"
+#include "keystone_safe_alloc.h"
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
@@ -111,8 +111,17 @@ dsmil_telemetry_processor_t* dsmil_telemetry_processor_create(size_t max_events)
     }
 
     processor->max_events = max_events;
-    processor->events = calloc(max_events, sizeof(dsmil_telemetry_event_t));
-    processor->timestamps = calloc(max_events, sizeof(int64_t));
+
+    /* Guard against multiplication overflow before calloc */
+    size_t events_bytes, ts_bytes;
+    if (!checked_mul_size(max_events, sizeof(dsmil_telemetry_event_t), &events_bytes) ||
+        !checked_mul_size(max_events, sizeof(int64_t), &ts_bytes)) {
+        dsmil_search_destroy(processor->search_ctx);
+        free(processor);
+        return NULL;
+    }
+    processor->events = calloc(1, events_bytes);
+    processor->timestamps = calloc(1, ts_bytes);
     processor->timestamps_sorted = true;
 
     if (!processor->events || !processor->timestamps) {
@@ -351,7 +360,8 @@ int dsmil_telemetry_processor_get_stats(
         return DSMIL_SEARCH_ERROR_INVALID_PARAM;
     }
 
-    *total_events = (uint32_t)processor->event_count;
+    /* event_count is size_t; API returns uint32_t. Saturate to avoid silent wrap. */
+    *total_events = processor->event_count > UINT32_MAX ? UINT32_MAX : (uint32_t)processor->event_count;
     *search_operations = 0;
     *avg_search_time_ns = 0.0;
     *memory_usage = 0;

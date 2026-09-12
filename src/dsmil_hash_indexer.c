@@ -1,4 +1,5 @@
 #include "../include/dsmil_hash_indexer.h"
+#include "keystone_safe_alloc.h"
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
@@ -32,10 +33,17 @@ static void radix_sort_lsd_64(
     if (count < 2) return;
 
     /* Allocate parallel temp arrays */
-    int64_t*  tmp_keys   = malloc(count * sizeof(int64_t));
-    uint64_t* tmp_offsets = malloc(count * sizeof(uint64_t));
-    char**    tmp_strings = malloc(count * sizeof(char*));
-    size_t*   tmp_lens    = malloc(count * sizeof(size_t));
+    size_t tk, to, ts, tl;
+    if (!checked_mul_size(count, sizeof(int64_t), &tk) ||
+        !checked_mul_size(count, sizeof(uint64_t), &to) ||
+        !checked_mul_size(count, sizeof(char*), &ts) ||
+        !checked_mul_size(count, sizeof(size_t), &tl)) {
+        goto fallback_qsort;
+    }
+    int64_t*  tmp_keys   = malloc(tk);
+    uint64_t* tmp_offsets = malloc(to);
+    char**    tmp_strings = malloc(ts);
+    size_t*   tmp_lens    = malloc(tl);
     if (!tmp_keys || !tmp_offsets || !tmp_strings || !tmp_lens) {
         /* Fall back to qsort if allocation fails */
         free(tmp_keys); free(tmp_offsets); free(tmp_strings); free(tmp_lens);
@@ -101,7 +109,9 @@ fallback_qsort:
     /* Fallback: pack into pairs and qsort (original approach) */
     {
         typedef struct { int64_t hash; uint64_t offset; char* str; size_t len; } pair_t;
-        pair_t* pairs = malloc(count * sizeof(pair_t));
+        size_t pairs_bytes;
+        if (!checked_mul_size(count, sizeof(pair_t), &pairs_bytes)) return;
+        pair_t* pairs = malloc(pairs_bytes);
         if (!pairs) return;
         for (size_t i = 0; i < count; i++) {
             pairs[i].hash = keys[i];
@@ -138,10 +148,18 @@ dsmil_hash_index_t* dsmil_hash_index_create(size_t initial_capacity) {
     dsmil_hash_index_t* idx = calloc(1, sizeof(dsmil_hash_index_t));
     if (!idx) return NULL;
 
-    idx->hashes = malloc(initial_capacity * sizeof(int64_t));
-    idx->offsets = malloc(initial_capacity * sizeof(uint64_t));
-    idx->strings = calloc(initial_capacity, sizeof(char*));
-    idx->string_lens = malloc(initial_capacity * sizeof(size_t));
+    size_t h_bytes, o_bytes, s_bytes, l_bytes;
+    if (!checked_mul_size(initial_capacity, sizeof(int64_t), &h_bytes) ||
+        !checked_mul_size(initial_capacity, sizeof(uint64_t), &o_bytes) ||
+        !checked_mul_size(initial_capacity, sizeof(char*), &s_bytes) ||
+        !checked_mul_size(initial_capacity, sizeof(size_t), &l_bytes)) {
+        free(idx);
+        return NULL;
+    }
+    idx->hashes = malloc(h_bytes);
+    idx->offsets = malloc(o_bytes);
+    idx->strings = calloc(1, s_bytes);
+    idx->string_lens = malloc(l_bytes);
     idx->anchor_table = keystone_anchor_table_create();
 
     if (!idx->hashes || !idx->offsets || !idx->strings ||
@@ -177,10 +195,18 @@ int dsmil_hash_index_add(dsmil_hash_index_t* idx, const char* str, size_t len, u
 
     if (idx->count >= idx->capacity) {
         size_t new_cap = idx->capacity * 2;
-        int64_t* new_h = realloc(idx->hashes, new_cap * sizeof(int64_t));
-        uint64_t* new_o = realloc(idx->offsets, new_cap * sizeof(uint64_t));
-        char** new_s = realloc(idx->strings, new_cap * sizeof(char*));
-        size_t* new_l = realloc(idx->string_lens, new_cap * sizeof(size_t));
+        if (new_cap < idx->capacity) return -1; /* size_t doubling overflow */
+        size_t h_bytes, o_bytes, s_bytes, l_bytes;
+        if (!checked_mul_size(new_cap, sizeof(int64_t), &h_bytes) ||
+            !checked_mul_size(new_cap, sizeof(uint64_t), &o_bytes) ||
+            !checked_mul_size(new_cap, sizeof(char*), &s_bytes) ||
+            !checked_mul_size(new_cap, sizeof(size_t), &l_bytes)) {
+            return -1;
+        }
+        int64_t* new_h = realloc(idx->hashes, h_bytes);
+        uint64_t* new_o = realloc(idx->offsets, o_bytes);
+        char** new_s = realloc(idx->strings, s_bytes);
+        size_t* new_l = realloc(idx->string_lens, l_bytes);
         if (!new_h || !new_o || !new_s || !new_l) {
             if (new_h) idx->hashes = new_h;
             if (new_o) idx->offsets = new_o;
@@ -198,7 +224,9 @@ int dsmil_hash_index_add(dsmil_hash_index_t* idx, const char* str, size_t len, u
     }
 
     /* Retain a copy of the original string for collision verification */
-    char* str_copy = malloc(len + 1);
+    size_t str_copy_len;
+    if (!checked_add_size(len, 1, &str_copy_len)) return -1;
+    char* str_copy = malloc(str_copy_len);
     if (!str_copy) return -1;
     memcpy(str_copy, str, len);
     str_copy[len] = '\0';
@@ -276,7 +304,8 @@ keystone_result_t dsmil_hash_index_search_all(
     size_t max_offsets,
     size_t* out_count)
 {
-    if (!idx || !query_str || !idx->is_sorted || idx->count == 0) {
+    if (!idx || !query_str || !idx->is_sorted || idx->count == 0 ||
+        (max_offsets > 0 && !out_offsets)) {
         if (out_count) *out_count = 0;
         return KEYSTONE_NOT_FOUND;
     }
@@ -386,16 +415,31 @@ dsmil_hash_index_t* dsmil_hash_index_load(const char* path) {
     if (count > idx->capacity) {
         /* Grow to fit */
         size_t new_cap = count;
-        int64_t* new_h = realloc(idx->hashes, new_cap * sizeof(int64_t));
-        uint64_t* new_o = realloc(idx->offsets, new_cap * sizeof(uint64_t));
-        char** new_s = realloc(idx->strings, new_cap * sizeof(char*));
-        size_t* new_l = realloc(idx->string_lens, new_cap * sizeof(size_t));
-        if (!new_h || !new_o || !new_s || !new_l) {
+        size_t h_bytes, o_bytes, s_bytes, l_bytes;
+        if (!checked_mul_size(new_cap, sizeof(int64_t), &h_bytes) ||
+            !checked_mul_size(new_cap, sizeof(uint64_t), &o_bytes) ||
+            !checked_mul_size(new_cap, sizeof(char*), &s_bytes) ||
+            !checked_mul_size(new_cap, sizeof(size_t), &l_bytes)) {
             fclose(f);
             dsmil_hash_index_destroy(idx);
             return NULL;
         }
-        memset(new_s, 0, new_cap * sizeof(char*));
+        int64_t* new_h = realloc(idx->hashes, h_bytes);
+        uint64_t* new_o = realloc(idx->offsets, o_bytes);
+        char** new_s = realloc(idx->strings, s_bytes);
+        size_t* new_l = realloc(idx->string_lens, l_bytes);
+        if (!new_h || !new_o || !new_s || !new_l) {
+            /* Commit successful reallocs so destroy won't double-free.
+             * Failed reallocs leave the original pointer valid. */
+            if (new_h) idx->hashes = new_h;
+            if (new_o) idx->offsets = new_o;
+            if (new_s) idx->strings = new_s;
+            if (new_l) idx->string_lens = new_l;
+            fclose(f);
+            dsmil_hash_index_destroy(idx);
+            return NULL;
+        }
+        memset(new_s, 0, s_bytes);
         idx->hashes = new_h;
         idx->offsets = new_o;
         idx->strings = new_s;
@@ -420,7 +464,11 @@ dsmil_hash_index_t* dsmil_hash_index_load(const char* path) {
 
         /* Read string data */
         for (size_t i = 0; i < count; i++) {
-            char* s = malloc(idx->string_lens[i] + 1);
+            size_t s_alloc;
+            if (!checked_add_size(idx->string_lens[i], 1, &s_alloc)) {
+                fclose(f); dsmil_hash_index_destroy(idx); return NULL;
+            }
+            char* s = malloc(s_alloc);
             if (!s) { fclose(f); dsmil_hash_index_destroy(idx); return NULL; }
             if (idx->string_lens[i] > 0) {
                 if (fread(s, 1, idx->string_lens[i], f) != idx->string_lens[i]) {

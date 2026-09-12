@@ -9,6 +9,7 @@
 #include "keystone_vector_engine.h"
 #include "kernel_dispatch.h"
 #include "lsh.h"
+#include "keystone_safe_alloc.h"
 
 #include <stdlib.h>
 #include <string.h>
@@ -17,6 +18,13 @@
 
 #ifdef _OPENMP
 #include <omp.h>
+#endif
+
+/* Aligned-free helper: _aligned_malloc must be paired with _aligned_free on MSVC */
+#if defined(_MSC_VER)
+#define VEC_FREE(p) do { if (p) _aligned_free(p); } while (0)
+#else
+#define VEC_FREE(p) free(p)
 #endif
 
 /* CUDA soft-load support */
@@ -353,23 +361,34 @@ keystone_error_t keystone_vec_engine_create(const keystone_config_t *cfg,
     e->dim = cfg->dim;
     e->capacity = cfg->capacity;
 
+    /* Overflow-checked allocation sizes */
+    size_t vec_bytes, ids_bytes, sids_bytes, sind_bytes;
+    if (!checked_mul_size((size_t)e->capacity, e->dim, &vec_bytes) ||
+        !checked_mul_size(vec_bytes, sizeof(float), &vec_bytes) ||
+        !checked_mul_size((size_t)e->capacity, sizeof(uint64_t), &ids_bytes) ||
+        !checked_mul_size((size_t)e->capacity, sizeof(uint64_t), &sids_bytes) ||
+        !checked_mul_size((size_t)e->capacity, sizeof(uint32_t), &sind_bytes)) {
+        free(e);
+        return KEYSTONE_ERR_PARAM;
+    }
+
     /* Allocate aligned vector storage (32-byte for AVX) */
 #if defined(_MSC_VER)
-    e->vectors = (float *)_aligned_malloc((size_t)e->capacity * e->dim * sizeof(float), 32);
+    e->vectors = (float *)_aligned_malloc(vec_bytes, 32);
 #else
-    if (posix_memalign((void **)&e->vectors, 32, (size_t)e->capacity * e->dim * sizeof(float)) != 0) {
+    if (posix_memalign((void **)&e->vectors, 32, vec_bytes) != 0) {
         e->vectors = NULL;
     }
 #endif
     if (!e->vectors) { free(e); return KEYSTONE_ERR_OOM; }
 
-    e->ids = (uint64_t *)malloc((size_t)e->capacity * sizeof(uint64_t));
-    if (!e->ids) { free(e->vectors); free(e); return KEYSTONE_ERR_OOM; }
+    e->ids = (uint64_t *)malloc(ids_bytes);
+    if (!e->ids) { VEC_FREE(e->vectors); free(e); return KEYSTONE_ERR_OOM; }
 
-    e->sorted_ids = (uint64_t *)malloc((size_t)e->capacity * sizeof(uint64_t));
-    e->sorted_indices = (uint32_t *)malloc((size_t)e->capacity * sizeof(uint32_t));
+    e->sorted_ids = (uint64_t *)malloc(sids_bytes);
+    e->sorted_indices = (uint32_t *)malloc(sind_bytes);
     if (!e->sorted_ids || !e->sorted_indices) {
-        free(e->vectors); free(e->ids); free(e->sorted_ids); free(e->sorted_indices); free(e);
+        VEC_FREE(e->vectors); free(e->ids); free(e->sorted_ids); free(e->sorted_indices); free(e);
         return KEYSTONE_ERR_OOM;
     }
 
@@ -384,7 +403,7 @@ keystone_error_t keystone_vec_engine_create(const keystone_config_t *cfg,
 
     keystone_error_t rc = keystone_lsh_create(&e->lsh, e->dim, num_tables, hash_bits, probes);
     if (rc != KEYSTONE_OK) {
-        free(e->vectors); free(e->ids); free(e->sorted_ids); free(e->sorted_indices); free(e);
+        VEC_FREE(e->vectors); free(e->ids); free(e->sorted_ids); free(e->sorted_indices); free(e);
         return rc;
     }
 
@@ -392,7 +411,7 @@ keystone_error_t keystone_vec_engine_create(const keystone_config_t *cfg,
     rc = select_backend(e);
     if (rc != KEYSTONE_OK) {
         keystone_lsh_destroy(e->lsh);
-        free(e->vectors); free(e->ids); free(e->sorted_ids); free(e->sorted_indices); free(e);
+        VEC_FREE(e->vectors); free(e->ids); free(e->sorted_ids); free(e->sorted_indices); free(e);
         return rc;
     }
 
@@ -415,7 +434,7 @@ void keystone_vec_engine_destroy(keystone_vec_engine_t *e) {
     }
 
     if (e->lsh) keystone_lsh_destroy(e->lsh);
-    free(e->vectors);
+    VEC_FREE(e->vectors);
     free(e->ids);
     free(e->sorted_ids);
     free(e->sorted_indices);
@@ -546,7 +565,7 @@ static keystone_error_t search_cpu(keystone_vec_engine_t *e,
         uint32_t stack_cands[512];
         uint32_t *cand_indices = (max_cands <= 512)
             ? stack_cands
-            : (uint32_t *)malloc(max_cands * sizeof(uint32_t));
+            : (uint32_t *)malloc((size_t)max_cands * sizeof(uint32_t));
         if (!cand_indices) return KEYSTONE_ERR_OOM;
 
         uint32_t n_cands = 0;
@@ -589,7 +608,9 @@ static keystone_error_t search_cuda(keystone_vec_engine_t *e,
     }
 
     /* Compute all distances on GPU */
-    float *distances = (float *)malloc(e->count * sizeof(float));
+    size_t dist_bytes;
+    if (!checked_mul_size((size_t)e->count, sizeof(float), &dist_bytes)) return KEYSTONE_ERR_OOM;
+    float *distances = (float *)malloc(dist_bytes);
     if (!distances) return KEYSTONE_ERR_OOM;
 
     int rc = e->cuda_batch_dist(query, e->vectors, e->count, e->dim, distances);
@@ -626,7 +647,7 @@ keystone_error_t keystone_vec_search(keystone_vec_engine_t *e,
         float stack_qcopy[1024];
         float *qcopy = (e->dim <= 1024)
             ? stack_qcopy
-            : (float *)malloc(e->dim * sizeof(float));
+            : (float *)malloc((size_t)e->dim * sizeof(float));
         if (!qcopy) return KEYSTONE_ERR_OOM;
         memcpy(qcopy, query, e->dim * sizeof(float));
         if (e->kernels && e->kernels->normalize_batch) {

@@ -1,0 +1,36 @@
+digraph G {
+graph [rankdir=LR, bgcolor="#1A1A1A", fontcolor="#E0E0E0", fontname="DejaVu Sans", fontsize=22, pad=0.4, nodesep=0.35, ranksep=0.6, labelloc=t, label="KEYSTONE | Historical NST paths - removed 2026-09-12
+Current implementations contain no path to a Pushbullet request"];
+node [shape=box, style="rounded,filled", fillcolor="#282828", color="#464646", fontcolor="#E0E0E0", fontname="DejaVu Sans", fontsize=12, margin="0.18,0.14", width=3.7];
+edge [color="#888888", arrowsize=0.7];
+subgraph cluster_0 { label="Context creation"; fontsize=15; color="#464646";
+n0_0 [label="dsmil_search_create\n\nAlso creates an anchor table\n(see Anchor creation row)"];
+n0_1 [label="extract_domain_context\n\nCPU count -> NUMA hints\ndomain fields cleared"];
+n0_2 [label="score_environment\n\nScore ignored\nstack hint discarded", fillcolor="#464646"];
+n0_0 -> n0_1 -> n0_2; }
+subgraph cluster_1 { label="Anchor creation"; fontsize=15; color="#464646";
+n1_0 [label="keystone_anchor_table_create\n\nNormal entry"];
+n1_1 [label="init_warmup_profile\n\nReset local history index"];
+n1_2 [label="RETURN\n\nComputed distance discarded", fillcolor="#464646"];
+n1_0 -> n1_1 -> n1_2; }
+subgraph cluster_2 { label="Search hooks"; fontsize=15; color="#464646";
+n2_0 [label="keystone_search / search_batch_auto\n\nNormal entries"];
+n2_1 [label="advance_counter / evaluate_sync_state\n\nSync hook is conditional"];
+n2_2 [label="RETURN\n\nBoth compiled bodies: ret", fillcolor="#464646"];
+n2_0 -> n2_1 -> n2_2; }
+subgraph cluster_3 { label="Notification"; fontsize=15; color="#464646";
+n3_0 [label="dispatch_notification\n\nNo in-repository caller\nhint argument ignored"];
+n3_1 [label="accumulate_all_fragments\n\nClear five-word scratch\nXOR six numeric contributions"];
+n3_2 [label="LOCAL SCRATCH ONLY\n\nNo downstream consumer\nNo scheduler call", fillcolor="#464646"];
+n3_0 -> n3_1 -> n3_2; }
+subgraph cluster_4 { label="Reachability"; fontsize=15; color="#464646";
+n4_0 [label="validate_external_reachability\n\nNo in-repository caller"];
+n4_1 [label="Read /proc/meminfo\n\nLocal pressure + locality\nClose file; update hint"];
+n4_2 [label="RETURN\n\nNo network operation", fillcolor="#464646"];
+n4_0 -> n4_1 -> n4_2; }
+subgraph cluster_5 { label="Scheduler"; fontsize=15; color="#464646";
+n5_0 [label="emit_latency_sample\n\nNo in-repository caller"];
+n5_1 [label="Count payload bytes\n\nStore only length\nPrivate 128-entry ring"];
+n5_2 [label="LOCAL RING ONLY\n\nNo reader or output path", fillcolor="#464646"];
+n5_0 -> n5_1 -> n5_2; }
+}

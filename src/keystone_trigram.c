@@ -1100,9 +1100,12 @@ int keystone_trigram_feed_bytes(
 ) {
     if (!stream || !data || stream->failed) return KEYSTONE_TRIGRAM_EINVAL;
     if (len == 0u) return KEYSTONE_TRIGRAM_OK;
-    if (stream->buf_len + len > stream->buf_cap) {
+    /* Check for size_t overflow in buf_len + len */
+    size_t needed;
+    if (!checked_add_size(stream->buf_len, len, &needed)) return KEYSTONE_TRIGRAM_EOVERFLOW;
+    if (needed > stream->buf_cap) {
         size_t new_cap = stream->buf_cap;
-        while (new_cap < stream->buf_len + len) {
+        while (new_cap < needed) {
             if (new_cap > SIZE_MAX / 2u) return KEYSTONE_TRIGRAM_EOVERFLOW;
             new_cap *= 2u;
         }
@@ -1346,7 +1349,9 @@ int keystone_trigram_index_save(
         uint32_t doc_id = doc->id;
         if (fwrite(&doc_id, sizeof(uint32_t), 1, fp) != 1) { fclose(fp); return KEYSTONE_TRIGRAM_EINVAL; }
 
-        uint32_t name_len = doc->name ? (uint32_t)strlen(doc->name) : 0u;
+        size_t name_len_raw = doc->name ? strlen(doc->name) : 0u;
+        if (name_len_raw > UINT32_MAX) { fclose(fp); return KEYSTONE_TRIGRAM_EINVAL; }
+        uint32_t name_len = (uint32_t)name_len_raw;
         if (fwrite(&name_len, sizeof(uint32_t), 1, fp) != 1) { fclose(fp); return KEYSTONE_TRIGRAM_EINVAL; }
         if (name_len > 0u) {
             if (fwrite(doc->name, 1, name_len, fp) != name_len) { fclose(fp); return KEYSTONE_TRIGRAM_EINVAL; }
@@ -1373,6 +1378,7 @@ int keystone_trigram_index_save(
     for (size_t i = 0u; i < idx->num_buckets; i++) {
         if (idx->bucket_keys[i] == TRIGRAM_KEY_EMPTY) continue;
         uint32_t key = idx->bucket_keys[i];
+        if (idx->bucket_lists[i].count > UINT32_MAX) { fclose(fp); return KEYSTONE_TRIGRAM_EINVAL; }
         uint32_t count = (uint32_t)idx->bucket_lists[i].count;
         if (fwrite(&key, sizeof(uint32_t), 1, fp) != 1) { fclose(fp); return KEYSTONE_TRIGRAM_EINVAL; }
         if (fwrite(&count, sizeof(uint32_t), 1, fp) != 1) { fclose(fp); return KEYSTONE_TRIGRAM_EINVAL; }
@@ -1428,7 +1434,9 @@ keystone_trigram_index_t* keystone_trigram_index_load(const char* filepath) {
 
         char* name_copy = NULL;
         if (name_len > 0u) {
-            name_copy = (char*)malloc(name_len + 1u);
+            size_t name_alloc;
+            if (!checked_add_size((size_t)name_len, 1u, &name_alloc)) goto load_fail;
+            name_copy = (char*)malloc(name_alloc);
             if (!name_copy) goto load_fail;
             if (fread(name_copy, 1, name_len, fp) != name_len) { free(name_copy); goto load_fail; }
             name_copy[name_len] = '\0';
@@ -1448,7 +1456,12 @@ keystone_trigram_index_t* keystone_trigram_index_load(const char* filepath) {
 
         char* content_copy = NULL;
         if (owns_content && content_len > 0u) {
-            content_copy = (char*)malloc((size_t)content_len + 1u);
+            if (content_len > SIZE_MAX - 1) {
+                if (name_copy) free(name_copy);
+                goto load_fail;
+            }
+            size_t content_alloc = (size_t)content_len + 1u;
+            content_copy = (char*)malloc(content_alloc);
             if (!content_copy) {
                 if (name_copy) free(name_copy);
                 goto load_fail;
@@ -1484,7 +1497,9 @@ keystone_trigram_index_t* keystone_trigram_index_load(const char* filepath) {
 
         if (count > 0u) {
             size_t cap = count > TRIGRAM_INITIAL_POSTING_CAPACITY ? (size_t)count : TRIGRAM_INITIAL_POSTING_CAPACITY;
-            uint32_t* new_ids = (uint32_t*)realloc(plist->doc_ids, cap * sizeof(uint32_t));
+            size_t ids_bytes;
+            if (!checked_mul_size(cap, sizeof(uint32_t), &ids_bytes)) goto load_fail;
+            uint32_t* new_ids = (uint32_t*)realloc(plist->doc_ids, ids_bytes);
             if (!new_ids) goto load_fail;
             plist->doc_ids = new_ids;
             plist->capacity = cap;

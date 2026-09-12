@@ -47,12 +47,14 @@ static inline size_t dsmil_dirty_find_next_candidate(const char* buf, size_t len
 #if defined(__x86_64__) || defined(__i386__)
     const unsigned char* p = (const unsigned char*)buf;
     size_t i = start;
+    /* Guard against start > length to prevent index arithmetic wrap below */
+    if (i > length) return length;
 
 #ifdef __AVX2__
     const __m256i v_at = _mm256_set1_epi8((char)'@');
     const __m256i v_h  = _mm256_set1_epi8((char)'h');
     const __m256i v_H  = _mm256_set1_epi8((char)'H');
-    while (i + 32 <= length) {
+    while (length - i >= 32) {
         __m256i v  = _mm256_loadu_si256((const __m256i*)(p + i));
         __m256i m1 = _mm256_cmpeq_epi8(v, v_at);
         __m256i m2 = _mm256_cmpeq_epi8(v, v_h);
@@ -70,7 +72,7 @@ static inline size_t dsmil_dirty_find_next_candidate(const char* buf, size_t len
     const __m128i s_at = _mm_set1_epi8((char)'@');
     const __m128i s_h  = _mm_set1_epi8((char)'h');
     const __m128i s_H  = _mm_set1_epi8((char)'H');
-    while (i + 16 <= length) {
+    while (length - i >= 16) {
         __m128i v  = _mm_loadu_si128((const __m128i*)(p + i));
         __m128i m1 = _mm_cmpeq_epi8(v, s_at);
         __m128i m2 = _mm_cmpeq_epi8(v, s_h);

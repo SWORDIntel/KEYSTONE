@@ -28,9 +28,10 @@ void dsmil_extract_model_context(const char* archive_buffer, size_t archive_leng
         copy_len = sizeof(out_context->target_artifact) - 1;
     }
     
-    /* Ensure we don't read past archive end */
-    if (hit_offset + copy_len > archive_length) {
-        copy_len = archive_length - hit_offset;
+    /* Ensure we don't read past archive end (wrap-safe: hit_offset < archive_length
+     * is guaranteed by the guard at line 17, so archive_length - hit_offset > 0) */
+    if (copy_len > archive_length - hit_offset) {
+        copy_len = (size_t)(archive_length - hit_offset);
     }
     
     memcpy(out_context->target_artifact, archive_buffer + hit_offset, copy_len);
@@ -57,18 +58,26 @@ void dsmil_extract_model_context(const char* archive_buffer, size_t archive_leng
 
     /* --- EXTRACT POST-CONTEXT --- */
     size_t post_size = sizeof(out_context->post_context) - 1;
-    uint64_t post_start = hit_offset + artifact_len;
-    
-    if (post_start < archive_length) {
-        uint64_t remaining = archive_length - post_start;
-        if (remaining < post_size) {
-            post_size = (size_t)remaining;
+    /* Wrap-safe: hit_offset < archive_length is guaranteed, so
+     * archive_length - hit_offset > 0.  If artifact_len exceeds the
+     * remaining archive, there's no post-context to extract. */
+    if (artifact_len > archive_length - hit_offset) {
+        post_size = 0;
+        out_context->is_truncated = 1;
+    } else {
+        uint64_t post_start = hit_offset + artifact_len;
+        if (post_start < archive_length) {
+            uint64_t remaining = archive_length - post_start;
+            if (remaining < post_size) {
+                post_size = (size_t)remaining;
+                out_context->is_truncated = 1;
+            }
+            memcpy(out_context->post_context, archive_buffer + post_start, post_size);
+            out_context->post_context[post_size] = '\0';
+            clean_model_buffer(out_context->post_context, post_size);
+        } else {
+            post_size = 0;
             out_context->is_truncated = 1;
         }
-        memcpy(out_context->post_context, archive_buffer + post_start, post_size);
-        out_context->post_context[post_size] = '\0';
-        clean_model_buffer(out_context->post_context, post_size);
-    } else {
-        out_context->is_truncated = 1;
     }
 }
