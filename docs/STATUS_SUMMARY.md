@@ -78,6 +78,11 @@ Condensed from DYNAMIC_HOT_PATH_PLAN, FORTRAN_BACKEND_PLAN, IMPROVEMENT_PLAN, OP
 
 The items below are the current engineering backlog. The root README intentionally keeps this detail out of the executive overview; see [TECHNICAL_OVERVIEW.md](TECHNICAL_OVERVIEW.md) for the surrounding architecture.
 
+### Trigram Engine High-Throughput Upgrades (Sol Architecture)
+- **Phase 1: Immediate Wins**: Fix case-insensitive iterator ASCII-folding bug; replace candidate iterator `bsearch()` with monotonic lower-bound galloping (`ks_lower_bound_gallop_u32`); eliminate per-query `malloc(doc_count * 4)` allocation via ping-pong workspace buffers (`ks_intersect_many_u32`); add adaptive sparse list intersection (balanced AVX2 `_mm256_cmpeq_epi32` vs skewed galloping); implement query planner rarity pruning (8–16 rarest trigrams); free build-only bitset state at `finalize()`.
+- **Phase 2: Ingestion & Memory Throughput**: Arena-backed chunked posting lists; flatten to contiguous posting buffer at `finalize()`; convert dense postings ($\ge \text{doc\_count}/32$) to 64-bit word bitmaps with AVX2 bitwise AND; direct 24-bit descriptor directory (64 MiB flat table) for large corpora; true streaming ingestion with 2-byte boundary carry.
+- **Phase 3: Multi-Threaded Parallel Construction**: Thread-local builders with contiguous document ranges; lock-free parallel frequency pass and finalize merge.
+
 ### Fortran
 - Expand benchmark coverage beyond dense all-hit workloads.
 - Decide whether Fortran stays explicit-only or becomes a broader selectable backend.
