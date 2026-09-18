@@ -87,8 +87,8 @@ static void run_benchmark(const bench_config_t* cfg) {
            brute_time * 1000.0, brute_matches,
            (double)cfg->total_bytes / (1024.0 * 1024.0) / brute_time);
 
-    /* 2. Build index */
-    printf("  [2] Building trigram index... ");
+    /* 2a. Build index (Single-threaded) */
+    printf("  [2a] Single-threaded build... ");
     fflush(stdout);
     t0 = get_time_sec();
     keystone_trigram_index_t* idx = keystone_trigram_index_create(cfg->num_docs);
@@ -101,19 +101,38 @@ static void run_benchmark(const bench_config_t* cfg) {
            build_time,
            (double)cfg->total_bytes / (1024.0 * 1024.0) / build_time);
 
+    /* 2b. Build index (Multi-threaded parallel) */
+    printf("  [2b] Multi-threaded build (OpenMP)... ");
+    fflush(stdout);
+    keystone_input_document_t* inp_docs = (keystone_input_document_t*)malloc(cfg->num_docs * sizeof(keystone_input_document_t));
+    for (size_t i = 0; i < cfg->num_docs; i++) {
+        inp_docs[i].name = NULL;
+        inp_docs[i].text = docs[i];
+        inp_docs[i].text_len = cfg->doc_size;
+        inp_docs[i].owns_content = 1;
+    }
+    t0 = get_time_sec();
+    keystone_trigram_index_t* idx_par = keystone_trigram_index_create(cfg->num_docs);
+    keystone_trigram_index_build_parallel(idx_par, inp_docs, cfg->num_docs, 0);
+    double par_build_time = get_time_sec() - t0;
+    printf("%.2f s  (%.0f MB/s, %.1fx build speedup)\n",
+           par_build_time,
+           (double)cfg->total_bytes / (1024.0 * 1024.0) / par_build_time,
+           build_time / (par_build_time > 1e-6 ? par_build_time : 1e-6));
+
     /* 3. Trigram search */
-    printf("  [3] Trigram search... ");
+    printf("  [3] Trigram search (parallel-built index)... ");
     fflush(stdout);
     size_t max_matches = num_targets + 64;
     uint32_t* matches = (uint32_t*)malloc(max_matches * sizeof(uint32_t));
     t0 = get_time_sec();
-    size_t tri_matches = keystone_trigram_index_search(idx, needle, needle_len,
+    size_t tri_matches = keystone_trigram_index_search(idx_par, needle, needle_len,
                                                        matches, max_matches);
     double tri_time = get_time_sec() - t0;
     printf("%.4f ms  (%zu matches)\n", tri_time * 1000.0, tri_matches);
 
     keystone_trigram_stats_t stats;
-    keystone_trigram_index_get_stats(idx, &stats);
+    keystone_trigram_index_get_stats(idx_par, &stats);
     printf("      Candidates: %zu / %zu (%.2f%% rejected)\n",
            stats.candidate_docs_evaluated, cfg->num_docs,
            cfg->num_docs > 0 ?
@@ -122,10 +141,12 @@ static void run_benchmark(const bench_config_t* cfg) {
            stats.unique_trigrams, stats.total_postings);
 
     double speedup = brute_time / tri_time;
-    printf("  >> SPEEDUP: %.1fx  (build: %.2fs, search: %.4fms)\n\n",
-           speedup, build_time, tri_time * 1000.0);
+    printf("  >> SPEEDUP: %.1fx  (1-thread build: %.2fs, multi-thread build: %.2fs, search: %.4fms)\n\n",
+           speedup, build_time, par_build_time, tri_time * 1000.0);
 
     keystone_trigram_index_destroy(idx);
+    keystone_trigram_index_destroy(idx_par);
+    free(inp_docs);
     free(matches);
     free(target_ids);
     for (size_t i = 0; i < cfg->num_docs; i++) free(docs[i]);

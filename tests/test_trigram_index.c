@@ -471,6 +471,82 @@ static void test_direct_24bit_directory(void) {
     printf("✓ Direct 24-bit directory acceleration verified.\n");
 }
 
+static void test_parallel_build(void) {
+    printf("Testing parallel index construction...\n");
+
+    const size_t num_docs = 600;
+    keystone_input_document_t* docs = (keystone_input_document_t*)calloc(num_docs, sizeof(keystone_input_document_t));
+    TEST_ASSERT(docs != NULL);
+
+    char doc_texts[600][128];
+    char doc_names[600][32];
+
+    for (size_t i = 0; i < num_docs; i++) {
+        snprintf(doc_names[i], sizeof(doc_names[i]), "doc_%zu.txt", i);
+        if (i == 42) {
+            snprintf(doc_texts[i], sizeof(doc_texts[i]), "special needle telemetry payload ALPHA_%zu", i);
+        } else if (i == 350) {
+            snprintf(doc_texts[i], sizeof(doc_texts[i]), "another unique needle payload BRAVO_%zu", i);
+        } else if (i == 580) {
+            snprintf(doc_texts[i], sizeof(doc_texts[i]), "final thread needle payload CHARLIE_%zu", i);
+        } else {
+            snprintf(doc_texts[i], sizeof(doc_texts[i]), "routine sensor background record document id %zu", i);
+        }
+        docs[i].name = doc_names[i];
+        docs[i].text = doc_texts[i];
+        docs[i].text_len = strlen(doc_texts[i]);
+        docs[i].owns_content = true;
+    }
+
+    keystone_trigram_index_t* idx = keystone_trigram_index_create_options(
+        num_docs,
+        KEYSTONE_TRIGRAM_OPT_CASE_INSENSITIVE | KEYSTONE_TRIGRAM_OPT_DIRECT_DIRECTORY
+    );
+    TEST_ASSERT(idx != NULL);
+
+    /* Build with 4 worker threads */
+    int rc = keystone_trigram_index_build_parallel(idx, docs, num_docs, 4);
+    TEST_ASSERT(rc == KEYSTONE_TRIGRAM_OK);
+    TEST_ASSERT(keystone_trigram_index_document_count(idx) == num_docs);
+
+    /* Verify index is finalized (further document additions are rejected) */
+    TEST_ASSERT(keystone_trigram_index_add_document(idx, "late", "late", 4, NULL) == KEYSTONE_TRIGRAM_ESTATE);
+
+    /* Verify searches across threads */
+    uint32_t matches[8];
+    size_t m = keystone_trigram_index_search(idx, "ALPHA_42", 8, matches, 8);
+    TEST_ASSERT(m == 1);
+    TEST_ASSERT(matches[0] == 42);
+
+    m = keystone_trigram_index_search(idx, "BRAVO_350", 9, matches, 8);
+    TEST_ASSERT(m == 1);
+    TEST_ASSERT(matches[0] == 350);
+
+    m = keystone_trigram_index_search(idx, "CHARLIE_580", 11, matches, 8);
+    TEST_ASSERT(m == 1);
+    TEST_ASSERT(matches[0] == 580);
+
+    /* Case-folding search verification */
+    m = keystone_trigram_index_search(idx, "alpha_42", 8, matches, 8);
+    TEST_ASSERT(m == 1);
+    TEST_ASSERT(matches[0] == 42);
+
+    /* Shared frequent token */
+    uint32_t cands[64];
+    size_t cand_count = keystone_trigram_index_get_candidates(idx, "telemetry", 9, cands, 64);
+    TEST_ASSERT(cand_count >= 1);
+    TEST_ASSERT(cands[0] == 42);
+
+    /* Building again on finalized index should fail */
+    rc = keystone_trigram_index_build_parallel(idx, docs, 10, 2);
+    TEST_ASSERT(rc == KEYSTONE_TRIGRAM_ESTATE);
+
+    keystone_trigram_index_destroy(idx);
+    free(docs);
+
+    printf("✓ Parallel index construction verified.\n");
+}
+
 int main(void) {
     printf("Running Trigram Index Test Suite\n");
     printf("===============================\n\n");
@@ -484,6 +560,7 @@ int main(void) {
     test_candidate_iterator_case_folding_and_galloping();
     test_true_streaming_carry_and_flattening_and_bitmaps();
     test_direct_24bit_directory();
+    test_parallel_build();
     test_binary_persistence();
 #ifdef KEYSTONE_ENABLE_TAR_ZST
     test_archive_streaming_trigram();

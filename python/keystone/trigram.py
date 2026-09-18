@@ -98,6 +98,22 @@ _lib.keystone_trigram_index_get_candidates.argtypes = [
 ]
 _lib.keystone_trigram_index_get_candidates.restype = ctypes.c_size_t
 
+class _CInputDocument(ctypes.Structure):
+    _fields_ = [
+        ("name", ctypes.c_char_p),
+        ("text", ctypes.c_char_p),
+        ("text_len", ctypes.c_size_t),
+        ("owns_content", ctypes.c_int),
+    ]
+
+_lib.keystone_trigram_index_build_parallel.argtypes = [
+    ctypes.c_void_p,
+    ctypes.POINTER(_CInputDocument),
+    ctypes.c_size_t,
+    ctypes.c_uint,
+]
+_lib.keystone_trigram_index_build_parallel.restype = ctypes.c_int
+
 _lib.keystone_trigram_extract.argtypes = [
     ctypes.c_char_p,
     ctypes.c_size_t,
@@ -351,6 +367,68 @@ class TrigramIndex:
         if not stream_ptr:
             raise RuntimeError("begin_document failed")
         return TrigramStream(stream_ptr)
+
+    def build_parallel(
+        self,
+        docs: List[Union[Tuple[Optional[str], Union[str, bytes]], Tuple[Optional[str], Union[str, bytes], bool], dict]],
+        thread_count: int = 0,
+    ) -> None:
+        """Build trigram index across multiple documents in parallel using OpenMP.
+
+        Slices document ingestion across worker threads with per-thread arenas,
+        performing a lock-free merge and finalizing the index directly.
+
+        Args:
+            docs: List of documents. Each item can be:
+                  - (name, text) tuple (owns_content defaults to True)
+                  - (name, text, owns_content) tuple
+                  - dict with 'name', 'text', and optional 'owns_content'
+            thread_count: Worker thread count (0 uses system/OpenMP default).
+        """
+        if not docs:
+            self.finalize()
+            return
+
+        c_docs = (_CInputDocument * len(docs))()
+        pinned_names = []
+        pinned_texts = []
+
+        for i, doc in enumerate(docs):
+            if isinstance(doc, dict):
+                name = doc.get("name")
+                text = doc.get("text", b"")
+                owns = bool(doc.get("owns_content", True))
+            elif isinstance(doc, (tuple, list)):
+                name = doc[0]
+                text = doc[1]
+                owns = bool(doc[2]) if len(doc) > 2 else True
+            else:
+                raise ValueError(f"Unsupported document format at index {i}: {type(doc)}")
+
+            c_name = name.encode("utf-8") if isinstance(name, str) else name
+            pinned_names.append(c_name)
+
+            if isinstance(text, str):
+                text_bytes = text.encode("utf-8")
+            elif isinstance(text, (bytes, bytearray)):
+                text_bytes = bytes(text)
+            else:
+                text_bytes = bytes(str(text), "utf-8")
+            pinned_texts.append(text_bytes)
+
+            c_docs[i].name = c_name
+            c_docs[i].text = text_bytes
+            c_docs[i].text_len = len(text_bytes)
+            c_docs[i].owns_content = 1 if owns else 0
+
+        rc = _lib.keystone_trigram_index_build_parallel(
+            self._ptr,
+            c_docs,
+            len(docs),
+            thread_count,
+        )
+        if rc != 0:
+            raise RuntimeError(f"build_parallel failed with code {rc}")
 
     def finalize(self) -> None:
         """Finalize the index for querying. After this, no more documents."""

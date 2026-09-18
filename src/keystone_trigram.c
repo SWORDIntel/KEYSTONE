@@ -7,6 +7,10 @@
 #include <ctype.h>
 #include <stdio.h>
 
+#ifdef _OPENMP
+#include <omp.h>
+#endif
+
 #if defined(__x86_64__) || defined(__i386__)
 #include <immintrin.h>
 #define KS_X86 1
@@ -805,11 +809,6 @@ int keystone_trigram_index_add_document_external(
     return add_document_internal(idx, name, text, text_len, false, out_doc_id);
 }
 
-static int compare_uint32(const void* a, const void* b) {
-    uint32_t u1 = *(const uint32_t*)a;
-    uint32_t u2 = *(const uint32_t*)b;
-    return (u1 > u2) - (u1 < u2);
-}
 
 int keystone_trigram_index_finalize(keystone_trigram_index_t* idx) {
     if (!idx) return KEYSTONE_TRIGRAM_EINVAL;
@@ -2183,4 +2182,479 @@ load_fail:
     fclose(fp);
     keystone_trigram_index_destroy(idx);
     return NULL;
+}
+
+/* ========================================================================= */
+/* Phase 3: Multi-Threaded Parallel Construction                             */
+/* ========================================================================= */
+
+typedef struct ks_local_builder {
+    uint32_t first_doc_id;
+    uint32_t doc_count;
+    size_t num_buckets;
+    uint32_t* bucket_keys;
+    keystone_trigram_posting_list_t* bucket_lists;
+    size_t unique_trigrams;
+    keystone_arena_t arena;
+    uint8_t* doc_seen;
+    size_t* doc_seen_touched;
+    size_t doc_seen_touched_count;
+    size_t doc_seen_touched_cap;
+    uint64_t bytes_indexed;
+    uint64_t postings_added;
+} ks_local_builder_t;
+
+static int ks_local_builder_init(
+    ks_local_builder_t* b,
+    uint32_t first_doc_id,
+    uint32_t doc_count
+) {
+    if (!b) return KEYSTONE_TRIGRAM_EINVAL;
+    memset(b, 0, sizeof(*b));
+    b->first_doc_id = first_doc_id;
+    b->doc_count = doc_count;
+    b->num_buckets = TRIGRAM_INITIAL_BUCKETS;
+
+    b->bucket_keys = (uint32_t*)malloc(b->num_buckets * sizeof(uint32_t));
+    if (!b->bucket_keys) return KEYSTONE_TRIGRAM_ENOMEM;
+    for (size_t i = 0u; i < b->num_buckets; i++) {
+        b->bucket_keys[i] = TRIGRAM_KEY_EMPTY;
+    }
+
+    b->bucket_lists = (keystone_trigram_posting_list_t*)calloc(
+        b->num_buckets, sizeof(keystone_trigram_posting_list_t)
+    );
+    if (!b->bucket_lists) {
+        free(b->bucket_keys);
+        b->bucket_keys = NULL;
+        return KEYSTONE_TRIGRAM_ENOMEM;
+    }
+
+    b->doc_seen = (uint8_t*)calloc(TRIGRAM_BITMAP_BYTES, 1);
+    if (!b->doc_seen) {
+        free(b->bucket_keys);
+        free(b->bucket_lists);
+        return KEYSTONE_TRIGRAM_ENOMEM;
+    }
+
+    b->doc_seen_touched_cap = 4096u;
+    b->doc_seen_touched = (size_t*)malloc(b->doc_seen_touched_cap * sizeof(size_t));
+    if (!b->doc_seen_touched) {
+        free(b->doc_seen);
+        free(b->bucket_keys);
+        free(b->bucket_lists);
+        return KEYSTONE_TRIGRAM_ENOMEM;
+    }
+    b->doc_seen_touched_count = 0u;
+    return KEYSTONE_TRIGRAM_OK;
+}
+
+static void ks_local_builder_destroy(ks_local_builder_t* b) {
+    if (!b) return;
+    free(b->bucket_keys);
+    free(b->bucket_lists);
+    free(b->doc_seen);
+    free(b->doc_seen_touched);
+    keystone_arena_destroy(&b->arena);
+    memset(b, 0, sizeof(*b));
+}
+
+static keystone_trigram_posting_list_t* ks_local_find_or_create(
+    ks_local_builder_t* b,
+    uint32_t key
+) {
+    /* If load factor > 70%, rehash local table */
+    if (b->unique_trigrams * 10u >= b->num_buckets * 7u) {
+        size_t new_buckets = b->num_buckets * 2u;
+        uint32_t* new_keys = (uint32_t*)malloc(new_buckets * sizeof(uint32_t));
+        keystone_trigram_posting_list_t* new_lists =
+            (keystone_trigram_posting_list_t*)calloc(new_buckets, sizeof(keystone_trigram_posting_list_t));
+        if (new_keys && new_lists) {
+            for (size_t i = 0u; i < new_buckets; i++) new_keys[i] = TRIGRAM_KEY_EMPTY;
+            size_t new_mask = new_buckets - 1u;
+            for (size_t i = 0u; i < b->num_buckets; i++) {
+                if (b->bucket_keys[i] != TRIGRAM_KEY_EMPTY) {
+                    uint32_t old_key = b->bucket_keys[i];
+                    size_t h = (size_t)(((uint64_t)old_key * 11400714819323198485ULL) >> 32) & new_mask;
+                    while (new_keys[h] != TRIGRAM_KEY_EMPTY) {
+                        h = (h + 1u) & new_mask;
+                    }
+                    new_keys[h] = old_key;
+                    new_lists[h] = b->bucket_lists[i];
+                }
+            }
+            free(b->bucket_keys);
+            free(b->bucket_lists);
+            b->bucket_keys = new_keys;
+            b->bucket_lists = new_lists;
+            b->num_buckets = new_buckets;
+        }
+    }
+
+    size_t mask = b->num_buckets - 1u;
+    size_t bucket_idx = (size_t)(((uint64_t)key * 11400714819323198485ULL) >> 32) & mask;
+    size_t orig = bucket_idx;
+    while (b->bucket_keys[bucket_idx] != TRIGRAM_KEY_EMPTY && b->bucket_keys[bucket_idx] != key) {
+        bucket_idx = (bucket_idx + 1u) & mask;
+        if (bucket_idx == orig) return NULL;
+    }
+
+    keystone_trigram_posting_list_t* plist = &b->bucket_lists[bucket_idx];
+    if (b->bucket_keys[bucket_idx] == TRIGRAM_KEY_EMPTY) {
+        size_t init_cap = TRIGRAM_INITIAL_POSTING_CAPACITY;
+        size_t chunk_bytes = sizeof(keystone_posting_chunk_t) + init_cap * sizeof(uint32_t);
+        keystone_posting_chunk_t* chunk = (keystone_posting_chunk_t*)keystone_arena_alloc(&b->arena, chunk_bytes);
+        if (!chunk) return NULL;
+        chunk->next = NULL;
+        chunk->count = 0u;
+        chunk->capacity = (uint32_t)init_cap;
+        plist->doc_ids = NULL;
+        plist->head_chunk = chunk;
+        plist->tail_chunk = chunk;
+        plist->count = 0u;
+        plist->capacity = init_cap;
+        plist->bitmap = NULL;
+        b->bucket_keys[bucket_idx] = key;
+        b->unique_trigrams++;
+    }
+    return plist;
+}
+
+static inline int ks_local_add_doc(
+    ks_local_builder_t* b,
+    keystone_trigram_posting_list_t* plist,
+    uint32_t doc_id
+) {
+    keystone_posting_chunk_t* tail = plist->tail_chunk;
+    if (!tail) return -1;
+    if (tail->count > 0u && tail->doc_ids[tail->count - 1u] == doc_id) {
+        return 0;
+    }
+    if (tail->count < tail->capacity) {
+        tail->doc_ids[tail->count++] = doc_id;
+        plist->count++;
+        b->postings_added++;
+        return 0;
+    }
+
+    uint32_t next_cap = tail->capacity * 2u;
+    if (next_cap > 16384u) next_cap = 16384u;
+    if (next_cap < 8u) next_cap = 8u;
+
+    size_t chunk_bytes = sizeof(keystone_posting_chunk_t) + (size_t)next_cap * sizeof(uint32_t);
+    keystone_posting_chunk_t* new_chunk = (keystone_posting_chunk_t*)keystone_arena_alloc(&b->arena, chunk_bytes);
+    if (!new_chunk) return -1;
+
+    new_chunk->next = NULL;
+    new_chunk->count = 1u;
+    new_chunk->capacity = next_cap;
+    new_chunk->doc_ids[0] = doc_id;
+
+    tail->next = new_chunk;
+    plist->tail_chunk = new_chunk;
+    plist->count++;
+    plist->capacity += next_cap;
+    b->postings_added++;
+    return 0;
+}
+
+static int ks_local_builder_add_doc(
+    ks_local_builder_t* b,
+    uint32_t doc_id,
+    const char* text,
+    size_t text_len,
+    bool fold
+) {
+    if (!text || text_len < 3u) return KEYSTONE_TRIGRAM_OK;
+    const unsigned char* p = (const unsigned char*)text;
+
+    for (size_t i = 0u; i <= text_len - 3u; i++) {
+        uint32_t key;
+        if (fold) {
+            unsigned char b0 = fast_ascii_tolower(p[i]);
+            unsigned char b1 = fast_ascii_tolower(p[i + 1u]);
+            unsigned char b2 = fast_ascii_tolower(p[i + 2u]);
+            key = ((uint32_t)b0 << 16) | ((uint32_t)b1 << 8) | (uint32_t)b2;
+        } else {
+            key = ((uint32_t)p[i] << 16) | ((uint32_t)p[i + 1u] << 8) | (uint32_t)p[i + 2u];
+        }
+
+        size_t byte_idx = key >> 3;
+        unsigned char bit_mask = (unsigned char)(1u << (key & 7u));
+        unsigned char old = b->doc_seen[byte_idx];
+        if (old & bit_mask) continue;
+        if (old == 0u) {
+            if (b->doc_seen_touched_count >= b->doc_seen_touched_cap) {
+                size_t new_cap = b->doc_seen_touched_cap * 2u;
+                size_t* new_t = (size_t*)realloc(b->doc_seen_touched, new_cap * sizeof(size_t));
+                if (!new_t) return KEYSTONE_TRIGRAM_ENOMEM;
+                b->doc_seen_touched = new_t;
+                b->doc_seen_touched_cap = new_cap;
+            }
+            b->doc_seen_touched[b->doc_seen_touched_count++] = byte_idx;
+        }
+        b->doc_seen[byte_idx] = old | bit_mask;
+
+        keystone_trigram_posting_list_t* plist = ks_local_find_or_create(b, key);
+        if (!plist) return KEYSTONE_TRIGRAM_ENOMEM;
+        if (ks_local_add_doc(b, plist, doc_id) != 0) return KEYSTONE_TRIGRAM_ENOMEM;
+    }
+
+    for (size_t t = 0u; t < b->doc_seen_touched_count; t++) {
+        b->doc_seen[b->doc_seen_touched[t]] = 0u;
+    }
+    b->doc_seen_touched_count = 0u;
+    b->bytes_indexed += text_len;
+
+    return KEYSTONE_TRIGRAM_OK;
+}
+
+static int ks_merge_local_builders(
+    keystone_trigram_index_t* idx,
+    ks_local_builder_t* builders,
+    size_t thread_count
+) {
+    if (!idx || !builders || thread_count == 0u) return KEYSTONE_TRIGRAM_EINVAL;
+
+    /* Pass 1: Global Frequencies & Table Sizing */
+    size_t total_postings = 0u;
+
+    for (size_t t = 0u; t < thread_count; t++) {
+        ks_local_builder_t* b = &builders[t];
+        idx->stats.bytes_indexed += b->bytes_indexed;
+
+        for (size_t k = 0u; k < b->num_buckets; k++) {
+            if (b->bucket_keys[k] == TRIGRAM_KEY_EMPTY) continue;
+            uint32_t key = b->bucket_keys[k];
+            size_t local_count = b->bucket_lists[k].count;
+            if (local_count == 0u) continue;
+
+            keystone_trigram_posting_list_t* gplist = find_or_create_posting_list(idx, key);
+            if (!gplist) return poison_index(idx, KEYSTONE_TRIGRAM_ENOMEM);
+            gplist->count += local_count;
+            total_postings += local_count;
+        }
+    }
+
+    if (total_postings == 0u) {
+        idx->is_finalized = true;
+        return KEYSTONE_TRIGRAM_OK;
+    }
+
+    /* Allocate single contiguous flat_postings pool */
+    uint32_t* flat = (uint32_t*)malloc(total_postings * sizeof(uint32_t));
+    if (!flat) return poison_index(idx, KEYSTONE_TRIGRAM_ENOMEM);
+
+    size_t offset = 0u;
+    for (size_t i = 0u; i < idx->num_buckets; i++) {
+        if (idx->bucket_keys[i] == TRIGRAM_KEY_EMPTY) continue;
+        keystone_trigram_posting_list_t* plist = &idx->bucket_lists[i];
+        if (plist->count == 0u) continue;
+
+        plist->doc_ids = flat + offset;
+        plist->capacity = plist->count;
+        offset += plist->count;
+    }
+    idx->flat_postings = flat;
+    idx->total_postings = total_postings;
+
+    /* Destroy the global ingestion chunk arena */
+    keystone_arena_destroy(&idx->arena);
+
+    /* Allocate 64 MiB direct directory if requested */
+    if ((idx->flags & KEYSTONE_TRIGRAM_OPT_DIRECT_DIRECTORY) && !idx->direct_dir) {
+        idx->direct_dir = (uint32_t*)calloc(16777216u, sizeof(uint32_t));
+        if (!idx->direct_dir) {
+            free(flat);
+            idx->flat_postings = NULL;
+            return poison_index(idx, KEYSTONE_TRIGRAM_ENOMEM);
+        }
+    }
+
+    /* Pass 2: Parallel Copy and Direct Directory / Dense Bitmap Generation */
+    size_t dense_threshold = idx->doc_count / 32u;
+    if (dense_threshold < 64u) dense_threshold = 64u;
+
+#if defined(_OPENMP)
+    #pragma omp parallel for schedule(dynamic, 256)
+#endif
+    for (size_t i = 0u; i < idx->num_buckets; i++) {
+        if (idx->bucket_keys[i] == TRIGRAM_KEY_EMPTY) continue;
+        uint32_t key = idx->bucket_keys[i];
+        keystone_trigram_posting_list_t* plist = &idx->bucket_lists[i];
+        if (plist->count == 0u || !plist->doc_ids) continue;
+
+        uint32_t* write_ptr = plist->doc_ids;
+
+        for (size_t t = 0u; t < thread_count; t++) {
+            ks_local_builder_t* b = &builders[t];
+            size_t mask = b->num_buckets - 1u;
+            size_t bidx = (size_t)(((uint64_t)key * 11400714819323198485ULL) >> 32) & mask;
+            while (b->bucket_keys[bidx] != TRIGRAM_KEY_EMPTY && b->bucket_keys[bidx] != key) {
+                bidx = (bidx + 1u) & mask;
+            }
+            if (b->bucket_keys[bidx] == key) {
+                keystone_trigram_posting_list_t* lplist = &b->bucket_lists[bidx];
+                for (keystone_posting_chunk_t* ch = lplist->head_chunk; ch; ch = ch->next) {
+                    if (ch->count > 0u) {
+                        memcpy(write_ptr, ch->doc_ids, ch->count * sizeof(uint32_t));
+                        write_ptr += ch->count;
+                    }
+                }
+            }
+        }
+
+        /* Direct 24-bit directory registration */
+        if (idx->direct_dir) {
+            idx->direct_dir[key & 0x00FFFFFFu] = (uint32_t)(i + 1u);
+        }
+
+        /* Dense posting bitmap conversion */
+        if (idx->doc_count >= 64u && plist->count >= dense_threshold) {
+            size_t num_words = (idx->doc_count + 63u) / 64u;
+            uint64_t* bm = (uint64_t*)calloc(num_words, sizeof(uint64_t));
+            if (bm) {
+                for (size_t k = 0u; k < plist->count; k++) {
+                    uint32_t did = plist->doc_ids[k];
+                    if (did < idx->doc_count) {
+                        bm[did >> 6u] |= (UINT64_C(1) << (did & 63u));
+                    }
+                }
+                plist->bitmap = bm;
+            }
+        }
+    }
+
+    /* Free build-only dedup memory in idx */
+    if (idx->doc_seen) {
+        free(idx->doc_seen);
+        idx->doc_seen = NULL;
+    }
+    if (idx->doc_seen_touched) {
+        free(idx->doc_seen_touched);
+        idx->doc_seen_touched = NULL;
+        idx->doc_seen_touched_count = 0u;
+        idx->doc_seen_touched_cap = 0u;
+    }
+
+    idx->is_finalized = true;
+    idx->stats.unique_trigrams = idx->unique_trigrams;
+    idx->stats.total_postings = idx->total_postings;
+    return KEYSTONE_TRIGRAM_OK;
+}
+
+int keystone_trigram_index_build_parallel(
+    keystone_trigram_index_t* idx,
+    const keystone_input_document_t* docs,
+    size_t doc_count,
+    unsigned thread_count
+) {
+    if (!idx || (!docs && doc_count != 0u)) {
+        return KEYSTONE_TRIGRAM_EINVAL;
+    }
+    if (idx->failed) return idx->failure_code ? idx->failure_code : KEYSTONE_TRIGRAM_ESTATE;
+    if (idx->is_finalized) return KEYSTONE_TRIGRAM_ESTATE;
+    if (doc_count == 0u) {
+        return keystone_trigram_index_finalize(idx);
+    }
+
+    if (thread_count == 0u) {
+#if defined(_OPENMP)
+        thread_count = (unsigned)omp_get_max_threads();
+#else
+        thread_count = 1u;
+#endif
+    }
+    if (thread_count > 64u) thread_count = 64u;
+    if (thread_count > doc_count) thread_count = (unsigned)doc_count;
+
+    /* Pre-allocate doc array */
+    size_t start_doc_id = idx->doc_count;
+    size_t total_docs = start_doc_id + doc_count;
+    if (total_docs > (size_t)UINT32_MAX || total_docs > max_document_count()) {
+        return poison_index(idx, KEYSTONE_TRIGRAM_EOVERFLOW);
+    }
+
+    while (idx->doc_capacity < total_docs) {
+        int rc = ensure_doc_capacity(idx);
+        if (rc != KEYSTONE_TRIGRAM_OK) return rc;
+    }
+
+    bool fold = (idx->flags & KEYSTONE_TRIGRAM_OPT_CASE_INSENSITIVE) != 0;
+
+    ks_local_builder_t* builders =
+        (ks_local_builder_t*)calloc(thread_count, sizeof(ks_local_builder_t));
+    if (!builders) return poison_index(idx, KEYSTONE_TRIGRAM_ENOMEM);
+
+    int failed = 0;
+
+#if defined(_OPENMP)
+    #pragma omp parallel num_threads(thread_count) shared(failed)
+#endif
+    {
+        unsigned tid = 0u;
+        unsigned nth = 1u;
+#if defined(_OPENMP)
+        tid = (unsigned)omp_get_thread_num();
+        nth = (unsigned)omp_get_num_threads();
+#endif
+        size_t begin = (doc_count * tid) / nth;
+        size_t end = (doc_count * (tid + 1u)) / nth;
+
+        uint32_t local_first_id = (uint32_t)(start_doc_id + begin);
+        uint32_t local_count = (uint32_t)(end - begin);
+
+        if (ks_local_builder_init(&builders[tid], local_first_id, local_count) != KEYSTONE_TRIGRAM_OK) {
+#if defined(_OPENMP)
+            #pragma omp atomic write
+#endif
+            failed = 1;
+        }
+
+#if defined(_OPENMP)
+        #pragma omp barrier
+#endif
+        if (!failed) {
+            for (size_t i = begin; i < end; i++) {
+                uint32_t doc_id = (uint32_t)(start_doc_id + i);
+                const keystone_input_document_t* idoc = &docs[i];
+
+                /* Setup document record */
+                keystone_trigram_doc_t* drecord = &idx->docs[doc_id];
+                drecord->id = doc_id;
+                drecord->name = idoc->name ? duplicate_c_string(idoc->name) : NULL;
+                drecord->content = (idoc->owns_content && idoc->text) ?
+                    duplicate_content(idoc->text, idoc->text_len) : NULL;
+                drecord->content_len = idoc->text_len;
+                drecord->owns_content = (idoc->owns_content && idoc->text) ? true : false;
+
+                if (ks_local_builder_add_doc(&builders[tid], doc_id, idoc->text, idoc->text_len, fold) != KEYSTONE_TRIGRAM_OK) {
+#if defined(_OPENMP)
+                    #pragma omp atomic write
+#endif
+                    failed = 1;
+                    break;
+                }
+            }
+        }
+    }
+
+    if (failed) {
+        for (unsigned t = 0u; t < thread_count; t++) {
+            ks_local_builder_destroy(&builders[t]);
+        }
+        free(builders);
+        return poison_index(idx, KEYSTONE_TRIGRAM_ENOMEM);
+    }
+
+    idx->doc_count = total_docs;
+
+    int rc = ks_merge_local_builders(idx, builders, thread_count);
+
+    for (unsigned t = 0u; t < thread_count; t++) {
+        ks_local_builder_destroy(&builders[t]);
+    }
+    free(builders);
+
+    return rc;
 }

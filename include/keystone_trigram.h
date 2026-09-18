@@ -141,6 +141,40 @@ int keystone_trigram_index_add_document_external(
 );
 
 /**
+ * @brief Representation of an input document for batch and parallel indexing.
+ */
+typedef struct keystone_input_document {
+    const char* name;      /**< Document name or path (optional, can be NULL) */
+    const char* text;      /**< Document content buffer */
+    size_t text_len;       /**< Length of text content in bytes */
+    int owns_content;      /**< 1 to retain content copy, 0 for candidate-only external */
+} keystone_input_document_t;
+
+/**
+ * @brief Build trigram index across multiple documents in parallel using OpenMP.
+ *
+ * Slices doc_count across worker threads with contiguous document ranges [begin, end).
+ * Each worker operates on an independent thread-local builder with its own bump-allocated
+ * chunk arena and dedup tracking, achieving zero lock contention during ingestion.
+ * A two-pass lock-free merge aggregates global trigram frequencies and parallel-copies
+ * worker postings in document order directly into contiguous flat_postings.
+ *
+ * Upon success, the index is automatically finalized and ready for queries.
+ *
+ * @param idx Trigram index (must be unfinalized).
+ * @param docs Array of input documents.
+ * @param doc_count Number of documents.
+ * @param thread_count Number of worker threads (0 for omp_get_max_threads()).
+ * @return KEYSTONE_TRIGRAM_OK on success, negative error code on failure.
+ */
+int keystone_trigram_index_build_parallel(
+    keystone_trigram_index_t* idx,
+    const keystone_input_document_t* docs,
+    size_t doc_count,
+    unsigned thread_count
+);
+
+/**
  * @brief Finalize the index for querying.
  *
  * Finalization fails if any prior document insertion encountered an allocation
