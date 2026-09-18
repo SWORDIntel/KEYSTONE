@@ -126,7 +126,7 @@ keystone_error_t keystone_lsh_create(keystone_lsh_index_t **idx,
         tbl->bucket_offsets = (uint32_t *)malloc(tbl->bucket_capacity * sizeof(uint32_t));
         tbl->bucket_counts = (uint32_t *)malloc(tbl->bucket_capacity * sizeof(uint32_t));
         /* Indices array: starts at 64K entries, grows with need */
-        tbl->indices = (uint32_t *)malloc(65536 * sizeof(uint32_t));
+        tbl->indices = (uint32_t *)calloc(65536, sizeof(uint32_t));
         if (!tbl->bucket_keys || !tbl->bucket_offsets || !tbl->bucket_counts || !tbl->indices) {
             keystone_lsh_destroy(lsh);
             return KEYSTONE_ERR_OOM;

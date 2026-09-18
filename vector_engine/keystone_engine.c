@@ -396,15 +396,20 @@ keystone_error_t keystone_vec_engine_create(const keystone_config_t *cfg,
     e->ids_sorted = 0;
     e->lsh_finalized = 0;
 
-    /* Create LSH index */
-    uint32_t num_tables = cfg->lsh_num_tables > 0 ? cfg->lsh_num_tables : 8;
-    uint32_t hash_bits = cfg->lsh_hash_bits > 0 ? cfg->lsh_hash_bits : 12;
-    uint32_t probes = cfg->lsh_probes > 0 ? cfg->lsh_probes : 4;
+    /* Create LSH index if requested */
+    keystone_error_t rc;
+    if (cfg->lsh_num_tables > 0) {
+        uint32_t num_tables = cfg->lsh_num_tables;
+        uint32_t hash_bits = cfg->lsh_hash_bits > 0 ? cfg->lsh_hash_bits : 12;
+        uint32_t probes = cfg->lsh_probes > 0 ? cfg->lsh_probes : 4;
 
-    keystone_error_t rc = keystone_lsh_create(&e->lsh, e->dim, num_tables, hash_bits, probes);
-    if (rc != KEYSTONE_OK) {
-        VEC_FREE(e->vectors); free(e->ids); free(e->sorted_ids); free(e->sorted_indices); free(e);
-        return rc;
+        rc = keystone_lsh_create(&e->lsh, e->dim, num_tables, hash_bits, probes);
+        if (rc != KEYSTONE_OK) {
+            VEC_FREE(e->vectors); free(e->ids); free(e->sorted_ids); free(e->sorted_indices); free(e);
+            return rc;
+        }
+    } else {
+        e->lsh = NULL;
     }
 
     /* Select best available backend */
