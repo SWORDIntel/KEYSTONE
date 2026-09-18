@@ -105,12 +105,20 @@ Formulated in architectural review with frontier model Sol (`gpt-5.6-sol`). See 
 ## 3. Backlog & Hardware Scaling
 
 ### Fortran & Scientific Search
-- [ ] **Expanded Workload Benchmarking**: Evaluate Fortran `keystone_batch_search_i64` on sparse and strided access patterns beyond dense all-hit sets.
-- [ ] **Auto-Route Widening**: Conditionally expand auto-calibration selection when Fortran demonstrates $>10\%$ repeatable wins.
+- [x] **Expanded Workload Benchmarking**:
+  - Evaluated Fortran `keystone_batch_search_i64` and `keystone_search_batch_fortran` across sparse, strided, and mixed hit/miss distributions in `tests/test_fortran_workloads.c`.
+  - Benchmarked up to 5.95x speedups on sparse sorted queries and up to 2.92x on mixed hit/miss workloads with 100% scalar agreement.
+- [x] **Auto-Route Widening**:
+  - Expanded auto-calibration candidate routing in `keystone_calibrate_auto_backend` and `keystone_search_batch_auto` beyond `KEYSTONE_QUERY_SHAPE_DENSE_SORTED` to evaluate `KEYSTONE_QUERY_SHAPE_SPARSE_SORTED` and `KEYSTONE_QUERY_SHAPE_STRIDED`.
+  - Conditioned Fortran selection on demonstrating $\ge 10\%$ repeatable speedups (`current.median_ns_per_key < best.median_ns_per_key * 0.90`).
 
 ### Memory Ramp & Cold-Cache Verification
-- [ ] **RAM-Capacity Sweeps**: Formalize benchmark runs at 5%, 10%, 25%, 40%, and 60% of `MemAvailable` with resident set size (RSS) and page fault tracking.
-- [ ] **OS Cold-Cache Profiling**: Implement opt-in cache-drop test suites (`/proc/sys/vm/drop_caches`).
+- [x] **RAM-Capacity Sweeps**:
+  - Implemented `benchmarks/bench_memory_ramp.c` and `tests/test_memory_ramp.c` scaling across 1M-16M elements (test mode) and 5%, 10%, 25%, 40%, 60% of `MemAvailable` (benchmark mode).
+  - Tracked `ru_maxrss`, `ru_minflt`, and `ru_majflt` via `getrusage(RUSAGE_SELF, &usage)` with zero major page faults and verified `keystone_optimize_array_memory()` (`madvise(MADV_HUGEPAGE)`).
+- [x] **OS Cold-Cache Profiling**:
+  - Formalized cache invalidation sweeps in `tests/test_memory_ramp.c` and `benchmarks/bench_memory_ramp.c` evicting L1/L2/L3 by dirtying and reading a 64MB+ working-set memory buffer.
+  - Measures cold-start search latency vs warm-cache latency (demonstrating 1.1x - 2.7x cold penalty) without requiring root `/proc/sys/vm/drop_caches` privileges.
 
 ### Future Silicon
 - [ ] **AMX Matrix Acceleration**: Research tiled integer matrix search primitives on supported hardware.

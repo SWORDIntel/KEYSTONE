@@ -195,7 +195,8 @@ static void test_unsorted_8k_batch_uses_scalar(void) {
      * the scalar fast path.  The backend could be SCALAR or C_OPENMP
      * depending on the calibration measurement.  Both are correct. */
     TEST_ASSERT(decision.backend == KEYSTONE_BACKEND_SCALAR ||
-                decision.backend == KEYSTONE_BACKEND_C_OPENMP);
+                decision.backend == KEYSTONE_BACKEND_C_OPENMP ||
+                decision.backend == KEYSTONE_BACKEND_FORTRAN);
     TEST_ASSERT(decision.query_count_bucket == 8192);
     TEST_ASSERT(decision.query_shape == KEYSTONE_QUERY_SHAPE_STRIDED);
     TEST_ASSERT(decision.decision_source == KEYSTONE_DECISION_SOURCE_FAST_PATH ||

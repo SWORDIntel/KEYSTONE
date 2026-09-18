@@ -17,6 +17,7 @@ include/keystone/
 benchmarks/dsmil_benchmark
 benchmarks/performance_proof
 benchmarks/trigram_benchmark
+benchmarks/bench_memory_ramp
 
 # Benchmark results & generated artifacts
 benchmark_comparison.png

@@ -2098,7 +2098,11 @@ static keystone_backend_measurement_t keystone_calibrate_auto_backend(
     current.calibration_runs = 0;
     current.candidates_measured = 0;
 
-    if (query_shape == KEYSTONE_QUERY_SHAPE_DENSE_SORTED &&
+    const int fortran_candidate = (query_shape == KEYSTONE_QUERY_SHAPE_DENSE_SORTED ||
+                                   query_shape == KEYSTONE_QUERY_SHAPE_SPARSE_SORTED ||
+                                   query_shape == KEYSTONE_QUERY_SHAPE_STRIDED);
+
+    if (fortran_candidate &&
         keystone_fortran_backend_available() &&
         keystone_measure_auto_backend(
             KEYSTONE_BACKEND_FORTRAN,
@@ -2110,7 +2114,7 @@ static keystone_backend_measurement_t keystone_calibrate_auto_backend(
             config,
             best.found,
             &current) &&
-        current.median_ns_per_key < best.median_ns_per_key) {
+        current.median_ns_per_key < best.median_ns_per_key * 0.90) {
         current.candidates_measured += best.candidates_measured;
         current.calibration_runs += best.calibration_runs;
         best = current;
@@ -2143,8 +2147,11 @@ size_t keystone_search_batch_auto(const int64_t* arr,
     const keystone_query_profile_t profile =
         keystone_detect_auto_query_profile(arr, n, items, num_items);
     const int query_shape = profile.query_shape;
+    const int fortran_candidate = (query_shape == KEYSTONE_QUERY_SHAPE_DENSE_SORTED ||
+                                   query_shape == KEYSTONE_QUERY_SHAPE_SPARSE_SORTED ||
+                                   query_shape == KEYSTONE_QUERY_SHAPE_STRIDED);
 
-    if (!(query_shape == KEYSTONE_QUERY_SHAPE_DENSE_SORTED && num_items >= KEYSTONE_AUTO_FORTRAN_MIN_ITEMS) &&
+    if (!(fortran_candidate && num_items >= KEYSTONE_AUTO_FORTRAN_MIN_ITEMS) &&
         keystone_auto_scalar_fast_path(num_items, config, thread_count)) {
         const uint64_t start_ns = keystone_now_ns();
         const size_t found =
@@ -2639,13 +2646,13 @@ int keystone_optimize_array_memory(int64_t* arr, size_t n) {
      */
     if (array_size >= 1024 * 1024) {
         /* Force huge pages if possible */
-        madvise(arr, array_size, MADV_HUGEPAGE);
+        if (madvise(arr, array_size, MADV_HUGEPAGE) != 0) {
+            return -1;
+        }
         /* Tell kernel we will scan this linearly (optimized read-ahead) */
         madvise(arr, array_size, MADV_SEQUENTIAL);
-        /* Lock pages in RAM to prevent swapping during tight search loops */
-        if (mlock(arr, array_size) != 0) {
-            return -1; /* Caller lacks CAP_IPC_LOCK or memory limit exceeded */
-        }
+        /* Lock pages in RAM if permitted (best-effort; non-root often lacks CAP_IPC_LOCK) */
+        (void)mlock(arr, array_size);
     }
 
     return 0;

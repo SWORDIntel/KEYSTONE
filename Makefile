@@ -112,10 +112,12 @@ OBJS    := $(SRC:.c=.o)
 TEST_SRC := tests/test_core_native.c tests/test_auto_backend.c \
             tests/test_fortran_backend.c tests/test_telemetry_processor_perf.c \
             tests/dsmil_integration_test.c tests/test_performance_fix.c \
-            tests/test_trigram_index.c
+            tests/test_trigram_index.c tests/test_fortran_workloads.c \
+            tests/test_memory_ramp.c
 TEST_BIN := bin/test_enhanced bin/test_auto_backend bin/test_fortran_backend \
             bin/test_telemetry_processor_perf bin/test_performance_fix \
-            bin/test_core_native bin/test_trigram_index
+            bin/test_core_native bin/test_trigram_index \
+            bin/test_fortran_workloads bin/test_memory_ramp
 
 ifeq ($(KEYSTONE_ENABLE_TAR_ZST),1)
 SRC     += src/keystone_tar_zst.c
@@ -131,8 +133,10 @@ TEST_BIN += bin/test_keystone_fabric
 
 OBJS    := $(SRC:.c=.o)
 
-BENCH_SRC := benchmarks/dsmil_benchmark.c benchmarks/performance_proof.c benchmarks/trigram_benchmark.c
-BENCH_BIN := benchmarks/dsmil_benchmark benchmarks/performance_proof benchmarks/trigram_benchmark
+BENCH_SRC := benchmarks/dsmil_benchmark.c benchmarks/performance_proof.c benchmarks/trigram_benchmark.c \
+             benchmarks/bench_memory_ramp.c
+BENCH_BIN := benchmarks/dsmil_benchmark benchmarks/performance_proof benchmarks/trigram_benchmark \
+             benchmarks/bench_memory_ramp
 
 .PHONY: all lib tests test check run-tests benchmarks clean tgrep
 
@@ -215,6 +219,12 @@ bin/test_tar_zst: $(OBJS) $(FORTRAN_OBJ) tests/test_tar_zst.o | bin
 bin/test_keystone_fabric: $(OBJS) $(FORTRAN_OBJ) tests/test_keystone_fabric.o | bin
 	$(CC) -o $@ $^ $(LDFLAGS)
 
+bin/test_fortran_workloads: $(OBJS) $(FORTRAN_OBJ) tests/test_fortran_workloads.o | bin
+	$(CC) -o $@ $^ $(LDFLAGS)
+
+bin/test_memory_ramp: $(OBJS) $(FORTRAN_OBJ) tests/test_memory_ramp.o | bin
+	$(CC) -o $@ $^ $(LDFLAGS)
+
 # Benchmark binaries
 benchmarks/dsmil_benchmark: $(OBJS) $(FORTRAN_OBJ) benchmarks/dsmil_benchmark.o benchmarks/benchmark_writer.o
 	$(CC) -o $@ $^ $(LDFLAGS)
@@ -223,6 +233,9 @@ benchmarks/performance_proof: $(OBJS) $(FORTRAN_OBJ) benchmarks/performance_proo
 	$(CC) -o $@ $^ $(LDFLAGS)
 
 benchmarks/trigram_benchmark: $(OBJS) $(FORTRAN_OBJ) benchmarks/trigram_benchmark.o
+	$(CC) -o $@ $^ $(LDFLAGS)
+
+benchmarks/bench_memory_ramp: $(OBJS) $(FORTRAN_OBJ) benchmarks/bench_memory_ramp.o benchmarks/benchmark_writer.o
 	$(CC) -o $@ $^ $(LDFLAGS)
 
 # Standalone CLI tools
@@ -265,7 +278,7 @@ libkeystone.so $(TEST_BIN) $(BENCH_BIN) bin/tgrep: cuda/libkeystone_cuda.so | bi
 endif
 
 clean:
-	rm -f $(OBJS) tests/*.o benchmarks/*.o libkeystone.so
+	rm -f $(OBJS) tests/*.o benchmarks/*.o libkeystone.so $(BENCH_BIN)
 	rm -rf bin
 	rm -f scripts/compare_search_auto
 	rm -f fortran/keystone_batch.o fortran/*.mod fortran/libkeystone_batch.so
