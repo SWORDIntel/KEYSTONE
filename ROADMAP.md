@@ -46,22 +46,23 @@ Independent repository (`SWORDIntel/KEYSTONE`), tracked as a core dependency in 
 
 Formulated in architectural review with frontier model Sol (`gpt-5.6-sol`). See complete review in [`docs/sol_trigram_review.md`](docs/sol_trigram_review.md).
 
-### Phase 1: Immediate Wins (Hot-Path Corrections & SIMD Intersection)
-- [ ] **Fix Case-Insensitive Iterator Folding**:
-  - Correct bug where candidate iterator (`keystone_trigram_search_candidates`) called public `keystone_trigram_extract()`, which did not fold query characters while ingestion did.
-- [ ] **Monotonic Galloping Lower-Bound Search**:
-  - Replace scalar $O(N \cdot M \log K)$ `bsearch()` in candidate iterator with monotonic lower-bound galloping search (`ks_lower_bound_gallop_u32`), eliminating $O(N)$ restarts from position 0.
-- [ ] **Eliminate Per-Query `doc_count` Heap Allocation**:
-  - Replace `malloc(doc_count * sizeof(uint32_t))` on every query with caller-owned / thread-local ping-pong workspace buffers sized to $\min(\text{rarest\_count}, \text{max\_candidates})$.
-  - Provide batched candidate verification (`KS_VERIFY_BATCH = 1024`).
-- [ ] **Adaptive Sparse Posting Intersection**:
-  - Implement `ks_intersect_many_u32`:
-    - Skewed lists ($\ge 16\times$ ratio): Galloping search ($O(\min(N_A, N_B) \log(N_A / N_B))$).
-    - Balanced lists: Blocked AVX2 merge using 8-way broadcasts and `_mm256_cmpeq_epi32` (or AVX-512 `_mm512_cmpeq_epu32_mask`).
-- [ ] **Query Planner Rarity Pruning**:
-  - Extract unique query trigrams, look up frequencies in index, and retain only the 8–16 rarest trigrams. Avoid evaluating non-discriminating lists when candidate count is already tiny.
-- [ ] **Free Ingestion-Only State at Finalize**:
-  - Release document deduplication bitsets and intermediate build tables once `keystone_trigram_finalize()` completes.
+### Phase 1: Immediate Wins (Hot-Path Corrections & SIMD Intersection) — COMPLETED
+- [x] **Fix Case-Insensitive Iterator Folding**:
+  - Corrected bug where candidate iterator (`keystone_trigram_candidates_begin`) called public `keystone_trigram_extract()`, which did not fold query characters while ingestion did.
+- [x] **Monotonic Galloping Lower-Bound Search**:
+  - Replaced scalar $O(N \cdot M \log K)$ `bsearch()` in candidate iterator with monotonic lower-bound galloping search (`ks_lower_bound_gallop_u32`), eliminating $O(N)$ restarts from position 0.
+- [x] **Eliminate Per-Query `doc_count` Heap Allocation**:
+  - Replaced `malloc(doc_count * sizeof(uint32_t))` on every query with stack-first bounded workspace buffers sized to $\min(\text{rarest\_count}, \text{max\_candidates})$.
+  - Direct zero-allocation scan for queries $< 3$ bytes.
+- [x] **Adaptive Sparse Posting Intersection**:
+  - Implemented `ks_intersect_u32_adaptive`:
+    - Skewed lists ($\ge 16\times$ ratio): Monotonic galloping search ($O(\min(N_A, N_B) \log(N_A / N_B))$).
+    - Balanced lists: Blocked AVX2 merge using 8-way broadcasts and `_mm256_cmpeq_epi32`.
+    - Single list fast-path: direct `memcpy`.
+- [x] **Query Planner Rarity Pruning**:
+  - Extract unique query trigrams, look up frequencies in index, and retain only the rarest 16 trigrams. Avoid evaluating non-discriminating lists when candidate count is already tiny.
+- [x] **Free Ingestion-Only State at Finalize**:
+  - Released 2MB document deduplication bitmap (`doc_seen`) and touched tracking buffer at `keystone_trigram_index_finalize()`.
 - [ ] **Standardized Fast ASCII Folding**:
   - Unify ASCII folding across ingestion, query planning, and candidate verification using lookup table or branchless bitwise operations (`c | 0x20`).
 

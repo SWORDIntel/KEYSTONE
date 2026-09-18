@@ -270,6 +270,65 @@ static void test_dsmil_wrapper_tar_zst_trigram(void) {
 }
 #endif
 
+static void test_candidate_iterator_case_folding_and_galloping(void) {
+    printf("Testing candidate iterator case folding and galloping search...\n");
+    keystone_trigram_index_t* idx = keystone_trigram_index_create_options(8, KEYSTONE_TRIGRAM_OPT_CASE_INSENSITIVE);
+    TEST_ASSERT(idx != NULL);
+
+    const char* doc0 = "kernel module privilege escalation";
+    const char* doc1 = "network packet manipulation and spoofing";
+    const char* doc2 = "kernel memory corruption vulnerability";
+    const char* doc3 = "application privilege drop failure";
+    const char* doc4 = "kernel livepatch injection";
+
+    TEST_ASSERT(keystone_trigram_index_add_document(idx, "d0", doc0, strlen(doc0), NULL) == KEYSTONE_TRIGRAM_OK);
+    TEST_ASSERT(keystone_trigram_index_add_document(idx, "d1", doc1, strlen(doc1), NULL) == KEYSTONE_TRIGRAM_OK);
+    TEST_ASSERT(keystone_trigram_index_add_document(idx, "d2", doc2, strlen(doc2), NULL) == KEYSTONE_TRIGRAM_OK);
+    TEST_ASSERT(keystone_trigram_index_add_document(idx, "d3", doc3, strlen(doc3), NULL) == KEYSTONE_TRIGRAM_OK);
+    TEST_ASSERT(keystone_trigram_index_add_document(idx, "d4", doc4, strlen(doc4), NULL) == KEYSTONE_TRIGRAM_OK);
+    TEST_ASSERT(keystone_trigram_index_finalize(idx) == KEYSTONE_TRIGRAM_OK);
+
+    /* Test 1: Uppercase query on case-insensitive index with candidate iterator.
+     * Prior to the fix, candidate iterator called unfolded extract, causing false negative. */
+    keystone_trigram_candidate_iter_t* iter = keystone_trigram_candidates_begin(idx, "KERNEL", 6);
+    TEST_ASSERT(iter != NULL);
+
+    uint32_t buf[2];
+    size_t count = 0;
+    int exhausted = 0;
+
+    /* Batch 1: first 2 matching docs (0 and 2) */
+    TEST_ASSERT(keystone_trigram_candidates_next(iter, buf, 2, &count, &exhausted) == KEYSTONE_TRIGRAM_OK);
+    TEST_ASSERT(count == 2);
+    TEST_ASSERT(buf[0] == 0 && buf[1] == 2);
+    TEST_ASSERT(exhausted == 0);
+
+    /* Batch 2: next matching doc (4) and exhausted */
+    TEST_ASSERT(keystone_trigram_candidates_next(iter, buf, 2, &count, &exhausted) == KEYSTONE_TRIGRAM_OK);
+    TEST_ASSERT(count == 1);
+    TEST_ASSERT(buf[0] == 4);
+    TEST_ASSERT(exhausted == 1);
+
+    keystone_trigram_candidates_free(iter);
+
+    /* Test 2: Non-existent term returns empty result cleanly without crashing */
+    keystone_trigram_candidate_iter_t* empty_iter = keystone_trigram_candidates_begin(idx, "XYZ123NOTTHERE", 14);
+    TEST_ASSERT(empty_iter != NULL);
+    TEST_ASSERT(keystone_trigram_candidates_next(empty_iter, buf, 2, &count, &exhausted) == KEYSTONE_TRIGRAM_OK);
+    TEST_ASSERT(count == 0);
+    TEST_ASSERT(exhausted == 1);
+    keystone_trigram_candidates_free(empty_iter);
+
+    /* Test 3: Search with bounded allocation produces exact matches */
+    uint32_t search_matches[4];
+    size_t s_count = keystone_trigram_index_search(idx, "PRIVILEGE", 9, search_matches, 4);
+    TEST_ASSERT(s_count == 2);
+    TEST_ASSERT(search_matches[0] == 0 && search_matches[1] == 3);
+
+    keystone_trigram_index_destroy(idx);
+    printf("✓ Candidate iterator case folding and galloping search verified.\n");
+}
+
 int main(void) {
     printf("Running Trigram Index Test Suite\n");
     printf("===============================\n\n");
@@ -280,6 +339,7 @@ int main(void) {
     test_finalize_is_security_boundary();
     test_trigram_index_build_and_search();
     test_case_insensitive_search();
+    test_candidate_iterator_case_folding_and_galloping();
     test_binary_persistence();
 #ifdef KEYSTONE_ENABLE_TAR_ZST
     test_archive_streaming_trigram();

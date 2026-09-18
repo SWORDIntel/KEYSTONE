@@ -57,7 +57,7 @@ endif
 ifeq ($(KEYSTONE_ENABLE_CUDA),1)
     ifeq ($(shell command -v nvcc >/dev/null 2>&1 && echo yes),yes)
         CUDA_CFLAGS := -DKEYSTONE_ENABLE_CUDA
-        CUDA_LDFLAGS := -L./cuda -lkeystone_cuda -Wl,-rpath,'$$ORIGIN/cuda'
+        CUDA_LDFLAGS := -L./cuda -lkeystone_cuda -Wl,-rpath,'$$ORIGIN/cuda' -Wl,-rpath,'$$ORIGIN/../cuda'
         CFLAGS  += $(CUDA_CFLAGS)
         LDFLAGS += $(CUDA_LDFLAGS)
     else
@@ -66,7 +66,7 @@ ifeq ($(KEYSTONE_ENABLE_CUDA),1)
 else ifneq ($(KEYSTONE_ENABLE_CUDA),0)
     ifeq ($(shell command -v nvcc >/dev/null 2>&1 && echo yes),yes)
         CUDA_CFLAGS := -DKEYSTONE_ENABLE_CUDA
-        CUDA_LDFLAGS := -L./cuda -lkeystone_cuda -Wl,-rpath,'$$ORIGIN/cuda'
+        CUDA_LDFLAGS := -L./cuda -lkeystone_cuda -Wl,-rpath,'$$ORIGIN/cuda' -Wl,-rpath,'$$ORIGIN/../cuda'
         CFLAGS  += $(CUDA_CFLAGS)
         LDFLAGS += $(CUDA_LDFLAGS)
     endif
@@ -151,7 +151,7 @@ check: tests
 	@set -e; \
 	for test_bin in $(TEST_BIN); do \
 		echo "==> $$test_bin"; \
-		./$$test_bin; \
+		LD_LIBRARY_PATH=./cuda:$$LD_LIBRARY_PATH ./$$test_bin; \
 	done
 
 run-tests: check
@@ -235,7 +235,7 @@ CUDA_HOME ?= $(firstword $(wildcard /usr/local/cuda /usr/local/cuda-13.3 /opt/cu
 CUDA_INCLUDE ?= $(firstword $(wildcard $(CUDA_HOME)/targets/x86_64-linux/include $(CUDA_HOME)/include))
 cuda/libkeystone_cuda.so: cuda/keystone_cuda.cu
 	mkdir -p cuda
-	nvcc -O3 --std=c++17 -U_GNU_SOURCE -I$(CUDA_INCLUDE) --compiler-options '-fPIC' -shared $< -o $@
+	nvcc -O3 --std=c++17 -U_GNU_SOURCE $(if $(CUDA_INCLUDE),-I$(CUDA_INCLUDE)) --compiler-options '-fPIC' -shared $< -o $@
 
 CUDA_ENABLED := no
 ifeq ($(KEYSTONE_ENABLE_CUDA),1)

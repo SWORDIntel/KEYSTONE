@@ -19,7 +19,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR"
 
 CC=${CC:-cc}
-CFLAGS_BASE="${CFLAGS_BASE:--O2 -fPIC -std=c11 -Wall -Wextra}"
+CFLAGS_BASE="${CFLAGS_BASE:--O2 -fPIC -std=c11 -Wall -Wextra -I../include -I.}"
 OBJS=""
 HAVE_CUDA=0
 HAVE_VPU=0

@@ -7,6 +7,21 @@
 #include <ctype.h>
 #include <stdio.h>
 
+#if defined(__x86_64__) || defined(__i386__)
+#include <immintrin.h>
+#define KS_X86 1
+#else
+#define KS_X86 0
+#endif
+
+#if KS_X86 && (defined(__GNUC__) || defined(__clang__))
+#define KS_TARGET_AVX2      __attribute__((target("avx2")))
+#define KS_TARGET_AVX512F   __attribute__((target("avx512f")))
+#else
+#define KS_TARGET_AVX2
+#define KS_TARGET_AVX512F
+#endif
+
 /* SSE4.2 for SIMD-accelerated string scanning */
 #ifdef __SSE4_2__
 #include <nmmintrin.h>
@@ -711,6 +726,19 @@ int keystone_trigram_index_finalize(keystone_trigram_index_t* idx) {
     idx->stats.unique_trigrams = idx->unique_trigrams;
     idx->stats.total_postings = total_postings;
     idx->is_finalized = true;
+
+    /* Release build-only deduplication bitsets to reclaim memory */
+    if (idx->doc_seen) {
+        free(idx->doc_seen);
+        idx->doc_seen = NULL;
+    }
+    if (idx->doc_seen_touched) {
+        free(idx->doc_seen_touched);
+        idx->doc_seen_touched = NULL;
+    }
+    idx->doc_seen_touched_count = 0u;
+    idx->doc_seen_touched_cap = 0u;
+
     return KEYSTONE_TRIGRAM_OK;
 }
 
@@ -739,37 +767,208 @@ size_t keystone_trigram_index_document_count(const keystone_trigram_index_t* idx
     return idx ? idx->doc_count : 0u;
 }
 
-#ifdef __SSE4_2__
-/* Unsigned lower_bound over arr[pos..cnt) for target, four uint32s at a
- * time. Sign bits are flipped so the signed _mm_cmpgt_epi32 implements
- * an unsigned comparison. Returns the first index >= target and sets
- * *found if target is present at that index. */
-static inline size_t simd_lower_bound_u32(
-    const uint32_t* arr, size_t pos, size_t cnt, uint32_t target, int* found
+/*
+ * Monotonic lower_bound with exponential bracketing (galloping search).
+ * Successive probes advance from the previous position without restarting from 0.
+ */
+static size_t ks_lower_bound_gallop_u32(
+    const uint32_t *a, size_t n, size_t pos, uint32_t target
 ) {
-    const __m128i sign = _mm_set1_epi32((int)0x80000000u);
-    __m128i tgt = _mm_xor_si128(_mm_set1_epi32((int)target), sign);
-    size_t i = pos;
-    for (; i + 4u <= cnt; i += 4u) {
-        __m128i v = _mm_xor_si128(_mm_loadu_si128((const __m128i*)(arr + i)), sign);
-        __m128i eq = _mm_cmpeq_epi32(v, tgt);
-        __m128i ge = _mm_or_si128(eq, _mm_cmpgt_epi32(v, tgt));
-        unsigned int gm = (unsigned int)_mm_movemask_ps(_mm_castsi128_ps(ge));
-        if (gm) {
-            int bit = __builtin_ctz(gm);
-            unsigned int em = (unsigned int)_mm_movemask_ps(_mm_castsi128_ps(eq));
-            *found = (int)((em >> bit) & 1u);
-            return i + (size_t)bit;
+    if (pos >= n || a[pos] >= target) {
+        return pos;
+    }
+
+    size_t lo = pos + 1u;
+    size_t step = 1u;
+
+    while (lo < n) {
+        size_t probe;
+        if (step > n - lo) {
+            probe = n;
+        } else {
+            probe = lo + step;
+        }
+
+        if (probe == n || a[probe - 1u] >= target) {
+            size_t hi = probe;
+            while (lo < hi) {
+                size_t mid = lo + ((hi - lo) >> 1);
+                if (a[mid] < target) {
+                    lo = mid + 1u;
+                } else {
+                    hi = mid;
+                }
+            }
+            return lo;
+        }
+
+        lo = probe;
+        if (step > SIZE_MAX / 2u) {
+            step = n - lo;
+        } else {
+            step <<= 1;
         }
     }
-    for (; i < cnt; i++) {
-        if (arr[i] == target) { *found = 1; return i; }
-        if (arr[i] > target) { *found = 0; return i; }
+
+    return n;
+}
+
+static size_t ks_intersect_u32_scalar(
+    const uint32_t *a, size_t na,
+    const uint32_t *b, size_t nb,
+    uint32_t *out, size_t out_cap
+) {
+    size_t ia = 0u;
+    size_t ib = 0u;
+    size_t no = 0u;
+
+    while (ia < na && ib < nb && no < out_cap) {
+        uint32_t va = a[ia];
+        uint32_t vb = b[ib];
+
+        if (va == vb) {
+            out[no++] = va;
+            ia++;
+            ib++;
+        } else if (va < vb) {
+            ia++;
+        } else {
+            ib++;
+        }
     }
-    *found = 0;
-    return cnt;
+
+    return no;
+}
+
+static size_t ks_intersect_u32_galloping(
+    const uint32_t *a, size_t na,
+    const uint32_t *b, size_t nb,
+    uint32_t *out, size_t out_cap
+) {
+    const uint32_t *small = a;
+    const uint32_t *large = b;
+    size_t ns = na;
+    size_t nl = nb;
+
+    if (na > nb) {
+        small = b;
+        large = a;
+        ns = nb;
+        nl = na;
+    }
+
+    size_t lp = 0u;
+    size_t no = 0u;
+
+    for (size_t i = 0u; i < ns && lp < nl && no < out_cap; i++) {
+        uint32_t target = small[i];
+        lp = ks_lower_bound_gallop_u32(large, nl, lp, target);
+        if (lp == nl) break;
+
+        if (large[lp] == target) {
+            out[no++] = target;
+            lp++;
+        }
+    }
+
+    return no;
+}
+
+#if KS_X86
+KS_TARGET_AVX2
+static inline unsigned ks_match8_against_block_avx2(const uint32_t *source, __m256i other) {
+    unsigned hits = 0u;
+    for (unsigned lane = 0u; lane < 8u; lane++) {
+        __m256i x = _mm256_set1_epi32((int)source[lane]);
+        __m256i eq = _mm256_cmpeq_epi32(x, other);
+        if (_mm256_movemask_ps(_mm256_castsi256_ps(eq)) != 0) {
+            hits |= 1u << lane;
+        }
+    }
+    return hits;
+}
+
+KS_TARGET_AVX2
+static size_t ks_intersect_u32_avx2(
+    const uint32_t *a, size_t na,
+    const uint32_t *b, size_t nb,
+    uint32_t *out, size_t out_cap
+) {
+    size_t ia = 0u;
+    size_t ib = 0u;
+    size_t no = 0u;
+
+    while (ia + 8u <= na && ib + 8u <= nb && no < out_cap) {
+        if (a[ia + 7u] < b[ib]) {
+            ia += 8u;
+            continue;
+        }
+        if (b[ib + 7u] < a[ia]) {
+            ib += 8u;
+            continue;
+        }
+
+        uint32_t max_a = a[ia + 7u];
+        uint32_t max_b = b[ib + 7u];
+
+        if (max_a <= max_b) {
+            __m256i vb = _mm256_loadu_si256((const __m256i *)(const void *)(b + ib));
+            unsigned hits = ks_match8_against_block_avx2(a + ia, vb);
+
+            while (hits != 0u && no < out_cap) {
+                unsigned lane = (unsigned)__builtin_ctz(hits);
+                hits &= hits - 1u;
+                out[no++] = a[ia + lane];
+            }
+            ia += 8u;
+        } else {
+            __m256i va = _mm256_loadu_si256((const __m256i *)(const void *)(a + ia));
+            unsigned hits = ks_match8_against_block_avx2(b + ib, va);
+
+            while (hits != 0u && no < out_cap) {
+                unsigned lane = (unsigned)__builtin_ctz(hits);
+                hits &= hits - 1u;
+                out[no++] = b[ib + lane];
+            }
+            ib += 8u;
+        }
+    }
+
+    if (no < out_cap) {
+        no += ks_intersect_u32_scalar(
+            a + ia, na - ia, b + ib, nb - ib,
+            out + no, out_cap - no);
+    }
+
+    return no;
 }
 #endif
+
+static size_t ks_intersect_u32_adaptive(
+    const uint32_t *a, size_t na,
+    const uint32_t *b, size_t nb,
+    uint32_t *out, size_t out_cap
+) {
+    if (!a || !b || !out || out_cap == 0u || na == 0u || nb == 0u) {
+        return 0u;
+    }
+
+    size_t smaller = na < nb ? na : nb;
+    size_t larger = na < nb ? nb : na;
+
+    if (smaller == 0u || larger / smaller >= 16u) {
+        return ks_intersect_u32_galloping(a, na, b, nb, out, out_cap);
+    }
+
+#if KS_X86 && (defined(__GNUC__) || defined(__clang__))
+    __builtin_cpu_init();
+    if (__builtin_cpu_supports("avx2")) {
+        return ks_intersect_u32_avx2(a, na, b, nb, out, out_cap);
+    }
+#endif
+
+    return ks_intersect_u32_scalar(a, na, b, nb, out, out_cap);
+}
 
 size_t keystone_trigram_index_get_candidates(
     const keystone_trigram_index_t* idx,
@@ -804,6 +1003,7 @@ size_t keystone_trigram_index_get_candidates(
         lists[num_lists++] = plist;
     }
 
+    /* Sort by size (smallest first) */
     for (size_t i = 0u; i < num_lists; i++) {
         for (size_t j = i + 1u; j < num_lists; j++) {
             if (lists[j]->count < lists[i]->count) {
@@ -814,14 +1014,28 @@ size_t keystone_trigram_index_get_candidates(
         }
     }
 
-    /* Galloping intersection: for each doc_id in the smallest list,
-     * use exponential+binary search (galloping) to probe larger lists.
-     * This is O(n * log(m/n)) instead of O(n * log(m)) for plain bsearch,
-     * with a significant win when n << m (common for trigram queries). */
+    /* Prune to 16 rarest lists to minimize intersection work */
+    if (num_lists > 16u) {
+        num_lists = 16u;
+    }
+
+    if (num_lists == 1u) {
+        size_t count = lists[0]->count < max_candidates ? lists[0]->count : max_candidates;
+        memcpy(out_candidates, lists[0]->doc_ids, count * sizeof(uint32_t));
+        return count;
+    }
+
+    if (num_lists == 2u) {
+        return ks_intersect_u32_adaptive(
+            lists[0]->doc_ids, lists[0]->count,
+            lists[1]->doc_ids, lists[1]->count,
+            out_candidates, max_candidates
+        );
+    }
+
+    /* Galloping intersection across rarest lists */
     const keystone_trigram_posting_list_t* base = lists[0];
     size_t candidate_count = 0u;
-
-    /* Track search positions in each list for galloping advancement */
     size_t cursor[TRIGRAM_QUERY_MAX_UNIQUE];
     for (size_t l = 0u; l < num_lists; l++) cursor[l] = 0u;
 
@@ -831,62 +1045,15 @@ size_t keystone_trigram_index_get_candidates(
 
         for (size_t l = 1u; l < num_lists; l++) {
             const keystone_trigram_posting_list_t* plist = lists[l];
-            const uint32_t* arr = plist->doc_ids;
-            size_t cnt = plist->count;
-            size_t pos = cursor[l];
+            size_t pos = ks_lower_bound_gallop_u32(
+                plist->doc_ids, plist->count, cursor[l], doc_id);
 
-#ifdef __SSE4_2__
-            /* Small lists: a 4-way SIMD linear scan from the cursor beats
-             * the branchy gallop+binary search when the list is short. */
-            if (cnt < 64u) {
-                int found = 0;
-                size_t lo = simd_lower_bound_u32(arr, pos, cnt, doc_id, &found);
-                if (found) {
-                    cursor[l] = lo + 1u;
-                    continue;
-                }
-                cursor[l] = lo;
+            cursor[l] = pos;
+            if (pos == plist->count || plist->doc_ids[pos] != doc_id) {
                 in_all = false;
                 break;
             }
-#endif
-
-            /* Skip forward: if we've already passed this position, gallop */
-            if (pos < cnt && arr[pos] == doc_id) {
-                cursor[l] = pos + 1u;
-                continue;
-            }
-
-            /* Galloping search: exponential probe from cursor, then binary */
-            if (pos >= cnt || arr[pos] > doc_id) {
-                in_all = false;
-                break;
-            }
-
-            /* Exponential jump */
-            size_t jump = 1u;
-            size_t gallop_pos = pos;
-            while (gallop_pos + jump < cnt && arr[gallop_pos + jump] <= doc_id) {
-                gallop_pos += jump;
-                jump <<= 1;
-            }
-
-            /* Binary search in [gallop_pos, min(gallop_pos+jump, cnt)) */
-            size_t lo = gallop_pos;
-            size_t hi = (gallop_pos + jump < cnt) ? gallop_pos + jump : cnt;
-            while (lo < hi) {
-                size_t mid = lo + ((hi - lo) >> 1);
-                if (arr[mid] < doc_id) lo = mid + 1u;
-                else hi = mid;
-            }
-
-            if (lo < cnt && arr[lo] == doc_id) {
-                cursor[l] = lo + 1u;
-            } else {
-                cursor[l] = lo; /* save position for next gallop */
-                in_all = false;
-                break;
-            }
+            cursor[l] = pos + 1u;
         }
 
         if (in_all) {
@@ -1005,18 +1172,65 @@ size_t keystone_trigram_index_search(
     idx->stats.total_searches++;
     if (idx->doc_count == 0u) return 0u;
 
-    size_t candidate_bytes;
-    if (!checked_mul_size(idx->doc_count, sizeof(uint32_t), &candidate_bytes)) return 0u;
-    uint32_t* candidates = (uint32_t*)malloc(candidate_bytes);
-    if (!candidates) return 0u;
+    bool ci = (idx->flags & KEYSTONE_TRIGRAM_OPT_CASE_INSENSITIVE) != 0;
+
+    /* Patterns < 3 bytes: every document is a candidate. Directly scan docs without allocation. */
+    if (pattern_len < 3u) {
+        size_t matches = 0u;
+        idx->stats.candidate_docs_evaluated += idx->doc_count;
+        for (size_t doc_id = 0u; doc_id < idx->doc_count; doc_id++) {
+            keystone_trigram_doc_t* doc = &idx->docs[doc_id];
+            if (!doc->owns_content || !doc->content || doc->content_len < pattern_len) continue;
+
+            const void* found = ci ?
+                bounded_memmem_ci(doc->content, doc->content_len, pattern, pattern_len) :
+                bounded_memmem(doc->content, doc->content_len, pattern, pattern_len);
+            if (found) {
+                out_matches[matches++] = (uint32_t)doc_id;
+                if (matches >= max_matches) break;
+            }
+        }
+        return matches;
+    }
+
+    /* Extract trigrams and find rarest posting list to bound candidate allocation */
+    uint32_t query_trigrams[TRIGRAM_QUERY_MAX_UNIQUE];
+    size_t num_trigrams = keystone_trigram_extract_internal(
+        pattern, pattern_len, query_trigrams, TRIGRAM_QUERY_MAX_UNIQUE, ci);
+    if (num_trigrams == 0u) return 0u;
+
+    size_t rarest_count = SIZE_MAX;
+    for (size_t i = 0u; i < num_trigrams; i++) {
+        const keystone_trigram_posting_list_t* plist = get_posting_list(idx, query_trigrams[i]);
+        if (!plist || plist->count == 0u) {
+            idx->stats.candidate_docs_rejected += idx->doc_count;
+            return 0u;
+        }
+        if (plist->count < rarest_count) {
+            rarest_count = plist->count;
+        }
+    }
+
+    size_t max_cands = rarest_count < idx->doc_count ? rarest_count : idx->doc_count;
+    #define KS_STACK_CANDS_CAP 1024u
+    uint32_t stack_cands[KS_STACK_CANDS_CAP];
+    uint32_t* candidates = stack_cands;
+    bool heap_allocated = false;
+
+    if (max_cands > KS_STACK_CANDS_CAP) {
+        size_t candidate_bytes;
+        if (!checked_mul_size(max_cands, sizeof(uint32_t), &candidate_bytes)) return 0u;
+        candidates = (uint32_t*)malloc(candidate_bytes);
+        if (!candidates) return 0u;
+        heap_allocated = true;
+    }
 
     size_t num_candidates = keystone_trigram_index_get_candidates(
-        idx, pattern, pattern_len, candidates, idx->doc_count);
+        idx, pattern, pattern_len, candidates, max_cands);
 
     idx->stats.candidate_docs_evaluated += num_candidates;
-    idx->stats.candidate_docs_rejected += idx->doc_count - num_candidates;
+    idx->stats.candidate_docs_rejected += (idx->doc_count > num_candidates) ? (idx->doc_count - num_candidates) : 0u;
 
-    bool ci = (idx->flags & KEYSTONE_TRIGRAM_OPT_CASE_INSENSITIVE) != 0;
     size_t matches = 0u;
     for (size_t i = 0u; i < num_candidates; i++) {
         uint32_t doc_id = candidates[i];
@@ -1037,8 +1251,10 @@ size_t keystone_trigram_index_search(
         }
     }
 
-    secure_zero(candidates, candidate_bytes);
-    free(candidates);
+    if (heap_allocated) {
+        secure_zero(candidates, max_cands * sizeof(uint32_t));
+        free(candidates);
+    }
     return matches;
 }
 
@@ -1183,8 +1399,10 @@ size_t keystone_trigram_index_frequency(
 struct keystone_trigram_candidate_iter {
     const keystone_trigram_index_t* idx;
     const keystone_trigram_posting_list_t* lists[TRIGRAM_QUERY_MAX_UNIQUE];
+    size_t cursor[TRIGRAM_QUERY_MAX_UNIQUE];
     size_t num_lists;
     size_t base_pos;
+    bool empty_result;
 };
 
 keystone_trigram_candidate_iter_t* keystone_trigram_candidates_begin(
@@ -1205,15 +1423,22 @@ keystone_trigram_candidate_iter_t* keystone_trigram_candidates_begin(
         return iter;
     }
 
+    bool fold = (idx->flags & KEYSTONE_TRIGRAM_OPT_CASE_INSENSITIVE) != 0;
     uint32_t query_trigrams[TRIGRAM_QUERY_MAX_UNIQUE];
-    size_t num_trigrams = keystone_trigram_extract(
-        pattern, pattern_len, query_trigrams, TRIGRAM_QUERY_MAX_UNIQUE);
-    if (num_trigrams == 0u) { free(iter); return NULL; }
+    size_t num_trigrams = keystone_trigram_extract_internal(
+        pattern, pattern_len, query_trigrams, TRIGRAM_QUERY_MAX_UNIQUE, fold);
+    if (num_trigrams == 0u) {
+        iter->empty_result = true;
+        return iter;
+    }
 
     for (size_t i = 0u; i < num_trigrams; i++) {
         const keystone_trigram_posting_list_t* plist =
             get_posting_list(idx, query_trigrams[i]);
-        if (!plist || plist->count == 0u) { free(iter); return NULL; }
+        if (!plist || plist->count == 0u) {
+            iter->empty_result = true;
+            return iter;
+        }
         iter->lists[iter->num_lists++] = plist;
     }
 
@@ -1226,6 +1451,15 @@ keystone_trigram_candidate_iter_t* keystone_trigram_candidates_begin(
                 iter->lists[j] = tmp;
             }
         }
+    }
+
+    /* Prune to 16 rarest lists */
+    if (iter->num_lists > 16u) {
+        iter->num_lists = 16u;
+    }
+
+    for (size_t l = 0u; l < iter->num_lists; l++) {
+        iter->cursor[l] = 0u;
     }
 
     return iter;
@@ -1241,6 +1475,11 @@ int keystone_trigram_candidates_next(
     if (!iter || !out_buf || capacity == 0u) return KEYSTONE_TRIGRAM_EINVAL;
     if (out_count) *out_count = 0u;
     if (out_exhausted) *out_exhausted = 0u;
+
+    if (iter->empty_result) {
+        if (out_exhausted) *out_exhausted = 1;
+        return KEYSTONE_TRIGRAM_OK;
+    }
 
     /* No lists = pattern < 3 bytes = all docs are candidates */
     if (iter->num_lists == 0u) {
@@ -1260,17 +1499,22 @@ int keystone_trigram_candidates_next(
     size_t count = 0u;
 
     while (iter->base_pos < base->count && count < capacity) {
-        uint32_t doc_id = base->doc_ids[iter->base_pos];
+        uint32_t doc_id = base->doc_ids[iter->base_pos++];
         bool in_all = true;
+
         for (size_t l = 1u; l < iter->num_lists; l++) {
-            if (!bsearch(&doc_id, iter->lists[l]->doc_ids,
-                         iter->lists[l]->count, sizeof(uint32_t),
-                         compare_uint32)) {
+            const keystone_trigram_posting_list_t* pl = iter->lists[l];
+            size_t pos = ks_lower_bound_gallop_u32(
+                pl->doc_ids, pl->count, iter->cursor[l], doc_id);
+
+            iter->cursor[l] = pos;
+            if (pos == pl->count || pl->doc_ids[pos] != doc_id) {
                 in_all = false;
                 break;
             }
+            iter->cursor[l] = pos + 1u;
         }
-        iter->base_pos++;
+
         if (in_all) {
             out_buf[count++] = doc_id;
         }
