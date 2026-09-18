@@ -201,6 +201,27 @@ size_t keystone_trigram_extract(
 size_t keystone_trigram_index_document_count(const keystone_trigram_index_t* idx);
 
 /**
+ * @brief Retrieve document metadata and content pointer by document ID.
+ *
+ * Pointers returned remain valid until the index is destroyed.
+ * If owns_content was 0 during insertion, *out_content will be NULL.
+ *
+ * @param idx Trigram index.
+ * @param doc_id Document ID (0 <= doc_id < keystone_trigram_index_document_count(idx)).
+ * @param out_name Optional pointer to receive document name/path string.
+ * @param out_content Optional pointer to receive document content buffer.
+ * @param out_content_len Optional pointer to receive document content length in bytes.
+ * @return KEYSTONE_TRIGRAM_OK on success, KEYSTONE_TRIGRAM_EINVAL if invalid id or NULL idx.
+ */
+int keystone_trigram_index_get_document(
+    const keystone_trigram_index_t* idx,
+    uint32_t doc_id,
+    const char** out_name,
+    const char** out_content,
+    size_t* out_content_len
+);
+
+/**
  * @brief Intersect posting lists to return candidate document IDs.
  *
  * The index must be finalized and healthy. For patterns shorter than three

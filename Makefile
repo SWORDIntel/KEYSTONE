@@ -130,9 +130,11 @@ OBJS    := $(SRC:.c=.o)
 BENCH_SRC := benchmarks/dsmil_benchmark.c benchmarks/performance_proof.c benchmarks/trigram_benchmark.c
 BENCH_BIN := benchmarks/dsmil_benchmark benchmarks/performance_proof benchmarks/trigram_benchmark
 
-.PHONY: all lib tests test check run-tests benchmarks clean
+.PHONY: all lib tests test check run-tests benchmarks clean tgrep
 
-all: lib tests benchmarks
+all: lib tests benchmarks bin/tgrep
+
+tgrep: bin/tgrep
 
 lib: libkeystone.so
 
@@ -216,6 +218,10 @@ benchmarks/performance_proof: $(OBJS) $(FORTRAN_OBJ) benchmarks/performance_proo
 benchmarks/trigram_benchmark: $(OBJS) $(FORTRAN_OBJ) benchmarks/trigram_benchmark.o
 	$(CC) -o $@ $^ $(LDFLAGS)
 
+# Standalone CLI tools
+bin/tgrep: $(OBJS) $(FORTRAN_OBJ) src/tgrep.o | bin
+	$(CC) -o $@ $^ $(LDFLAGS)
+
 scripts/compare_search_auto: $(OBJS) $(FORTRAN_OBJ) scripts/compare_search.c
 	$(CC) $(CFLAGS) -DKEYSTONE_BENCH_AUTO=1 -c scripts/compare_search.c -o scripts/compare_search_auto.o
 	$(CC) -o $@ scripts/compare_search_auto.o $(OBJS) $(FORTRAN_OBJ) $(LDFLAGS)
@@ -248,7 +254,7 @@ endif
 
 ifeq ($(CUDA_ENABLED),yes)
 all: cuda/libkeystone_cuda.so
-libkeystone.so $(TEST_BIN) $(BENCH_BIN): cuda/libkeystone_cuda.so | bin
+libkeystone.so $(TEST_BIN) $(BENCH_BIN) bin/tgrep: cuda/libkeystone_cuda.so | bin
 endif
 
 clean:

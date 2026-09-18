@@ -66,3 +66,15 @@ def test_trigram_build_parallel_dict_format():
     # External document has candidates but no exact matches
     assert 2 in idx.get_candidates("external candidate")
     assert idx.search("external candidate") == []
+
+    # Verify get_document
+    name_0, content_0 = idx.get_document(0)
+    assert name_0 == "docA.txt"
+    assert content_0 == b"Content A for parallel test"
+
+    name_2, content_2 = idx.get_document(2)
+    assert name_2 == "docC.txt"
+    assert content_2 is None  # external doc does not retain content
+
+    with pytest.raises(IndexError):
+        idx.get_document(99)

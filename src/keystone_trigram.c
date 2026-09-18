@@ -961,6 +961,23 @@ size_t keystone_trigram_index_document_count(const keystone_trigram_index_t* idx
     return idx ? idx->doc_count : 0u;
 }
 
+int keystone_trigram_index_get_document(
+    const keystone_trigram_index_t* idx,
+    uint32_t doc_id,
+    const char** out_name,
+    const char** out_content,
+    size_t* out_content_len
+) {
+    if (!idx || (size_t)doc_id >= idx->doc_count) {
+        return KEYSTONE_TRIGRAM_EINVAL;
+    }
+    const keystone_trigram_doc_t* doc = &idx->docs[doc_id];
+    if (out_name) *out_name = doc->name;
+    if (out_content) *out_content = doc->content;
+    if (out_content_len) *out_content_len = doc->content_len;
+    return KEYSTONE_TRIGRAM_OK;
+}
+
 /*
  * Monotonic lower_bound with exponential bracketing (galloping search).
  * Successive probes advance from the previous position without restarting from 0.
@@ -1974,7 +1991,12 @@ size_t keystone_trigram_index_memory_usage(
 /* --- Change 7: Binary Persistence --- */
 
 #define TRIGRAM_FILE_MAGIC "KEYSTRIG"
-#define TRIGRAM_FILE_VERSION 1u
+#define TRIGRAM_FILE_VERSION 2u
+
+typedef struct ks_bucket_meta {
+    uint32_t count;
+    uint32_t offset;
+} ks_bucket_meta_t;
 
 int keystone_trigram_index_save(
     const keystone_trigram_index_t* idx,
@@ -1986,6 +2008,7 @@ int keystone_trigram_index_save(
 
     FILE* fp = fopen(filepath, "wb");
     if (!fp) return KEYSTONE_TRIGRAM_EINVAL;
+    setvbuf(fp, NULL, _IOFBF, 4u * 1024u * 1024u);
 
     /* Write magic & version */
     if (fwrite(TRIGRAM_FILE_MAGIC, 1, 8, fp) != 8) { fclose(fp); return KEYSTONE_TRIGRAM_EINVAL; }
@@ -2028,22 +2051,42 @@ int keystone_trigram_index_save(
         }
     }
 
-    /* Posting lists */
+    /* V2 Bulk Postings Layout:
+     * 1. unique_trigrams, total_postings, num_buckets (uint64_t each)
+     * 2. bucket_keys: num_buckets * sizeof(uint32_t)
+     * 3. bucket_meta: num_buckets * sizeof(ks_bucket_meta_t)
+     * 4. flat_postings: total_postings * sizeof(uint32_t)
+     */
     uint64_t unique_trigrams = (uint64_t)idx->unique_trigrams;
+    uint64_t total_postings = (uint64_t)idx->total_postings;
+    uint64_t num_buckets = (uint64_t)idx->num_buckets;
+
     if (fwrite(&unique_trigrams, sizeof(uint64_t), 1, fp) != 1) { fclose(fp); return KEYSTONE_TRIGRAM_EINVAL; }
+    if (fwrite(&total_postings, sizeof(uint64_t), 1, fp) != 1) { fclose(fp); return KEYSTONE_TRIGRAM_EINVAL; }
+    if (fwrite(&num_buckets, sizeof(uint64_t), 1, fp) != 1) { fclose(fp); return KEYSTONE_TRIGRAM_EINVAL; }
+
+    if (fwrite(idx->bucket_keys, sizeof(uint32_t), idx->num_buckets, fp) != idx->num_buckets) {
+        fclose(fp); return KEYSTONE_TRIGRAM_EINVAL;
+    }
+
+    ks_bucket_meta_t* meta = (ks_bucket_meta_t*)calloc(idx->num_buckets, sizeof(ks_bucket_meta_t));
+    if (!meta) { fclose(fp); return KEYSTONE_TRIGRAM_ENOMEM; }
 
     for (size_t i = 0u; i < idx->num_buckets; i++) {
-        if (idx->bucket_keys[i] == TRIGRAM_KEY_EMPTY) continue;
-        uint32_t key = idx->bucket_keys[i];
-        if (idx->bucket_lists[i].count > UINT32_MAX) { fclose(fp); return KEYSTONE_TRIGRAM_EINVAL; }
-        uint32_t count = (uint32_t)idx->bucket_lists[i].count;
-        if (fwrite(&key, sizeof(uint32_t), 1, fp) != 1) { fclose(fp); return KEYSTONE_TRIGRAM_EINVAL; }
-        if (fwrite(&count, sizeof(uint32_t), 1, fp) != 1) { fclose(fp); return KEYSTONE_TRIGRAM_EINVAL; }
-        if (count > 0u) {
-            if (fwrite(idx->bucket_lists[i].doc_ids, sizeof(uint32_t), count, fp) != count) {
-                fclose(fp);
-                return KEYSTONE_TRIGRAM_EINVAL;
-            }
+        if (idx->bucket_keys[i] != TRIGRAM_KEY_EMPTY && idx->bucket_lists[i].count > 0u && idx->bucket_lists[i].doc_ids) {
+            meta[i].count = (uint32_t)idx->bucket_lists[i].count;
+            meta[i].offset = (uint32_t)(idx->bucket_lists[i].doc_ids - idx->flat_postings);
+        }
+    }
+
+    if (fwrite(meta, sizeof(ks_bucket_meta_t), idx->num_buckets, fp) != idx->num_buckets) {
+        free(meta); fclose(fp); return KEYSTONE_TRIGRAM_EINVAL;
+    }
+    free(meta);
+
+    if (total_postings > 0u && idx->flat_postings) {
+        if (fwrite(idx->flat_postings, sizeof(uint32_t), idx->total_postings, fp) != idx->total_postings) {
+            fclose(fp); return KEYSTONE_TRIGRAM_EINVAL;
         }
     }
 
@@ -2056,6 +2099,7 @@ keystone_trigram_index_t* keystone_trigram_index_load(const char* filepath) {
 
     FILE* fp = fopen(filepath, "rb");
     if (!fp) return NULL;
+    setvbuf(fp, NULL, _IOFBF, 4u * 1024u * 1024u);
 
     char magic[8];
     if (fread(magic, 1, 8, fp) != 8 || memcmp(magic, TRIGRAM_FILE_MAGIC, 8) != 0) {
@@ -2064,7 +2108,7 @@ keystone_trigram_index_t* keystone_trigram_index_load(const char* filepath) {
     }
 
     uint32_t version = 0u;
-    if (fread(&version, sizeof(uint32_t), 1, fp) != 1 || version != TRIGRAM_FILE_VERSION) {
+    if (fread(&version, sizeof(uint32_t), 1, fp) != 1 || (version != 1u && version != 2u)) {
         fclose(fp);
         return NULL;
     }
@@ -2140,6 +2184,111 @@ keystone_trigram_index_t* keystone_trigram_index_load(const char* filepath) {
         idx->doc_count++;
     }
 
+    if (version == 2u) {
+        /* V2 Bulk Postings Loader */
+        uint64_t unique_trigrams = 0u;
+        uint64_t total_postings = 0u;
+        uint64_t num_buckets = 0u;
+
+        if (fread(&unique_trigrams, sizeof(uint64_t), 1, fp) != 1) goto load_fail;
+        if (fread(&total_postings, sizeof(uint64_t), 1, fp) != 1) goto load_fail;
+        if (fread(&num_buckets, sizeof(uint64_t), 1, fp) != 1) goto load_fail;
+
+        if (num_buckets == 0 || num_buckets > 67108864u) goto load_fail;
+
+        /* Free initial small hash table from create_options */
+        free(idx->bucket_keys);
+        free(idx->bucket_lists);
+
+        idx->bucket_keys = (uint32_t*)malloc((size_t)num_buckets * sizeof(uint32_t));
+        if (!idx->bucket_keys) goto load_fail;
+
+        if (fread(idx->bucket_keys, sizeof(uint32_t), (size_t)num_buckets, fp) != (size_t)num_buckets) {
+            goto load_fail;
+        }
+
+        ks_bucket_meta_t* meta = (ks_bucket_meta_t*)malloc((size_t)num_buckets * sizeof(ks_bucket_meta_t));
+        if (!meta) goto load_fail;
+
+        if (fread(meta, sizeof(ks_bucket_meta_t), (size_t)num_buckets, fp) != (size_t)num_buckets) {
+            free(meta);
+            goto load_fail;
+        }
+
+        if (total_postings > 0u) {
+            idx->flat_postings = (uint32_t*)malloc((size_t)total_postings * sizeof(uint32_t));
+            if (!idx->flat_postings) { free(meta); goto load_fail; }
+            if (fread(idx->flat_postings, sizeof(uint32_t), (size_t)total_postings, fp) != (size_t)total_postings) {
+                free(meta);
+                goto load_fail;
+            }
+        }
+
+        idx->bucket_lists = (keystone_trigram_posting_list_t*)calloc((size_t)num_buckets, sizeof(keystone_trigram_posting_list_t));
+        if (!idx->bucket_lists) { free(meta); goto load_fail; }
+
+        for (size_t i = 0u; i < (size_t)num_buckets; i++) {
+            if (meta[i].count > 0u) {
+                idx->bucket_lists[i].count = meta[i].count;
+                idx->bucket_lists[i].capacity = meta[i].count;
+                idx->bucket_lists[i].doc_ids = idx->flat_postings + meta[i].offset;
+            }
+        }
+        free(meta);
+
+        idx->num_buckets = (size_t)num_buckets;
+        idx->unique_trigrams = (size_t)unique_trigrams;
+        idx->total_postings = (size_t)total_postings;
+
+        /* Direct 24-Bit Directory */
+        if (idx->flags & KEYSTONE_TRIGRAM_OPT_DIRECT_DIRECTORY) {
+            uint32_t* dir = (uint32_t*)calloc(16777216u, sizeof(uint32_t));
+            if (!dir) goto load_fail;
+            for (size_t i = 0u; i < idx->num_buckets; i++) {
+                if (idx->bucket_keys[i] != TRIGRAM_KEY_EMPTY) {
+                    uint32_t key = idx->bucket_keys[i] & 0x00FFFFFFu;
+                    dir[key] = (uint32_t)(i + 1u);
+                }
+            }
+            idx->direct_dir = dir;
+        }
+
+        /* Dense Posting Bitmaps */
+        if (idx->doc_count >= 64u) {
+            size_t threshold = idx->doc_count / 32u;
+            if (threshold < 64u) threshold = 64u;
+            size_t bitmap_words = (idx->doc_count + 63u) / 64u;
+
+            for (size_t i = 0u; i < idx->num_buckets; i++) {
+                if (idx->bucket_keys[i] == TRIGRAM_KEY_EMPTY) continue;
+                keystone_trigram_posting_list_t* plist = &idx->bucket_lists[i];
+                if (plist->count >= threshold) {
+                    uint64_t* bm = (uint64_t*)calloc(bitmap_words, sizeof(uint64_t));
+                    if (bm) {
+                        for (size_t k = 0u; k < plist->count; k++) {
+                            uint32_t did = plist->doc_ids[k];
+                            bm[did >> 6u] |= (UINT64_C(1) << (did & 63u));
+                        }
+                        plist->bitmap = bm;
+                    }
+                }
+            }
+        }
+
+        /* Free ingestion structures */
+        if (idx->doc_seen) { free(idx->doc_seen); idx->doc_seen = NULL; }
+        if (idx->doc_seen_touched) { free(idx->doc_seen_touched); idx->doc_seen_touched = NULL; }
+        idx->doc_seen_touched_count = 0u;
+        idx->doc_seen_touched_cap = 0u;
+        keystone_arena_destroy(&idx->arena);
+
+        idx->is_finalized = true;
+        idx->stats = stats;
+        fclose(fp);
+        return idx;
+    }
+
+    /* V1 Legacy Loader Fallback */
     uint64_t unique_trigrams = 0u;
     if (fread(&unique_trigrams, sizeof(uint64_t), 1, fp) != 1) { goto load_fail; }
 

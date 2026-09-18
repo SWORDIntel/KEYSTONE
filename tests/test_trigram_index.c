@@ -43,6 +43,14 @@ static void test_owned_snapshot_survives_caller_mutation(void) {
     TEST_ASSERT(count == 1);
     TEST_ASSERT(matches[0] == 0);
 
+    const char* dname = NULL;
+    const char* dcontent = NULL;
+    size_t dlen = 0;
+    TEST_ASSERT(keystone_trigram_index_get_document(idx, 0, &dname, &dcontent, &dlen) == KEYSTONE_TRIGRAM_OK);
+    TEST_ASSERT(dname && strcmp(dname, "owned") == 0);
+    TEST_ASSERT(dcontent && strncmp(dcontent, "classified-looking source buffer", dlen) == 0);
+    TEST_ASSERT(keystone_trigram_index_get_document(idx, 1, &dname, &dcontent, &dlen) == KEYSTONE_TRIGRAM_EINVAL);
+
     keystone_trigram_index_destroy(idx);
     printf("✓ Owned snapshot lifetime verified.\n");
 }

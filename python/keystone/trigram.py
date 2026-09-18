@@ -80,6 +80,15 @@ _lib.keystone_trigram_index_finalize.restype = ctypes.c_int
 _lib.keystone_trigram_index_document_count.argtypes = [ctypes.c_void_p]
 _lib.keystone_trigram_index_document_count.restype = ctypes.c_size_t
 
+_lib.keystone_trigram_index_get_document.argtypes = [
+    ctypes.c_void_p,
+    ctypes.c_uint32,
+    ctypes.POINTER(ctypes.c_char_p),
+    ctypes.POINTER(ctypes.c_char_p),
+    ctypes.POINTER(ctypes.c_size_t),
+]
+_lib.keystone_trigram_index_get_document.restype = ctypes.c_int
+
 _lib.keystone_trigram_index_search.argtypes = [
     ctypes.c_void_p,
     ctypes.c_char_p,
@@ -314,6 +323,33 @@ class TrigramIndex:
     @property
     def document_count(self) -> int:
         return int(_lib.keystone_trigram_index_document_count(self._ptr))
+
+    def get_document(self, doc_id: int) -> Tuple[Optional[str], Optional[bytes]]:
+        """Retrieve document name and content for a given doc_id.
+
+        Args:
+            doc_id: 0-based document ID.
+
+        Returns:
+            Tuple of (name, content_bytes).
+        """
+        if not self._ptr:
+            raise RuntimeError("Index is closed")
+        c_name = ctypes.c_char_p()
+        c_content = ctypes.c_char_p()
+        c_len = ctypes.c_size_t(0)
+        rc = _lib.keystone_trigram_index_get_document(
+            self._ptr,
+            ctypes.c_uint32(doc_id),
+            ctypes.byref(c_name),
+            ctypes.byref(c_content),
+            ctypes.byref(c_len),
+        )
+        if rc != 0:
+            raise IndexError(f"Invalid doc_id: {doc_id} (error {rc})")
+        name = c_name.value.decode("utf-8", errors="replace") if c_name.value else None
+        content = ctypes.string_at(c_content, c_len.value) if c_content.value else None
+        return (name, content)
 
     def add_document(self, name: Optional[str], text: Union[str, bytes]) -> int:
         """Add a document with content retention (for exact search).
