@@ -43,7 +43,15 @@ Usage:
 
 from .core import KeystoneSearch, AnchorTable, KeystoneBackend, WorkloadType, BackendDecision
 from .telemetry import TelemetryProcessor, TelemetryEvent
-from .cluster import ClusterRouter, crc16_keystone
+from .cluster import (
+    ClusterRouter,
+    crc16_keystone,
+    NodeCapability,
+    probe_node_capability,
+    export_node_cap_frame,
+    build_node_cap_datagram,
+    broadcast_node_cap,
+)
 from .neural import NeuralClassifier, SemanticClass
 from .trigram import (
     TrigramIndex,
@@ -60,6 +68,8 @@ __all__ = [
     "KeystoneSearch", "AnchorTable", "KeystoneBackend", "WorkloadType", "BackendDecision",
     "TelemetryProcessor", "TelemetryEvent",
     "ClusterRouter", "crc16_keystone",
+    "NodeCapability", "probe_node_capability", "export_node_cap_frame",
+    "build_node_cap_datagram", "broadcast_node_cap",
     "NeuralClassifier", "SemanticClass",
     "TrigramIndex", "TrigramStream", "TrigramStats", "extract_trigrams",
     "KEYSTONE_TRIGRAM_OPT_NONE", "KEYSTONE_TRIGRAM_OPT_CASE_INSENSITIVE",

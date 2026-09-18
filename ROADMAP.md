@@ -122,5 +122,8 @@ Formulated in architectural review with frontier model Sol (`gpt-5.6-sol`). See 
 
 - [x] **Parrot-Sabot (`SWORDIntel/parrot-sabot`)**:
   - Integrated `TrigramIndex` into `ArtifactSpooler` (`sabot/artifacts.py`) with mtime caching for `/search-artifacts <query>` sub-millisecond log triage.
-- [ ] **QIHSE AI Compute Fabric (`SWORDIntel/QIHSE`)**:
-  - Export Keystone engine capability frames (`NODE_CAP` frame 8u) to the QIHSE cluster bus.
+- [x] **QIHSE AI Compute Fabric (`SWORDIntel/QIHSE`)**:
+  - Export Keystone engine capability frames (`NODE_CAP` frame 8u, 50-byte wire payload) to the QIHSE cluster bus.
+  - Implemented `include/keystone_fabric.h`, `src/keystone_fabric.c` with hardware ISA tier mapping (AVX/AVX2/AVX-512/AMX), accelerator probes (NPU `/dev/accel` and VPU socket, GPU `/dev/dri` and `/dev/nvidiactl`), fresh memory/load stats, and UDP cluster bus emission (`0x51424E53` magic, 66-byte datagrams).
+  - Integrated into Python SDK (`keystone.NodeCapability`, `keystone.probe_node_capability()`, `keystone.export_node_cap_frame()`, `keystone.broadcast_node_cap()`).
+  - Wire compatibility verified via `tests/test_keystone_fabric.c` and QIHSE cluster bus integration test `tests/test_keystone_qihse_integration.c`.

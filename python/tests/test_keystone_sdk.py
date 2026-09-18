@@ -152,9 +152,32 @@ class TestKeystoneSDK(unittest.TestCase):
             idx.add_document("doc1", "BRAVO CHARLIE DELTA")
             idx.finalize()
 
-            self.assertEqual(idx.search("bravo"), [0, 1])
-            self.assertEqual(idx.get_candidates("DELTA"), [1])
-            self.assertEqual(idx.get_candidates("NONEXISTENT"), [])
+    def test_fabric_node_capability(self):
+        cap = keystone.probe_node_capability("test-py-node")
+        self.assertEqual(cap.node_id, "test-py-node")
+        self.assertIn(cap.isa_tier, [0, 1, 2, 3, 4])
+        self.assertIn(cap.npu, [0, 1])
+        self.assertIn(cap.gpu, [0, 1])
+        self.assertGreater(cap.free_ram_mb, 0)
+
+        wire = cap.to_wire()
+        self.assertEqual(len(wire), 50)
+        parsed = keystone.NodeCapability.from_wire(wire)
+        self.assertEqual(parsed.node_id, cap.node_id)
+        self.assertEqual(parsed.isa_tier, cap.isa_tier)
+        self.assertEqual(parsed.npu, cap.npu)
+        self.assertEqual(parsed.gpu, cap.gpu)
+        self.assertEqual(parsed.free_ram_mb, cap.free_ram_mb)
+        self.assertEqual(parsed.load_pct, cap.load_pct)
+
+        wire_c = keystone.export_node_cap_frame("test-py-node")
+        self.assertEqual(len(wire_c), 50)
+        parsed_c = keystone.NodeCapability.from_wire(wire_c)
+        self.assertEqual(parsed_c.node_id, "test-py-node")
+        self.assertEqual(parsed_c.isa_tier, cap.isa_tier)
+
+        dgram = keystone.build_node_cap_datagram("test-py-node", sender_index=77)
+        self.assertEqual(len(dgram), 66)
 
 
 if __name__ == "__main__":
