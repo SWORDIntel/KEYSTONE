@@ -52,6 +52,7 @@ from .trigram import (
     extract_trigrams,
     KEYSTONE_TRIGRAM_OPT_NONE,
     KEYSTONE_TRIGRAM_OPT_CASE_INSENSITIVE,
+    KEYSTONE_TRIGRAM_OPT_DIRECT_DIRECTORY,
 )
 from .hash_index import HashIndex
 

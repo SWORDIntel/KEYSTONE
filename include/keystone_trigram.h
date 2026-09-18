@@ -59,6 +59,7 @@ typedef struct keystone_trigram_index keystone_trigram_index_t;
 /* Options flags for trigram indexing */
 #define KEYSTONE_TRIGRAM_OPT_NONE             0u
 #define KEYSTONE_TRIGRAM_OPT_CASE_INSENSITIVE (1u << 0)
+#define KEYSTONE_TRIGRAM_OPT_DIRECT_DIRECTORY (1u << 1)
 
 /**
  * @brief Create a new trigram content index with default options.

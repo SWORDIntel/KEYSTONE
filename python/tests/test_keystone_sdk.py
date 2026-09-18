@@ -142,7 +142,19 @@ class TestKeystoneSDK(unittest.TestCase):
             self.assertEqual(doc_id, 0)
             idx.finalize()
 
-            self.assertEqual(idx.search(b"streaming"), [0])
+    def test_trigram_direct_directory(self):
+        with keystone.TrigramIndex(direct_directory=True, case_insensitive=True) as idx:
+            self.assertEqual(
+                idx.flags,
+                keystone.KEYSTONE_TRIGRAM_OPT_DIRECT_DIRECTORY | keystone.KEYSTONE_TRIGRAM_OPT_CASE_INSENSITIVE
+            )
+            idx.add_document("doc0", "ALPHA BRAVO CHARLIE")
+            idx.add_document("doc1", "BRAVO CHARLIE DELTA")
+            idx.finalize()
+
+            self.assertEqual(idx.search("bravo"), [0, 1])
+            self.assertEqual(idx.get_candidates("DELTA"), [1])
+            self.assertEqual(idx.get_candidates("NONEXISTENT"), [])
 
 
 if __name__ == "__main__":

@@ -432,6 +432,45 @@ static void test_true_streaming_carry_and_flattening_and_bitmaps(void) {
     printf("✓ Phase 2 streaming carry, flat postings, and dense bitmaps verified.\n");
 }
 
+static void test_direct_24bit_directory(void) {
+    printf("Testing Direct 24-bit directory acceleration...\n");
+    keystone_trigram_index_t* idx = keystone_trigram_index_create_options(
+        4, KEYSTONE_TRIGRAM_OPT_DIRECT_DIRECTORY | KEYSTONE_TRIGRAM_OPT_CASE_INSENSITIVE);
+    TEST_ASSERT(idx != NULL);
+
+    const char* doc0 = "ALPHA BRAVO CHARLIE DELTA";
+    const char* doc1 = "BRAVO CHARLIE ECHO FOXTROT";
+    const char* doc2 = "GOLF HOTEL INDIA JULIETT";
+
+    TEST_ASSERT(keystone_trigram_index_add_document(idx, "doc0", doc0, strlen(doc0), NULL) == KEYSTONE_TRIGRAM_OK);
+    TEST_ASSERT(keystone_trigram_index_add_document(idx, "doc1", doc1, strlen(doc1), NULL) == KEYSTONE_TRIGRAM_OK);
+    TEST_ASSERT(keystone_trigram_index_add_document(idx, "doc2", doc2, strlen(doc2), NULL) == KEYSTONE_TRIGRAM_OK);
+    TEST_ASSERT(keystone_trigram_index_finalize(idx) == KEYSTONE_TRIGRAM_OK);
+
+    /* Memory usage should reflect the 64 MiB direct directory table */
+    size_t mem = keystone_trigram_index_memory_usage(idx);
+    TEST_ASSERT(mem >= 16777216u * sizeof(uint32_t));
+
+    /* Direct zero-probe candidate query */
+    uint32_t cands[10];
+    size_t n = keystone_trigram_index_get_candidates(idx, "CHARLIE", 7, cands, 10);
+    TEST_ASSERT(n == 2);
+    TEST_ASSERT(cands[0] == 0 && cands[1] == 1);
+
+    /* Direct zero-probe search */
+    uint32_t matches[10];
+    size_t m = keystone_trigram_index_search(idx, "JULIETT", 7, matches, 10);
+    TEST_ASSERT(m == 1);
+    TEST_ASSERT(matches[0] == 2);
+
+    /* Non-existent trigram query */
+    size_t none = keystone_trigram_index_get_candidates(idx, "ZZZ_NOT_HERE_999", 16, cands, 10);
+    TEST_ASSERT(none == 0);
+
+    keystone_trigram_index_destroy(idx);
+    printf("✓ Direct 24-bit directory acceleration verified.\n");
+}
+
 int main(void) {
     printf("Running Trigram Index Test Suite\n");
     printf("===============================\n\n");
@@ -444,6 +483,7 @@ int main(void) {
     test_case_insensitive_search();
     test_candidate_iterator_case_folding_and_galloping();
     test_true_streaming_carry_and_flattening_and_bitmaps();
+    test_direct_24bit_directory();
     test_binary_persistence();
 #ifdef KEYSTONE_ENABLE_TAR_ZST
     test_archive_streaming_trigram();

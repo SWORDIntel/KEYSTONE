@@ -223,6 +223,7 @@ class TrigramStats:
 
 KEYSTONE_TRIGRAM_OPT_NONE = 0
 KEYSTONE_TRIGRAM_OPT_CASE_INSENSITIVE = 1
+KEYSTONE_TRIGRAM_OPT_DIRECT_DIRECTORY = 2
 
 
 class TrigramIndex:
@@ -241,10 +242,13 @@ class TrigramIndex:
         self,
         initial_doc_capacity: int = 0,
         case_insensitive: bool = False,
+        direct_directory: bool = False,
         flags: int = KEYSTONE_TRIGRAM_OPT_NONE,
     ):
         if case_insensitive:
             flags |= KEYSTONE_TRIGRAM_OPT_CASE_INSENSITIVE
+        if direct_directory:
+            flags |= KEYSTONE_TRIGRAM_OPT_DIRECT_DIRECTORY
         self._ptr = _lib.keystone_trigram_index_create_options(initial_doc_capacity, flags)
         if not self._ptr:
             raise RuntimeError("Failed to create trigram index")

@@ -72,6 +72,9 @@ struct keystone_trigram_index {
     uint32_t* flat_postings;
     size_t total_postings;
 
+    /* Direct 24-bit trigram directory (64 MiB flat array for O(1) zero-probe lookup) */
+    uint32_t* direct_dir;
+
     keystone_trigram_doc_t* docs;
     size_t doc_count;
     size_t doc_capacity;
@@ -316,6 +319,8 @@ void keystone_trigram_index_destroy(keystone_trigram_index_t* idx) {
         free(idx->bucket_lists);
     }
     free(idx->flat_postings);
+    free(idx->direct_dir);
+    idx->direct_dir = NULL;
     free(idx->bucket_keys);
 
     free(idx->doc_seen_touched);
@@ -790,6 +795,21 @@ int keystone_trigram_index_finalize(keystone_trigram_index_t* idx) {
         }
     }
 
+    /* Phase 2: Direct 24-Bit Trigram Directory
+     * Flat 64 MiB directory providing O(1) zero-probe lookup without hash collisions. */
+    if (idx->flags & KEYSTONE_TRIGRAM_OPT_DIRECT_DIRECTORY) {
+        uint32_t* dir = (uint32_t*)calloc(16777216u, sizeof(uint32_t));
+        if (!dir) {
+            return poison_index(idx, KEYSTONE_TRIGRAM_ENOMEM);
+        }
+        for (size_t i = 0u; i < idx->num_buckets; i++) {
+            if (idx->bucket_keys[i] == TRIGRAM_KEY_EMPTY) continue;
+            uint32_t key = idx->bucket_keys[i] & 0x00FFFFFFu;
+            dir[key] = (uint32_t)(i + 1u);
+        }
+        idx->direct_dir = dir;
+    }
+
     idx->stats.unique_trigrams = idx->unique_trigrams;
     idx->stats.total_postings = total_postings;
     idx->is_finalized = true;
@@ -813,7 +833,13 @@ static const keystone_trigram_posting_list_t* get_posting_list(
     const keystone_trigram_index_t* idx,
     uint32_t key
 ) {
-    if (!idx || !idx->bucket_keys || idx->num_buckets == 0u) return NULL;
+    if (!idx) return NULL;
+    if (idx->direct_dir) {
+        uint32_t val = idx->direct_dir[key & 0x00FFFFFFu];
+        if (val == 0u) return NULL;
+        return &idx->bucket_lists[val - 1u];
+    }
+    if (!idx->bucket_keys || idx->num_buckets == 0u) return NULL;
 
     size_t mask = idx->num_buckets - 1u;
     size_t bucket_idx = hash_trigram_key(key, idx->num_buckets);
@@ -1832,6 +1858,10 @@ size_t keystone_trigram_index_memory_usage(
         if (idx->bucket_keys[i] != TRIGRAM_KEY_EMPTY && idx->bucket_lists[i].bitmap) {
             total += bitmap_bytes;
         }
+    }
+    /* Direct 24-bit directory */
+    if (idx->direct_dir) {
+        total += 16777216u * sizeof(uint32_t);
     }
     /* Doc table */
     total += idx->doc_capacity * sizeof(keystone_trigram_doc_t);

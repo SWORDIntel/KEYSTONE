@@ -73,8 +73,8 @@ Formulated in architectural review with frontier model Sol (`gpt-5.6-sol`). See 
   - At `finalize()`, flatten all posting lists into a single contiguous memory pool (`flat_postings`), eliminating heap fragmentation and reducing index destruction to $O(1)$.
 - [x] **Dense Posting Bitmap Conversion**:
   - Converted high-frequency trigrams ($\ge \text{doc\_count} / 32$, with $\ge 64$ docs) to 64-bit word bitmaps at `finalize()`. Intersect dense lists via $O(1)$ bit test and 64-bit word bitwise AND with `__builtin_ctzll`.
-- [ ] **Direct 24-Bit Descriptor Directory**:
-  - For large indices ($>2^{20}$ trigrams), replace the open-addressing hash table with a flat 64 MiB direct 24-bit descriptor directory (`16M * 4 bytes`), achieving $O(1)$ zero-probe trigram lookups.
+- [x] **Direct 24-Bit Descriptor Directory**:
+  - Implemented `KEYSTONE_TRIGRAM_OPT_DIRECT_DIRECTORY`: flat 64 MiB directory (`16M * 4 bytes`) mapping every 24-bit trigram directly to its posting slice, achieving $O(1)$ zero-probe trigram lookups without hash collisions or probing loops. Integrated into C API and Python SDK `TrigramIndex(direct_directory=True)`.
 - [x] **True Streaming Ingestion with 2-Byte Carry**:
   - Overhauled `keystone_trigram_stream` to carry the trailing 2 bytes across arbitrary buffer chunks with $O(1)$ buffer memory for external documents.
 
