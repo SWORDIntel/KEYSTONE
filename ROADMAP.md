@@ -63,20 +63,20 @@ Formulated in architectural review with frontier model Sol (`gpt-5.6-sol`). See 
   - Extract unique query trigrams, look up frequencies in index, and retain only the rarest 16 trigrams. Avoid evaluating non-discriminating lists when candidate count is already tiny.
 - [x] **Free Ingestion-Only State at Finalize**:
   - Released 2MB document deduplication bitmap (`doc_seen`) and touched tracking buffer at `keystone_trigram_index_finalize()`.
-- [ ] **Standardized Fast ASCII Folding**:
-  - Unify ASCII folding across ingestion, query planning, and candidate verification using lookup table or branchless bitwise operations (`c | 0x20`).
+- [x] **Standardized Fast ASCII Folding**:
+  - Unified branchless ASCII folding (`fast_ascii_tolower`) across ingestion, query planning, and candidate verification, and pre-folded query needle in `bounded_memmem_ci`.
 
 ### Phase 2: Indexing & Storage Throughput
 - [ ] **Arena-Backed Posting List Construction**:
   - Replace per-posting `malloc()` calls with chunked arena allocators during ingestion to eliminate heap fragmentation.
-- [ ] **Contiguous Flattened Index Layout**:
-  - At `finalize()`, flatten all posting lists into a single contiguous memory pool with compact 12-byte descriptors (`offset`, `count`, `capacity/flags`), enabling memory-mapping (`mmap`) without pointer fixups.
-- [ ] **Dense Posting Bitmap Conversion**:
-  - Convert high-frequency trigrams / stopwords ($\ge \text{doc\_count} / 32$) to 64-bit word bitmaps at `finalize()`. Intersect dense lists via AVX2 bitwise AND (`_mm256_and_si256`) or $O(1)$ bit test.
+- [x] **Contiguous Flattened Index Layout**:
+  - At `finalize()`, flatten all posting lists into a single contiguous memory pool (`flat_postings`), eliminating heap fragmentation and reducing index destruction to $O(1)$.
+- [x] **Dense Posting Bitmap Conversion**:
+  - Converted high-frequency trigrams ($\ge \text{doc\_count} / 32$, with $\ge 64$ docs) to 64-bit word bitmaps at `finalize()`. Intersect dense lists via $O(1)$ bit test and 64-bit word bitwise AND with `__builtin_ctzll`.
 - [ ] **Direct 24-Bit Descriptor Directory**:
   - For large indices ($>2^{20}$ trigrams), replace the open-addressing hash table with a flat 64 MiB direct 24-bit descriptor directory (`16M * 4 bytes`), achieving $O(1)$ zero-probe trigram lookups.
-- [ ] **True Streaming Ingestion with 2-Byte Carry**:
-  - Overhaul `keystone_trigram_index_stream()` to carry the trailing 2 bytes across buffer boundaries rather than buffering the entire document.
+- [x] **True Streaming Ingestion with 2-Byte Carry**:
+  - Overhauled `keystone_trigram_stream` to carry the trailing 2 bytes across arbitrary buffer chunks with $O(1)$ buffer memory for external documents.
 
 ### Phase 3: Multi-Threaded Parallel Construction
 - [ ] **Thread-Local Builders**:

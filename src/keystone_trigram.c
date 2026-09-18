@@ -38,10 +38,15 @@
 /* Sentinel for empty hash buckets. Outside the 24-bit trigram key range. */
 #define TRIGRAM_KEY_EMPTY 0xFFFFFFFFu
 
+static inline unsigned char fast_ascii_tolower(unsigned char c) {
+    return (c >= 'A' && c <= 'Z') ? (unsigned char)(c + 32u) : c;
+}
+
 typedef struct keystone_trigram_posting_list {
     uint32_t* doc_ids;
     size_t count;
     size_t capacity;
+    uint64_t* bitmap;
 } keystone_trigram_posting_list_t;
 
 typedef struct keystone_trigram_doc {
@@ -62,6 +67,10 @@ struct keystone_trigram_index {
     keystone_trigram_posting_list_t* bucket_lists;
     size_t num_buckets;
     size_t unique_trigrams;
+
+    /* Flattened contiguous posting array allocated at finalize() */
+    uint32_t* flat_postings;
+    size_t total_postings;
 
     keystone_trigram_doc_t* docs;
     size_t doc_count;
@@ -294,12 +303,19 @@ void keystone_trigram_index_destroy(keystone_trigram_index_t* idx) {
 
     if (idx->bucket_lists) {
         for (size_t i = 0u; i < idx->num_buckets; i++) {
-            if (idx->bucket_keys[i] != TRIGRAM_KEY_EMPTY) {
-                free(idx->bucket_lists[i].doc_ids);
+            if (idx->bucket_keys && idx->bucket_keys[i] != TRIGRAM_KEY_EMPTY) {
+                if (!idx->flat_postings) {
+                    free(idx->bucket_lists[i].doc_ids);
+                }
+                if (idx->bucket_lists[i].bitmap) {
+                    free(idx->bucket_lists[i].bitmap);
+                    idx->bucket_lists[i].bitmap = NULL;
+                }
             }
         }
         free(idx->bucket_lists);
     }
+    free(idx->flat_postings);
     free(idx->bucket_keys);
 
     free(idx->doc_seen_touched);
@@ -391,9 +407,9 @@ static size_t keystone_trigram_extract_internal(
     }
 #endif
     for (; i <= pattern_len - 3u && extracted < max_trigrams; i++) {
-        uint32_t b0 = fold ? (uint32_t)(unsigned char)tolower(p[i]) : (uint32_t)p[i];
-        uint32_t b1 = fold ? (uint32_t)(unsigned char)tolower(p[i + 1u]) : (uint32_t)p[i + 1u];
-        uint32_t b2 = fold ? (uint32_t)(unsigned char)tolower(p[i + 2u]) : (uint32_t)p[i + 2u];
+        uint32_t b0 = fold ? (uint32_t)fast_ascii_tolower(p[i]) : (uint32_t)p[i];
+        uint32_t b1 = fold ? (uint32_t)fast_ascii_tolower(p[i + 1u]) : (uint32_t)p[i + 1u];
+        uint32_t b2 = fold ? (uint32_t)fast_ascii_tolower(p[i + 2u]) : (uint32_t)p[i + 2u];
         uint32_t key = (b0 << 16) | (b1 << 8) | b2;
         bool dup = false;
         for (size_t j = 0u; j < extracted; j++) {
@@ -633,9 +649,9 @@ static int add_document_internal(
         }
 #endif
         for (; i <= text_len - 3u; i++) {
-            uint32_t b0 = fold ? (uint32_t)(unsigned char)tolower(p[i]) : (uint32_t)p[i];
-            uint32_t b1 = fold ? (uint32_t)(unsigned char)tolower(p[i + 1u]) : (uint32_t)p[i + 1u];
-            uint32_t b2 = fold ? (uint32_t)(unsigned char)tolower(p[i + 2u]) : (uint32_t)p[i + 2u];
+            uint32_t b0 = fold ? (uint32_t)fast_ascii_tolower(p[i]) : (uint32_t)p[i];
+            uint32_t b1 = fold ? (uint32_t)fast_ascii_tolower(p[i + 1u]) : (uint32_t)p[i + 1u];
+            uint32_t b2 = fold ? (uint32_t)fast_ascii_tolower(p[i + 2u]) : (uint32_t)p[i + 2u];
             uint32_t key = (b0 << 16) | (b1 << 8) | b2;
             KEYSTONE_EMIT_TRIGRAM(key);
         }
@@ -721,6 +737,57 @@ int keystone_trigram_index_finalize(keystone_trigram_index_t* idx) {
             return poison_index(idx, KEYSTONE_TRIGRAM_EOVERFLOW);
         }
         total_postings += plist->count;
+    }
+
+    /* Phase 2: Contiguous flattened postings pool */
+    if (total_postings > 0u) {
+        size_t bytes;
+        if (!checked_mul_size(total_postings, sizeof(uint32_t), &bytes)) {
+            return poison_index(idx, KEYSTONE_TRIGRAM_EOVERFLOW);
+        }
+        uint32_t* flat = (uint32_t*)malloc(bytes);
+        if (!flat) {
+            return poison_index(idx, KEYSTONE_TRIGRAM_ENOMEM);
+        }
+
+        size_t offset = 0u;
+        for (size_t i = 0u; i < idx->num_buckets; i++) {
+            if (idx->bucket_keys[i] == TRIGRAM_KEY_EMPTY) continue;
+            keystone_trigram_posting_list_t* plist = &idx->bucket_lists[i];
+            if (plist->count == 0u) continue;
+
+            memcpy(flat + offset, plist->doc_ids, plist->count * sizeof(uint32_t));
+            free(plist->doc_ids);
+            plist->doc_ids = flat + offset;
+            plist->capacity = plist->count;
+            offset += plist->count;
+        }
+        idx->flat_postings = flat;
+        idx->total_postings = total_postings;
+    }
+
+    /* Phase 2: Dense Posting Bitmap Conversion
+     * Convert high-frequency trigrams (count >= doc_count / 32, with doc_count >= 64)
+     * to 64-bit word bitmaps for O(1) bit tests. */
+    if (idx->doc_count >= 64u) {
+        size_t threshold = idx->doc_count / 32u;
+        if (threshold < 64u) threshold = 64u;
+        size_t bitmap_words = (idx->doc_count + 63u) / 64u;
+
+        for (size_t i = 0u; i < idx->num_buckets; i++) {
+            if (idx->bucket_keys[i] == TRIGRAM_KEY_EMPTY) continue;
+            keystone_trigram_posting_list_t* plist = &idx->bucket_lists[i];
+            if (plist->count >= threshold) {
+                uint64_t* bm = (uint64_t*)calloc(bitmap_words, sizeof(uint64_t));
+                if (bm) {
+                    for (size_t k = 0u; k < plist->count; k++) {
+                        uint32_t did = plist->doc_ids[k];
+                        bm[did >> 6u] |= (UINT64_C(1) << (did & 63u));
+                    }
+                    plist->bitmap = bm;
+                }
+            }
+        }
     }
 
     idx->stats.unique_trigrams = idx->unique_trigrams;
@@ -1026,6 +1093,34 @@ size_t keystone_trigram_index_get_candidates(
     }
 
     if (num_lists == 2u) {
+        if (lists[0]->bitmap && lists[1]->bitmap) {
+            size_t words = (idx->doc_count + 63u) / 64u;
+            size_t count = 0u;
+            const uint64_t* bm0 = lists[0]->bitmap;
+            const uint64_t* bm1 = lists[1]->bitmap;
+            for (size_t w = 0u; w < words && count < max_candidates; w++) {
+                uint64_t word = bm0[w] & bm1[w];
+                while (word && count < max_candidates) {
+                    unsigned bit = (unsigned)__builtin_ctzll(word);
+                    uint32_t doc_id = (uint32_t)(w * 64u + bit);
+                    if (doc_id < idx->doc_count) {
+                        out_candidates[count++] = doc_id;
+                    }
+                    word &= word - 1u;
+                }
+            }
+            return count;
+        } else if (lists[1]->bitmap) {
+            const uint64_t* bm = lists[1]->bitmap;
+            size_t count = 0u;
+            for (size_t i = 0u; i < lists[0]->count && count < max_candidates; i++) {
+                uint32_t doc_id = lists[0]->doc_ids[i];
+                if ((bm[doc_id >> 6u] & (UINT64_C(1) << (doc_id & 63u))) != 0) {
+                    out_candidates[count++] = doc_id;
+                }
+            }
+            return count;
+        }
         return ks_intersect_u32_adaptive(
             lists[0]->doc_ids, lists[0]->count,
             lists[1]->doc_ids, lists[1]->count,
@@ -1033,7 +1128,7 @@ size_t keystone_trigram_index_get_candidates(
         );
     }
 
-    /* Galloping intersection across rarest lists */
+    /* Galloping / bitmap intersection across rarest lists */
     const keystone_trigram_posting_list_t* base = lists[0];
     size_t candidate_count = 0u;
     size_t cursor[TRIGRAM_QUERY_MAX_UNIQUE];
@@ -1045,15 +1140,22 @@ size_t keystone_trigram_index_get_candidates(
 
         for (size_t l = 1u; l < num_lists; l++) {
             const keystone_trigram_posting_list_t* plist = lists[l];
-            size_t pos = ks_lower_bound_gallop_u32(
-                plist->doc_ids, plist->count, cursor[l], doc_id);
+            if (plist->bitmap) {
+                if ((plist->bitmap[doc_id >> 6u] & (UINT64_C(1) << (doc_id & 63u))) == 0) {
+                    in_all = false;
+                    break;
+                }
+            } else {
+                size_t pos = ks_lower_bound_gallop_u32(
+                    plist->doc_ids, plist->count, cursor[l], doc_id);
 
-            cursor[l] = pos;
-            if (pos == plist->count || plist->doc_ids[pos] != doc_id) {
-                in_all = false;
-                break;
+                cursor[l] = pos;
+                if (pos == plist->count || plist->doc_ids[pos] != doc_id) {
+                    in_all = false;
+                    break;
+                }
+                cursor[l] = pos + 1u;
             }
-            cursor[l] = pos + 1u;
         }
 
         if (in_all) {
@@ -1145,15 +1247,31 @@ static const void* bounded_memmem_ci(
     const unsigned char* n = (const unsigned char*)needle;
     size_t limit = haystack_len - needle_len;
 
+    unsigned char needle_buf[256];
+    unsigned char* folded_needle = needle_buf;
+    if (needle_len > sizeof(needle_buf)) {
+        folded_needle = (unsigned char*)malloc(needle_len);
+        if (!folded_needle) return NULL;
+    }
+    for (size_t k = 0u; k < needle_len; k++) {
+        folded_needle[k] = fast_ascii_tolower(n[k]);
+    }
+
+    const unsigned char target0 = folded_needle[0];
     for (size_t i = 0u; i <= limit; i++) {
-        if (tolower(h[i]) == tolower(n[0])) {
+        if (fast_ascii_tolower(h[i]) == target0) {
             size_t match = 1u;
-            while (match < needle_len && tolower(h[i + match]) == tolower(n[match])) {
+            while (match < needle_len && fast_ascii_tolower(h[i + match]) == folded_needle[match]) {
                 match++;
             }
-            if (match == needle_len) return h + i;
+            if (match == needle_len) {
+                if (folded_needle != needle_buf) free(folded_needle);
+                return h + i;
+            }
         }
     }
+
+    if (folded_needle != needle_buf) free(folded_needle);
     return NULL;
 }
 
@@ -1279,6 +1397,11 @@ struct keystone_trigram_stream {
     size_t buf_cap;
     int failed;
     bool retain_content;
+    uint32_t doc_id;
+    unsigned char carry[2];
+    size_t carry_len;
+    size_t total_bytes;
+    uint64_t start_time;
 };
 
 keystone_trigram_stream_t* keystone_trigram_begin_document_options(
@@ -1286,18 +1409,34 @@ keystone_trigram_stream_t* keystone_trigram_begin_document_options(
     const char* name,
     bool retain_content
 ) {
-    if (!idx) return NULL;
+    if (!idx || idx->failed || idx->is_finalized) return NULL;
+    if (idx->doc_count > (size_t)UINT32_MAX) {
+        poison_index(idx, KEYSTONE_TRIGRAM_EOVERFLOW);
+        return NULL;
+    }
+    if (ensure_doc_capacity(idx) != KEYSTONE_TRIGRAM_OK) return NULL;
+
     keystone_trigram_stream_t* stream =
         (keystone_trigram_stream_t*)calloc(1, sizeof(keystone_trigram_stream_t));
     if (!stream) return NULL;
+
     stream->idx = idx;
     stream->retain_content = retain_content;
-    stream->buf_cap = 65536;
-    stream->buffer = (char*)malloc(stream->buf_cap);
-    if (!stream->buffer) { free(stream); return NULL; }
+    stream->doc_id = (uint32_t)idx->doc_count;
+    stream->start_time = get_time_ns();
+
+    if (retain_content) {
+        stream->buf_cap = 65536u;
+        stream->buffer = (char*)malloc(stream->buf_cap);
+        if (!stream->buffer) { free(stream); return NULL; }
+    }
     if (name) {
         stream->name = duplicate_c_string(name);
-        if (!stream->name) { free(stream->buffer); free(stream); return NULL; }
+        if (!stream->name) {
+            if (stream->buffer) free(stream->buffer);
+            free(stream);
+            return NULL;
+        }
     }
     return stream;
 }
@@ -1316,23 +1455,123 @@ int keystone_trigram_feed_bytes(
 ) {
     if (!stream || !data || stream->failed) return KEYSTONE_TRIGRAM_EINVAL;
     if (len == 0u) return KEYSTONE_TRIGRAM_OK;
-    /* Check for size_t overflow in buf_len + len */
-    size_t needed;
-    if (!checked_add_size(stream->buf_len, len, &needed)) return KEYSTONE_TRIGRAM_EOVERFLOW;
-    if (needed > stream->buf_cap) {
-        size_t new_cap = stream->buf_cap;
-        while (new_cap < needed) {
-            if (new_cap > SIZE_MAX / 2u) return KEYSTONE_TRIGRAM_EOVERFLOW;
-            new_cap *= 2u;
-        }
-        char* new_buf = (char*)realloc(stream->buffer, new_cap);
-        if (!new_buf) { stream->failed = 1; return KEYSTONE_TRIGRAM_ENOMEM; }
-        stream->buffer = new_buf;
-        stream->buf_cap = new_cap;
+
+    keystone_trigram_index_t* idx = stream->idx;
+    if (!idx || idx->failed || idx->is_finalized) {
+        stream->failed = 1;
+        return KEYSTONE_TRIGRAM_ESTATE;
     }
-    memcpy(stream->buffer + stream->buf_len, data, len);
-    stream->buf_len += len;
+
+    size_t new_total;
+    if (!checked_add_size(stream->total_bytes, len, &new_total)) {
+        stream->failed = 1;
+        return poison_index(idx, KEYSTONE_TRIGRAM_EOVERFLOW);
+    }
+    if (new_total > SIZE_MAX - idx->stats.bytes_indexed) {
+        stream->failed = 1;
+        return poison_index(idx, KEYSTONE_TRIGRAM_EOVERFLOW);
+    }
+
+    if (stream->retain_content) {
+        size_t needed;
+        if (!checked_add_size(stream->buf_len, len, &needed)) {
+            stream->failed = 1;
+            return KEYSTONE_TRIGRAM_EOVERFLOW;
+        }
+        if (needed > stream->buf_cap) {
+            size_t new_cap = stream->buf_cap ? stream->buf_cap : 65536u;
+            while (new_cap < needed) {
+                if (new_cap > SIZE_MAX / 2u) {
+                    stream->failed = 1;
+                    return KEYSTONE_TRIGRAM_EOVERFLOW;
+                }
+                new_cap *= 2u;
+            }
+            char* new_buf = (char*)realloc(stream->buffer, new_cap);
+            if (!new_buf) { stream->failed = 1; return KEYSTONE_TRIGRAM_ENOMEM; }
+            stream->buffer = new_buf;
+            stream->buf_cap = new_cap;
+        }
+        memcpy(stream->buffer + stream->buf_len, data, len);
+        stream->buf_len += len;
+        stream->total_bytes = new_total;
+        return KEYSTONE_TRIGRAM_OK;
+    }
+
+    /* True streaming ingestion with 2-byte boundary carry */
+    bool fold = (idx->flags & KEYSTONE_TRIGRAM_OPT_CASE_INSENSITIVE) != 0;
+    uint32_t doc_id = stream->doc_id;
+    int rc = KEYSTONE_TRIGRAM_OK;
+
+    /* 1. Bridge carry bytes with prefix of incoming chunk */
+    if (stream->carry_len > 0u) {
+        unsigned char stitch[5];
+        memcpy(stitch, stream->carry, stream->carry_len);
+        size_t take = len < 2u ? len : 2u;
+        memcpy(stitch + stream->carry_len, data, take);
+        size_t stitch_len = stream->carry_len + take;
+
+        if (stitch_len >= 3u) {
+            for (size_t k = 0u; k < stream->carry_len && k + 2u < stitch_len; k++) {
+                uint32_t b0 = fold ? (uint32_t)fast_ascii_tolower(stitch[k]) : (uint32_t)stitch[k];
+                uint32_t b1 = fold ? (uint32_t)fast_ascii_tolower(stitch[k + 1u]) : (uint32_t)stitch[k + 1u];
+                uint32_t b2 = fold ? (uint32_t)fast_ascii_tolower(stitch[k + 2u]) : (uint32_t)stitch[k + 2u];
+                uint32_t key = (b0 << 16) | (b1 << 8) | b2;
+                KEYSTONE_EMIT_TRIGRAM(key);
+            }
+        }
+    }
+
+    /* 2. Process trigrams wholly within incoming chunk */
+    if (len >= 3u) {
+        const unsigned char* p = (const unsigned char*)data;
+        size_t i = 0u;
+#ifdef __SSE4_2__
+        while (i + 16u <= len) {
+            uint32_t keys[16];
+            keystone_extract_trigrams16_folded(p + i, keys, fold);
+            for (int k = 0; k < 14; k++) {
+                KEYSTONE_EMIT_TRIGRAM(keys[k]);
+            }
+            i += 14u;
+        }
+#endif
+        for (; i <= len - 3u; i++) {
+            uint32_t b0 = fold ? (uint32_t)fast_ascii_tolower(p[i]) : (uint32_t)p[i];
+            uint32_t b1 = fold ? (uint32_t)fast_ascii_tolower(p[i + 1u]) : (uint32_t)p[i + 1u];
+            uint32_t b2 = fold ? (uint32_t)fast_ascii_tolower(p[i + 2u]) : (uint32_t)p[i + 2u];
+            uint32_t key = (b0 << 16) | (b1 << 8) | b2;
+            KEYSTONE_EMIT_TRIGRAM(key);
+        }
+    }
+
+    /* 3. Update carry bytes */
+    const unsigned char* udata = (const unsigned char*)data;
+    if (len >= 2u) {
+        stream->carry[0] = udata[len - 2u];
+        stream->carry[1] = udata[len - 1u];
+        stream->carry_len = 2u;
+    } else if (len == 1u) {
+        if (stream->carry_len == 0u) {
+            stream->carry[0] = udata[0];
+            stream->carry_len = 1u;
+        } else if (stream->carry_len == 1u) {
+            stream->carry[1] = udata[0];
+            stream->carry_len = 2u;
+        } else {
+            stream->carry[0] = stream->carry[1];
+            stream->carry[1] = udata[0];
+            stream->carry_len = 2u;
+        }
+    }
+
+    stream->total_bytes = new_total;
     return KEYSTONE_TRIGRAM_OK;
+
+fail_prepared_doc:
+    stream->failed = 1;
+    clear_doc_seen(idx);
+    return poison_index(idx, rc == KEYSTONE_TRIGRAM_OK ? KEYSTONE_TRIGRAM_ESTATE : rc);
 }
 
 int keystone_trigram_end_document(
@@ -1340,18 +1579,42 @@ int keystone_trigram_end_document(
     uint32_t* out_doc_id
 ) {
     if (!stream) return KEYSTONE_TRIGRAM_EINVAL;
-    int rc;
+    int rc = KEYSTONE_TRIGRAM_OK;
     if (stream->failed) {
         rc = KEYSTONE_TRIGRAM_ESTATE;
     } else if (stream->retain_content) {
         rc = keystone_trigram_index_add_document(
             stream->idx, stream->name, stream->buffer, stream->buf_len, out_doc_id);
     } else {
-        rc = keystone_trigram_index_add_document_external(
-            stream->idx, stream->name, stream->buffer, stream->buf_len, out_doc_id);
+        keystone_trigram_index_t* idx = stream->idx;
+        if (!idx || idx->failed || idx->is_finalized) {
+            rc = KEYSTONE_TRIGRAM_ESTATE;
+        } else {
+            clear_doc_seen(idx);
+
+            keystone_trigram_doc_t* doc = &idx->docs[idx->doc_count];
+            doc->id = stream->doc_id;
+            doc->name = stream->name;
+            stream->name = NULL;
+            doc->content = NULL;
+            doc->content_len = stream->total_bytes;
+            doc->owns_content = false;
+            idx->doc_count++;
+
+            idx->stats.total_documents = idx->doc_count;
+            idx->stats.bytes_indexed += stream->total_bytes;
+            uint64_t end_time = get_time_ns();
+            if (end_time >= stream->start_time &&
+                UINT64_MAX - idx->stats.build_time_ns >= end_time - stream->start_time) {
+                idx->stats.build_time_ns += end_time - stream->start_time;
+            } else {
+                idx->stats.build_time_ns = UINT64_MAX;
+            }
+            if (out_doc_id) *out_doc_id = stream->doc_id;
+        }
     }
-    if (stream->name) { free(stream->name); }
-    if (stream->buffer) { free(stream->buffer); }
+    if (stream->name) free(stream->name);
+    if (stream->buffer) free(stream->buffer);
     free(stream);
     return rc;
 }
@@ -1360,6 +1623,10 @@ void keystone_trigram_cancel_document(
     keystone_trigram_stream_t* stream
 ) {
     if (!stream) return;
+    if (!stream->retain_content && stream->total_bytes > 0u && stream->idx) {
+        clear_doc_seen(stream->idx);
+        poison_index(stream->idx, KEYSTONE_TRIGRAM_ESTATE);
+    }
     if (stream->name) free(stream->name);
     if (stream->buffer) free(stream->buffer);
     free(stream);
@@ -1504,15 +1771,22 @@ int keystone_trigram_candidates_next(
 
         for (size_t l = 1u; l < iter->num_lists; l++) {
             const keystone_trigram_posting_list_t* pl = iter->lists[l];
-            size_t pos = ks_lower_bound_gallop_u32(
-                pl->doc_ids, pl->count, iter->cursor[l], doc_id);
+            if (pl->bitmap) {
+                if ((pl->bitmap[doc_id >> 6u] & (UINT64_C(1) << (doc_id & 63u))) == 0) {
+                    in_all = false;
+                    break;
+                }
+            } else {
+                size_t pos = ks_lower_bound_gallop_u32(
+                    pl->doc_ids, pl->count, iter->cursor[l], doc_id);
 
-            iter->cursor[l] = pos;
-            if (pos == pl->count || pl->doc_ids[pos] != doc_id) {
-                in_all = false;
-                break;
+                iter->cursor[l] = pos;
+                if (pos == pl->count || pl->doc_ids[pos] != doc_id) {
+                    in_all = false;
+                    break;
+                }
+                iter->cursor[l] = pos + 1u;
             }
-            iter->cursor[l] = pos + 1u;
         }
 
         if (in_all) {
@@ -1541,10 +1815,22 @@ size_t keystone_trigram_index_memory_usage(
     /* Hash table (keys + lists) */
     total += idx->num_buckets * sizeof(uint32_t);
     total += idx->num_buckets * sizeof(keystone_trigram_posting_list_t);
-    /* Posting list arrays */
+    /* Posting list arrays / flattened postings */
+    if (idx->flat_postings) {
+        total += idx->total_postings * sizeof(uint32_t);
+    } else {
+        for (size_t i = 0u; i < idx->num_buckets; i++) {
+            if (idx->bucket_keys[i] != TRIGRAM_KEY_EMPTY) {
+                total += idx->bucket_lists[i].capacity * sizeof(uint32_t);
+            }
+        }
+    }
+
+    /* Dense posting bitmaps */
+    size_t bitmap_bytes = ((idx->doc_count + 63u) / 64u) * sizeof(uint64_t);
     for (size_t i = 0u; i < idx->num_buckets; i++) {
-        if (idx->bucket_keys[i] != TRIGRAM_KEY_EMPTY) {
-            total += idx->bucket_lists[i].capacity * sizeof(uint32_t);
+        if (idx->bucket_keys[i] != TRIGRAM_KEY_EMPTY && idx->bucket_lists[i].bitmap) {
+            total += bitmap_bytes;
         }
     }
     /* Doc table */
@@ -1752,7 +2038,8 @@ keystone_trigram_index_t* keystone_trigram_index_load(const char* filepath) {
         }
     }
 
-    idx->is_finalized = true;
+    int fin_rc = keystone_trigram_index_finalize(idx);
+    if (fin_rc != KEYSTONE_TRIGRAM_OK) goto load_fail;
     idx->stats = stats;
     fclose(fp);
     return idx;

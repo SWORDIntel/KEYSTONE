@@ -329,6 +329,109 @@ static void test_candidate_iterator_case_folding_and_galloping(void) {
     printf("✓ Candidate iterator case folding and galloping search verified.\n");
 }
 
+static void test_true_streaming_carry_and_flattening_and_bitmaps(void) {
+    printf("Testing Phase 2: True streaming carry, flat postings, and dense bitmaps...\n");
+
+    /* Part 1: True streaming with 1-byte, 2-byte, and varying chunk feeds */
+    keystone_trigram_index_t* idx_ref = keystone_trigram_index_create_options(2, KEYSTONE_TRIGRAM_OPT_CASE_INSENSITIVE);
+    keystone_trigram_index_t* idx_stream = keystone_trigram_index_create_options(2, KEYSTONE_TRIGRAM_OPT_CASE_INSENSITIVE);
+    TEST_ASSERT(idx_ref != NULL && idx_stream != NULL);
+
+    const char* text0 = "The quick brown fox jumps over the lazy dog";
+    size_t text0_len = strlen(text0);
+
+    TEST_ASSERT(keystone_trigram_index_add_document_external(idx_ref, "doc0", text0, text0_len, NULL) == KEYSTONE_TRIGRAM_OK);
+
+    keystone_trigram_stream_t* stream0 = keystone_trigram_begin_document_options(idx_stream, "doc0", false);
+    TEST_ASSERT(stream0 != NULL);
+    /* Feed strictly 1 byte at a time */
+    for (size_t i = 0; i < text0_len; i++) {
+        TEST_ASSERT(keystone_trigram_feed_bytes(stream0, &text0[i], 1) == KEYSTONE_TRIGRAM_OK);
+    }
+    uint32_t s_doc_id = 999;
+    TEST_ASSERT(keystone_trigram_end_document(stream0, &s_doc_id) == KEYSTONE_TRIGRAM_OK);
+    TEST_ASSERT(s_doc_id == 0);
+
+    TEST_ASSERT(keystone_trigram_index_finalize(idx_ref) == KEYSTONE_TRIGRAM_OK);
+    TEST_ASSERT(keystone_trigram_index_finalize(idx_stream) == KEYSTONE_TRIGRAM_OK);
+
+    const char* queries[] = {"quick", "brown", "fox", "lazy", "dog", "jumps over", "THE QUICK"};
+    for (size_t q = 0; q < sizeof(queries)/sizeof(queries[0]); q++) {
+        uint32_t c_ref[2], c_stream[2];
+        size_t n_ref = keystone_trigram_index_get_candidates(idx_ref, queries[q], strlen(queries[q]), c_ref, 2);
+        size_t n_stream = keystone_trigram_index_get_candidates(idx_stream, queries[q], strlen(queries[q]), c_stream, 2);
+        TEST_ASSERT(n_ref == 1);
+        TEST_ASSERT(n_stream == 1);
+        TEST_ASSERT(c_ref[0] == c_stream[0]);
+    }
+
+    keystone_trigram_index_destroy(idx_ref);
+    keystone_trigram_index_destroy(idx_stream);
+
+    /* Part 2: Dense Posting Bitmaps and Contiguous Flat Postings (>64 docs) */
+    keystone_trigram_index_t* idx_dense = keystone_trigram_index_create_options(128, KEYSTONE_TRIGRAM_OPT_CASE_INSENSITIVE);
+    TEST_ASSERT(idx_dense != NULL);
+
+    char buf[256];
+    for (uint32_t d = 0; d < 128; d++) {
+        if (d == 42 || d == 99) {
+            snprintf(buf, sizeof(buf), "COMMON_SIGNAL_EVERYWHERE doc_%u RARE_SECRET_TOKEN payload", d);
+        } else if (d % 2 == 1) {
+            snprintf(buf, sizeof(buf), "COMMON_SIGNAL_EVERYWHERE doc_%u ODD_TARGET_PAYLOAD data", d);
+        } else {
+            snprintf(buf, sizeof(buf), "COMMON_SIGNAL_EVERYWHERE doc_%u EVEN_TARGET_PAYLOAD data", d);
+        }
+        TEST_ASSERT(keystone_trigram_index_add_document(idx_dense, NULL, buf, strlen(buf), NULL) == KEYSTONE_TRIGRAM_OK);
+    }
+
+    size_t pre_mem = keystone_trigram_index_memory_usage(idx_dense);
+    TEST_ASSERT(pre_mem > 0);
+
+    TEST_ASSERT(keystone_trigram_index_finalize(idx_dense) == KEYSTONE_TRIGRAM_OK);
+
+    size_t post_mem = keystone_trigram_index_memory_usage(idx_dense);
+    TEST_ASSERT(post_mem > 0);
+
+    /* Query dense term: should return all 128 candidate docs via dense bitmap fast path */
+    uint32_t all_cands[150];
+    size_t total_cands = keystone_trigram_index_get_candidates(
+        idx_dense, "COMMON_SIGNAL_EVERYWHERE", strlen("COMMON_SIGNAL_EVERYWHERE"), all_cands, 150);
+    TEST_ASSERT(total_cands == 128);
+
+    /* Query rarest term: should return exactly 2 candidate docs */
+    uint32_t rare_cands[10];
+    size_t rare_count = keystone_trigram_index_get_candidates(
+        idx_dense, "RARE_SECRET_TOKEN", strlen("RARE_SECRET_TOKEN"), rare_cands, 10);
+    TEST_ASSERT(rare_count == 2);
+    TEST_ASSERT(rare_cands[0] == 42 && rare_cands[1] == 99);
+
+    /* Combined query: common + rare */
+    uint32_t combo_matches[10];
+    size_t combo_count = keystone_trigram_index_search(
+        idx_dense, "RARE_SECRET_TOKEN", strlen("RARE_SECRET_TOKEN"), combo_matches, 10);
+    TEST_ASSERT(combo_count == 2);
+    TEST_ASSERT(combo_matches[0] == 42 && combo_matches[1] == 99);
+
+    /* Paginated iterator test across dense posting list */
+    keystone_trigram_candidate_iter_t* p_iter = keystone_trigram_candidates_begin(
+        idx_dense, "COMMON_SIGNAL_EVERYWHERE", strlen("COMMON_SIGNAL_EVERYWHERE"));
+    TEST_ASSERT(p_iter != NULL);
+
+    size_t iterated = 0;
+    int exhausted = 0;
+    uint32_t chunk[32];
+    while (!exhausted) {
+        size_t c = 0;
+        TEST_ASSERT(keystone_trigram_candidates_next(p_iter, chunk, 32, &c, &exhausted) == KEYSTONE_TRIGRAM_OK);
+        iterated += c;
+    }
+    TEST_ASSERT(iterated == 128);
+    keystone_trigram_candidates_free(p_iter);
+
+    keystone_trigram_index_destroy(idx_dense);
+    printf("✓ Phase 2 streaming carry, flat postings, and dense bitmaps verified.\n");
+}
+
 int main(void) {
     printf("Running Trigram Index Test Suite\n");
     printf("===============================\n\n");
@@ -340,6 +443,7 @@ int main(void) {
     test_trigram_index_build_and_search();
     test_case_insensitive_search();
     test_candidate_iterator_case_folding_and_galloping();
+    test_true_streaming_carry_and_flattening_and_bitmaps();
     test_binary_persistence();
 #ifdef KEYSTONE_ENABLE_TAR_ZST
     test_archive_streaming_trigram();
