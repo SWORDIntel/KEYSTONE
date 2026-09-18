@@ -104,7 +104,7 @@ Formulated in architectural review with frontier model Sol (`gpt-5.6-sol`). See 
 
 ## 4. Downstream Integrations
 
-- [ ] **Parrot-Sabot (`SWORDIntel/parrot-sabot`)**:
-  - Integrate `TrigramIndex` into `ArtifactSpooler` (`sabot/artifacts.py`) for `/search-artifacts <query>` sub-millisecond log triage.
+- [x] **Parrot-Sabot (`SWORDIntel/parrot-sabot`)**:
+  - Integrated `TrigramIndex` into `ArtifactSpooler` (`sabot/artifacts.py`) with mtime caching for `/search-artifacts <query>` sub-millisecond log triage.
 - [ ] **QIHSE AI Compute Fabric (`SWORDIntel/QIHSE`)**:
   - Export Keystone engine capability frames (`NODE_CAP` frame 8u) to the QIHSE cluster bus.
