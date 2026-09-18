@@ -44,3 +44,6 @@ __pycache__/
 # Core dumps
 *.core
 core
+
+# Transcripts and temporary context
+Context.md

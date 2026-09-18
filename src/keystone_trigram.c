@@ -42,12 +42,75 @@ static inline unsigned char fast_ascii_tolower(unsigned char c) {
     return (c >= 'A' && c <= 'Z') ? (unsigned char)(c + 32u) : c;
 }
 
+/* Chunk-backed posting list segment in arena */
+typedef struct keystone_posting_chunk {
+    struct keystone_posting_chunk* next;
+    uint32_t count;
+    uint32_t capacity;
+    uint32_t doc_ids[];
+} keystone_posting_chunk_t;
+
 typedef struct keystone_trigram_posting_list {
-    uint32_t* doc_ids;
-    size_t count;
+    uint32_t* doc_ids; /* Finalized pointer into flat_postings */
+    size_t count;      /* Total doc IDs across all chunks */
     size_t capacity;
     uint64_t* bitmap;
+    keystone_posting_chunk_t* head_chunk;
+    keystone_posting_chunk_t* tail_chunk;
 } keystone_trigram_posting_list_t;
+
+#define KEYSTONE_ARENA_BLOCK_SIZE (2u * 1024u * 1024u) /* 2 MB blocks */
+
+typedef struct keystone_arena_block {
+    struct keystone_arena_block* next;
+    size_t used;
+    size_t capacity;
+    uint8_t data[];
+} keystone_arena_block_t;
+
+typedef struct keystone_arena {
+    keystone_arena_block_t* head;
+    keystone_arena_block_t* current;
+    size_t total_allocated;
+} keystone_arena_t;
+
+static void* keystone_arena_alloc(keystone_arena_t* arena, size_t bytes) {
+    if (!arena || bytes == 0u) return NULL;
+    bytes = (bytes + 7u) & ~((size_t)7u);
+
+    if (!arena->current || arena->current->used + bytes > arena->current->capacity) {
+        size_t block_data_cap = KEYSTONE_ARENA_BLOCK_SIZE;
+        if (bytes > block_data_cap) {
+            block_data_cap = bytes;
+        }
+        size_t total_block = sizeof(keystone_arena_block_t) + block_data_cap;
+        keystone_arena_block_t* block = (keystone_arena_block_t*)malloc(total_block);
+        if (!block) return NULL;
+        block->next = arena->head;
+        block->used = 0u;
+        block->capacity = block_data_cap;
+        arena->head = block;
+        arena->current = block;
+        arena->total_allocated += total_block;
+    }
+
+    void* ptr = arena->current->data + arena->current->used;
+    arena->current->used += bytes;
+    return ptr;
+}
+
+static void keystone_arena_destroy(keystone_arena_t* arena) {
+    if (!arena) return;
+    keystone_arena_block_t* curr = arena->head;
+    while (curr) {
+        keystone_arena_block_t* next = curr->next;
+        free(curr);
+        curr = next;
+    }
+    arena->head = NULL;
+    arena->current = NULL;
+    arena->total_allocated = 0u;
+}
 
 typedef struct keystone_trigram_doc {
     uint32_t id;
@@ -71,6 +134,9 @@ struct keystone_trigram_index {
     /* Flattened contiguous posting array allocated at finalize() */
     uint32_t* flat_postings;
     size_t total_postings;
+
+    /* Ingestion chunk arena (destroyed at finalize) */
+    keystone_arena_t arena;
 
     /* Direct 24-bit trigram directory (64 MiB flat array for O(1) zero-probe lookup) */
     uint32_t* direct_dir;
@@ -307,7 +373,7 @@ void keystone_trigram_index_destroy(keystone_trigram_index_t* idx) {
     if (idx->bucket_lists) {
         for (size_t i = 0u; i < idx->num_buckets; i++) {
             if (idx->bucket_keys && idx->bucket_keys[i] != TRIGRAM_KEY_EMPTY) {
-                if (!idx->flat_postings) {
+                if (!idx->flat_postings && !idx->bucket_lists[i].head_chunk) {
                     free(idx->bucket_lists[i].doc_ids);
                 }
                 if (idx->bucket_lists[i].bitmap) {
@@ -319,6 +385,7 @@ void keystone_trigram_index_destroy(keystone_trigram_index_t* idx) {
         free(idx->bucket_lists);
     }
     free(idx->flat_postings);
+    keystone_arena_destroy(&idx->arena);
     free(idx->direct_dir);
     idx->direct_dir = NULL;
     free(idx->bucket_keys);
@@ -470,20 +537,23 @@ static keystone_trigram_posting_list_t* find_or_create_posting_list(
 
     keystone_trigram_posting_list_t* plist = &idx->bucket_lists[bucket_idx];
     if (idx->bucket_keys[bucket_idx] == TRIGRAM_KEY_EMPTY) {
-        size_t bytes;
-        if (!checked_mul_size(TRIGRAM_INITIAL_POSTING_CAPACITY, sizeof(uint32_t), &bytes)) {
-            poison_index(idx, KEYSTONE_TRIGRAM_EOVERFLOW);
-            return NULL;
-        }
-        uint32_t* ids = (uint32_t*)malloc(bytes);
-        if (!ids) {
+        size_t init_cap = TRIGRAM_INITIAL_POSTING_CAPACITY;
+        size_t chunk_bytes = sizeof(keystone_posting_chunk_t) + init_cap * sizeof(uint32_t);
+        keystone_posting_chunk_t* chunk = (keystone_posting_chunk_t*)keystone_arena_alloc(&idx->arena, chunk_bytes);
+        if (!chunk) {
             poison_index(idx, KEYSTONE_TRIGRAM_ENOMEM);
             return NULL;
         }
+        chunk->next = NULL;
+        chunk->count = 0u;
+        chunk->capacity = (uint32_t)init_cap;
 
-        plist->doc_ids = ids;
+        plist->doc_ids = NULL;
+        plist->head_chunk = chunk;
+        plist->tail_chunk = chunk;
         plist->count = 0u;
-        plist->capacity = TRIGRAM_INITIAL_POSTING_CAPACITY;
+        plist->capacity = init_cap;
+        plist->bitmap = NULL;
         idx->bucket_keys[bucket_idx] = key;
         idx->unique_trigrams++;
     }
@@ -496,30 +566,48 @@ static int add_doc_to_posting_list(
     keystone_trigram_posting_list_t* plist,
     uint32_t doc_id
 ) {
-    if (!idx || !plist || !plist->doc_ids || plist->capacity == 0u) {
+    if (!idx || !plist) {
         return poison_index(idx, KEYSTONE_TRIGRAM_ESTATE);
     }
 
-    if (plist->count > 0u && plist->doc_ids[plist->count - 1u] == doc_id) {
+    keystone_posting_chunk_t* tail = plist->tail_chunk;
+    if (!tail) {
+        return poison_index(idx, KEYSTONE_TRIGRAM_ESTATE);
+    }
+
+    /* Deduplication check: skip if already appended for this document */
+    if (tail->count > 0u && tail->doc_ids[tail->count - 1u] == doc_id) {
         return KEYSTONE_TRIGRAM_OK;
     }
 
-    if (plist->count >= plist->capacity) {
-        if (plist->capacity > SIZE_MAX / 2u) {
-            return poison_index(idx, KEYSTONE_TRIGRAM_EOVERFLOW);
-        }
-        size_t new_cap = plist->capacity * 2u;
-        size_t bytes;
-        if (!checked_mul_size(new_cap, sizeof(uint32_t), &bytes)) {
-            return poison_index(idx, KEYSTONE_TRIGRAM_EOVERFLOW);
-        }
-        uint32_t* new_ids = (uint32_t*)realloc(plist->doc_ids, bytes);
-        if (!new_ids) return poison_index(idx, KEYSTONE_TRIGRAM_ENOMEM);
-        plist->doc_ids = new_ids;
-        plist->capacity = new_cap;
+    /* Fast path: append directly to tail chunk */
+    if (tail->count < tail->capacity) {
+        tail->doc_ids[tail->count++] = doc_id;
+        plist->count++;
+        return KEYSTONE_TRIGRAM_OK;
     }
 
-    plist->doc_ids[plist->count++] = doc_id;
+    /* Allocate next chunk from arena with geometric capacity growth up to 16,384 entries (64 KB) */
+    uint32_t next_cap = tail->capacity * 2u;
+    if (next_cap > 16384u) next_cap = 16384u;
+    if (next_cap < 8u) next_cap = 8u;
+
+    size_t chunk_bytes = sizeof(keystone_posting_chunk_t) + (size_t)next_cap * sizeof(uint32_t);
+    keystone_posting_chunk_t* new_chunk = (keystone_posting_chunk_t*)keystone_arena_alloc(&idx->arena, chunk_bytes);
+    if (!new_chunk) {
+        return poison_index(idx, KEYSTONE_TRIGRAM_ENOMEM);
+    }
+
+    new_chunk->next = NULL;
+    new_chunk->count = 1u;
+    new_chunk->capacity = next_cap;
+    new_chunk->doc_ids[0] = doc_id;
+
+    tail->next = new_chunk;
+    plist->tail_chunk = new_chunk;
+    plist->count++;
+    plist->capacity += next_cap;
+
     return KEYSTONE_TRIGRAM_OK;
 }
 
@@ -734,8 +822,7 @@ int keystone_trigram_index_finalize(keystone_trigram_index_t* idx) {
     for (size_t i = 0u; i < idx->num_buckets; i++) {
         if (idx->bucket_keys[i] == TRIGRAM_KEY_EMPTY) continue;
         keystone_trigram_posting_list_t* plist = &idx->bucket_lists[i];
-        if (plist->count == 0u) continue;
-        if (!plist->doc_ids || plist->count > plist->capacity) {
+        if ((!plist->doc_ids && !plist->head_chunk) || plist->count > plist->capacity) {
             return poison_index(idx, KEYSTONE_TRIGRAM_ESTATE);
         }
         if (plist->count > SIZE_MAX - total_postings) {
@@ -761,14 +848,29 @@ int keystone_trigram_index_finalize(keystone_trigram_index_t* idx) {
             keystone_trigram_posting_list_t* plist = &idx->bucket_lists[i];
             if (plist->count == 0u) continue;
 
-            memcpy(flat + offset, plist->doc_ids, plist->count * sizeof(uint32_t));
-            free(plist->doc_ids);
+            if (plist->head_chunk) {
+                size_t written = 0u;
+                for (keystone_posting_chunk_t* ch = plist->head_chunk; ch; ch = ch->next) {
+                    if (ch->count > 0u) {
+                        memcpy(flat + offset + written, ch->doc_ids, ch->count * sizeof(uint32_t));
+                        written += ch->count;
+                    }
+                }
+                plist->head_chunk = NULL;
+                plist->tail_chunk = NULL;
+            } else if (plist->doc_ids) {
+                memcpy(flat + offset, plist->doc_ids, plist->count * sizeof(uint32_t));
+                free(plist->doc_ids);
+            }
             plist->doc_ids = flat + offset;
             plist->capacity = plist->count;
             offset += plist->count;
         }
         idx->flat_postings = flat;
         idx->total_postings = total_postings;
+
+        /* Destroy the ingestion chunk arena — all postings are now flat and contiguous */
+        keystone_arena_destroy(&idx->arena);
     }
 
     /* Phase 2: Dense Posting Bitmap Conversion
@@ -1845,11 +1947,7 @@ size_t keystone_trigram_index_memory_usage(
     if (idx->flat_postings) {
         total += idx->total_postings * sizeof(uint32_t);
     } else {
-        for (size_t i = 0u; i < idx->num_buckets; i++) {
-            if (idx->bucket_keys[i] != TRIGRAM_KEY_EMPTY) {
-                total += idx->bucket_lists[i].capacity * sizeof(uint32_t);
-            }
-        }
+        total += idx->arena.total_allocated;
     }
 
     /* Dense posting bitmaps */
@@ -2056,14 +2154,21 @@ keystone_trigram_index_t* keystone_trigram_index_load(const char* filepath) {
         if (!plist) goto load_fail;
 
         if (count > 0u) {
-            size_t cap = count > TRIGRAM_INITIAL_POSTING_CAPACITY ? (size_t)count : TRIGRAM_INITIAL_POSTING_CAPACITY;
-            size_t ids_bytes;
-            if (!checked_mul_size(cap, sizeof(uint32_t), &ids_bytes)) goto load_fail;
-            uint32_t* new_ids = (uint32_t*)realloc(plist->doc_ids, ids_bytes);
-            if (!new_ids) goto load_fail;
-            plist->doc_ids = new_ids;
-            plist->capacity = cap;
-            if (fread(plist->doc_ids, sizeof(uint32_t), count, fp) != count) goto load_fail;
+            keystone_posting_chunk_t* chunk = plist->head_chunk;
+            if (!chunk || count > chunk->capacity) {
+                size_t chunk_bytes;
+                if (!checked_mul_size((size_t)count, sizeof(uint32_t), &chunk_bytes)) goto load_fail;
+                if (!checked_add_size(chunk_bytes, sizeof(keystone_posting_chunk_t), &chunk_bytes)) goto load_fail;
+                chunk = (keystone_posting_chunk_t*)keystone_arena_alloc(&idx->arena, chunk_bytes);
+                if (!chunk) goto load_fail;
+                chunk->next = NULL;
+                chunk->capacity = count;
+                plist->head_chunk = chunk;
+                plist->tail_chunk = chunk;
+                plist->capacity = count;
+            }
+            if (fread(chunk->doc_ids, sizeof(uint32_t), count, fp) != count) goto load_fail;
+            chunk->count = count;
             plist->count = count;
         }
     }

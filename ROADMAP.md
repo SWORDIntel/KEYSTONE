@@ -67,8 +67,8 @@ Formulated in architectural review with frontier model Sol (`gpt-5.6-sol`). See 
   - Unified branchless ASCII folding (`fast_ascii_tolower`) across ingestion, query planning, and candidate verification, and pre-folded query needle in `bounded_memmem_ci`.
 
 ### Phase 2: Indexing & Storage Throughput
-- [ ] **Arena-Backed Posting List Construction**:
-  - Replace per-posting `malloc()` calls with chunked arena allocators during ingestion to eliminate heap fragmentation.
+- [x] **Arena-Backed Posting List Construction**:
+  - Replaced per-posting `malloc()` and `realloc()` copying with 2MB-block bump allocator chunk arena (`keystone_arena_t` and `keystone_posting_chunk_t`). Chunks scale geometrically up to 16,384 entries (64 KB) with zero pointer copying churn during ingestion. Unpacked into contiguous `flat_postings` and destroyed in a single pass at `finalize()`.
 - [x] **Contiguous Flattened Index Layout**:
   - At `finalize()`, flatten all posting lists into a single contiguous memory pool (`flat_postings`), eliminating heap fragmentation and reducing index destruction to $O(1)$.
 - [x] **Dense Posting Bitmap Conversion**:
