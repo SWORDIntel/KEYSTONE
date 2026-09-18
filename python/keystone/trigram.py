@@ -28,7 +28,7 @@ Usage:
 
 import ctypes
 import os
-from typing import List, Optional, Tuple
+from typing import List, Optional, Tuple, Union
 from dataclasses import dataclass
 
 # Reuse the shared libkeystone.so loader from core
@@ -295,17 +295,19 @@ class TrigramIndex:
     def document_count(self) -> int:
         return int(_lib.keystone_trigram_index_document_count(self._ptr))
 
-    def add_document(self, name: Optional[str], text: bytes) -> int:
+    def add_document(self, name: Optional[str], text: Union[str, bytes]) -> int:
         """Add a document with content retention (for exact search).
 
         Args:
             name: Optional document name/path (None or string).
-            text: Document content bytes.
+            text: Document content bytes or string.
 
         Returns:
             Assigned document ID.
         """
         c_name = name.encode("utf-8") if name else None
+        if isinstance(text, str):
+            text = text.encode("utf-8")
         doc_id = ctypes.c_uint32(0)
         rc = _lib.keystone_trigram_index_add_document(
             self._ptr, c_name, text, len(text), ctypes.byref(doc_id)
@@ -314,17 +316,19 @@ class TrigramIndex:
             raise RuntimeError(f"add_document failed with code {rc}")
         return int(doc_id.value)
 
-    def add_document_external(self, name: Optional[str], text: bytes) -> int:
+    def add_document_external(self, name: Optional[str], text: Union[str, bytes]) -> int:
         """Add a document without content retention (candidate-only indexing).
 
         Args:
             name: Optional document name/path (None or string).
-            text: Document content bytes.
+            text: Document content bytes or string.
 
         Returns:
             Assigned document ID.
         """
         c_name = name.encode("utf-8") if name else None
+        if isinstance(text, str):
+            text = text.encode("utf-8")
         doc_id = ctypes.c_uint32(0)
         rc = _lib.keystone_trigram_index_add_document_external(
             self._ptr, c_name, text, len(text), ctypes.byref(doc_id)
@@ -350,35 +354,41 @@ class TrigramIndex:
         if rc != 0:
             raise RuntimeError(f"finalize failed with code {rc}")
 
-    def search(self, pattern: bytes, max_matches: int = 4096) -> List[int]:
+    def search(self, pattern: Union[str, bytes], max_matches: int = 4096) -> List[int]:
         """Trigram-accelerated exact substring search over owned docs.
 
         External-only documents are skipped (no content retained).
         Returns list of matching document IDs.
         """
+        if isinstance(pattern, str):
+            pattern = pattern.encode("utf-8")
         out = (ctypes.c_uint32 * max_matches)()
         n = _lib.keystone_trigram_index_search(
             self._ptr, pattern, len(pattern), out, max_matches
         )
         return [int(out[i]) for i in range(n)]
 
-    def get_candidates(self, pattern: bytes, max_candidates: int = 4096) -> List[int]:
+    def get_candidates(self, pattern: Union[str, bytes], max_candidates: int = 4096) -> List[int]:
         """Intersect posting lists to get candidate document IDs.
 
         Candidates are hints only — the caller must verify them.
         For patterns shorter than 3 bytes, all docs are candidates.
         """
+        if isinstance(pattern, str):
+            pattern = pattern.encode("utf-8")
         out = (ctypes.c_uint32 * max_candidates)()
         n = _lib.keystone_trigram_index_get_candidates(
             self._ptr, pattern, len(pattern), out, max_candidates
         )
         return [int(out[i]) for i in range(n)]
 
-    def get_candidates_iter(self, pattern: bytes, batch_size: int = 4096):
+    def get_candidates_iter(self, pattern: Union[str, bytes], batch_size: int = 4096):
         """Paginated candidate iterator for large result sets.
 
         Yields lists of candidate document IDs.
         """
+        if isinstance(pattern, str):
+            pattern = pattern.encode("utf-8")
         iter_ptr = _lib.keystone_trigram_candidates_begin(
             self._ptr, pattern, len(pattern)
         )
@@ -460,10 +470,12 @@ class TrigramStream:
         self._ptr = ptr
         self._ended = False
 
-    def feed(self, data: bytes) -> None:
+    def feed(self, data: Union[str, bytes]) -> None:
         """Feed bytes to the streaming document."""
         if self._ended or not self._ptr:
             raise RuntimeError("stream is closed")
+        if isinstance(data, str):
+            data = data.encode("utf-8")
         rc = _lib.keystone_trigram_feed_bytes(self._ptr, data, len(data))
         if rc != 0:
             raise RuntimeError(f"feed_bytes failed with code {rc}")

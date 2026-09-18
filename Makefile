@@ -137,7 +137,7 @@ all: lib tests benchmarks
 lib: libkeystone.so
 
 libkeystone.so: $(OBJS) $(FORTRAN_OBJ)
-	$(CC) -shared -fPIC -o $@ $^ $(LDFLAGS)
+	$(CC) -shared -fPIC -o $@ $(OBJS) $(FORTRAN_OBJ) $(LDFLAGS)
 
 fortran/keystone_batch.o: fortran/keystone_batch.f90
 	mkdir -p fortran
@@ -235,7 +235,7 @@ CUDA_HOME ?= $(firstword $(wildcard /usr/local/cuda /usr/local/cuda-13.3 /opt/cu
 CUDA_INCLUDE ?= $(firstword $(wildcard $(CUDA_HOME)/targets/x86_64-linux/include $(CUDA_HOME)/include))
 cuda/libkeystone_cuda.so: cuda/keystone_cuda.cu
 	mkdir -p cuda
-	nvcc -O3 --std=c++17 -U_GNU_SOURCE $(if $(CUDA_INCLUDE),-I$(CUDA_INCLUDE)) --compiler-options '-fPIC' -shared $< -o $@
+	nvcc -O3 --std=c++17 -U_GNU_SOURCE $(if $(CUDA_INCLUDE),-I$(CUDA_INCLUDE)) --compiler-options '-fPIC' -shared -Xlinker -soname,libkeystone_cuda.so $< -o $@
 
 CUDA_ENABLED := no
 ifeq ($(KEYSTONE_ENABLE_CUDA),1)
