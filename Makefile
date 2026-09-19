@@ -4,7 +4,7 @@
 CC      := gcc
 MARCH   ?= native
 CFLAGS  := -O3 -march=$(MARCH) -fPIC -Wall -Wextra -Werror=implicit-function-declaration -I./include
-LDFLAGS := -lm
+LDFLAGS := -lm -ldl
 
 # Optional OpenMP (default: auto-enabled if the compiler supports it,
 # since multi-core CPUs benefit from parallel batch search.  Set
@@ -57,7 +57,7 @@ endif
 ifeq ($(KEYSTONE_ENABLE_CUDA),1)
     ifeq ($(shell command -v nvcc >/dev/null 2>&1 && echo yes),yes)
         CUDA_CFLAGS := -DKEYSTONE_ENABLE_CUDA
-        CUDA_LDFLAGS := -L./cuda -lkeystone_cuda -Wl,-rpath,'$$ORIGIN/cuda' -Wl,-rpath,'$$ORIGIN/../cuda'
+        CUDA_LDFLAGS := -L./cuda -lkeystone_cuda -lcudart -Wl,-rpath,'$$ORIGIN/cuda' -Wl,-rpath,'$$ORIGIN/../cuda'
         CFLAGS  += $(CUDA_CFLAGS)
         LDFLAGS += $(CUDA_LDFLAGS)
     else
@@ -66,7 +66,7 @@ ifeq ($(KEYSTONE_ENABLE_CUDA),1)
 else ifneq ($(KEYSTONE_ENABLE_CUDA),0)
     ifeq ($(shell command -v nvcc >/dev/null 2>&1 && echo yes),yes)
         CUDA_CFLAGS := -DKEYSTONE_ENABLE_CUDA
-        CUDA_LDFLAGS := -L./cuda -lkeystone_cuda -Wl,-rpath,'$$ORIGIN/cuda' -Wl,-rpath,'$$ORIGIN/../cuda'
+        CUDA_LDFLAGS := -L./cuda -lkeystone_cuda -lcudart -Wl,-rpath,'$$ORIGIN/cuda' -Wl,-rpath,'$$ORIGIN/../cuda'
         CFLAGS  += $(CUDA_CFLAGS)
         LDFLAGS += $(CUDA_LDFLAGS)
     endif
@@ -128,8 +128,8 @@ endif
 SRC     += src/dsmil_hash_indexer.c src/dsmil_dirty_parser.c src/dsmil_model_bridge.c src/dsmil_micro_model.c src/keystone_trigram.c \
            src/keystone_fabric.c
 
-TEST_SRC += tests/test_keystone_fabric.c
-TEST_BIN += bin/test_keystone_fabric
+TEST_SRC += tests/test_keystone_fabric.c tests/test_cuda_backend.c
+TEST_BIN += bin/test_keystone_fabric bin/test_cuda_backend
 
 OBJS    := $(SRC:.c=.o)
 
@@ -223,6 +223,9 @@ bin/test_fortran_workloads: $(OBJS) $(FORTRAN_OBJ) tests/test_fortran_workloads.
 	$(CC) -o $@ $^ $(LDFLAGS)
 
 bin/test_memory_ramp: $(OBJS) $(FORTRAN_OBJ) tests/test_memory_ramp.o | bin
+	$(CC) -o $@ $^ $(LDFLAGS)
+
+bin/test_cuda_backend: $(OBJS) $(FORTRAN_OBJ) tests/test_cuda_backend.o | bin
 	$(CC) -o $@ $^ $(LDFLAGS)
 
 # Benchmark binaries

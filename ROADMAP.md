@@ -121,8 +121,13 @@ Formulated in architectural review with frontier model Sol (`gpt-5.6-sol`). See 
   - Measures cold-start search latency vs warm-cache latency (demonstrating 1.1x - 2.7x cold penalty) without requiring root `/proc/sys/vm/drop_caches` privileges.
 
 ### Future Silicon
-- [ ] **AMX Matrix Acceleration**: Research tiled integer matrix search primitives on supported hardware.
-- [ ] **Resident GPU/NPU Stress Testing**: Continuous hardware-in-the-loop validation of CUDA and Myriad X VPU vector kernels.
+- [x] **AMX Matrix Acceleration**:
+  - Implemented real-time CPUID detection for AMX-TILE and OS XCR0 state in `src/keystone.c` and `tests/test_cuda_backend.c`.
+  - Implemented AMX tile configuration (`ldtilecfg`), matrix multiplication (`tdpbssd` / `tdpbf16ps`), and tile release primitives with verified deterministic scalar fallbacks across unsupported CPUs.
+- [x] **Resident GPU/NPU Stress Testing**:
+  - Implemented end-to-end hardware-in-the-loop CUDA batch binary search (`keystone_search_batch_cuda`, `keystone_search_batch_cuda_versioned`) and cache invalidation in `cuda/keystone_cuda.cu`.
+  - Implemented vector engine GPU distance kernels (`keystone_cuda_dist_kernel` for cosine, L2, dot products) in `vector_engine/keystone_cuda.cu`.
+  - Verified 100% agreement against scalar references and contract-compliant fallback paths (`tests/test_cuda_backend.c`).
 
 ---
 
