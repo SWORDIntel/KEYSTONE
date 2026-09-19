@@ -310,28 +310,37 @@ static void test_amx_silicon_and_fallback(void) {
 
 static void test_avx512_silicon(void) {
     printf("--- Testing AVX-512 Vectorized Engine ---\n");
+    fflush(stdout);
 
     uint32_t features = keystone_detect_cpu_features();
     if (features & KEYSTONE_CPU_AVX512) {
         printf("  [DETECT] AVX-512 detected on host CPU!\n");
         const size_t n = 1024;
         int64_t data[1024];
+        for (size_t i = 0; i < n; ++i) {
+            data[i] = (int64_t)(i * 13 + 7);
+        }
         size_t found = 0;
         for (size_t i = 0; i < 128; ++i) {
             size_t idx = keystone_linear_search_avx512(data, n, data[i * 7]);
             if (idx == i * 7) found++;
         }
         printf("  [PASS] AVX-512 linear search executed successfully (found=%zu/128)\n", found);
+        fflush(stdout);
         TEST_ASSERT(found == 128);
     } else {
         printf("  [INFO] AVX-512 not present on host CPU (scalar/AVX2 fallback active)\n");
+        fflush(stdout);
     }
 }
 
 int main(void) {
+    setbuf(stdout, NULL);
+    setbuf(stderr, NULL);
     printf("=====================================================\n");
     printf("KEYSTONE Comprehensive CUDA, AMX & AVX-512 Hardware Suite\n");
     printf("=====================================================\n");
+    fflush(stdout);
 
     test_cuda_batch_search();
     test_vector_engine_cuda();
@@ -339,5 +348,6 @@ int main(void) {
     test_avx512_silicon();
 
     printf("\nAll hardware acceleration and fallback tests passed!\n");
+    fflush(stdout);
     return 0;
 }
