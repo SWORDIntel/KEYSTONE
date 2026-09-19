@@ -1,21 +1,6 @@
 #include "../include/keystone.h"
 #include "../cuda/keystone_cuda.h"
 #include "../src/keystone_avx512.h"
-#if defined(__has_include)
-#  if __has_include(<cuda_runtime.h>)
-#    include <cuda_runtime.h>
-#  else
-typedef int cudaError_t;
-#    define cudaSuccess 0
-extern cudaError_t cudaGetDeviceCount(int *count);
-extern const char* cudaGetErrorString(cudaError_t error);
-#  endif
-#else
-typedef int cudaError_t;
-#  define cudaSuccess 0
-extern cudaError_t cudaGetDeviceCount(int *count);
-extern const char* cudaGetErrorString(cudaError_t error);
-#endif
 #include "test_macros.h"
 #include <stdint.h>
 #include <stdio.h>
@@ -23,6 +8,22 @@ extern const char* cudaGetErrorString(cudaError_t error);
 #include <string.h>
 #include <dlfcn.h>
 #include <math.h>
+
+static int get_cuda_device_count(void) {
+    void* h = dlopen("libcudart.so", RTLD_LAZY);
+    if (!h) h = dlopen("libcudart.so.12", RTLD_LAZY);
+    if (!h) h = dlopen("libcudart.so.11", RTLD_LAZY);
+    if (!h) h = dlopen("libcudart.so.13", RTLD_LAZY);
+    if (!h) h = dlopen("/usr/local/cuda/lib64/libcudart.so", RTLD_LAZY);
+    if (!h) h = dlopen("/usr/local/cuda/targets/x86_64-linux/lib/libcudart.so", RTLD_LAZY);
+    if (!h) return 0;
+    int (*fn)(int*) = (int (*)(int*))dlsym(h, "cudaGetDeviceCount");
+    if (!fn) { dlclose(h); return 0; }
+    int count = 0;
+    int rc = fn(&count);
+    dlclose(h);
+    return (rc == 0) ? count : 0;
+}
 
 #if defined(__x86_64__) || defined(__i386__)
 #include <cpuid.h>
@@ -51,11 +52,9 @@ static void fill_data(int64_t* data, size_t n) {
 static void test_cuda_batch_search(void) {
     printf("--- Testing CUDA Batch Search Backend ---\n");
 
-    int device_count = 0;
-    cudaError_t err = cudaGetDeviceCount(&device_count);
-    if (err != cudaSuccess || device_count <= 0) {
-        printf("  [INFO] CUDA GPU device not detected on this host (%s). Fallback verified.\n",
-               cudaGetErrorString(err));
+    int device_count = get_cuda_device_count();
+    if (device_count <= 0) {
+        printf("  [INFO] CUDA GPU device not detected on this host. Fallback verified.\n");
         return;
     }
     printf("  [DETECT] Detected %d CUDA GPU device(s)!\n", device_count);

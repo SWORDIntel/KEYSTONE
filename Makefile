@@ -56,11 +56,15 @@ endif
 # Optional CUDA backend
 CUDA_HOME ?= $(firstword $(wildcard /usr/local/cuda /usr/local/cuda-13.3 /usr/local/cuda-12.8 /usr/local/cuda-12.4 /opt/cuda))
 CUDA_INCLUDE ?= $(firstword $(wildcard $(CUDA_HOME)/targets/x86_64-linux/include $(CUDA_HOME)/include))
+CUDA_LIB ?= $(firstword $(wildcard $(CUDA_HOME)/targets/x86_64-linux/lib $(CUDA_HOME)/lib64 $(CUDA_HOME)/lib))
 
 ifeq ($(KEYSTONE_ENABLE_CUDA),1)
     ifeq ($(shell command -v nvcc >/dev/null 2>&1 && echo yes),yes)
         CUDA_CFLAGS := -DKEYSTONE_ENABLE_CUDA $(if $(CUDA_INCLUDE),-I$(CUDA_INCLUDE))
-        CUDA_LDFLAGS := -L./cuda -lkeystone_cuda -lcudart -Wl,-rpath,'$$ORIGIN/cuda' -Wl,-rpath,'$$ORIGIN/../cuda'
+        CUDA_LDFLAGS := -L./cuda -lkeystone_cuda -Wl,-rpath,'$$ORIGIN/cuda' -Wl,-rpath,'$$ORIGIN/../cuda'
+        ifneq ($(CUDA_LIB),)
+            CUDA_LDFLAGS += -L$(CUDA_LIB) -Wl,-rpath,'$(CUDA_LIB)'
+        endif
         CFLAGS  += $(CUDA_CFLAGS)
         LDFLAGS += $(CUDA_LDFLAGS)
     else
@@ -69,7 +73,10 @@ ifeq ($(KEYSTONE_ENABLE_CUDA),1)
 else ifneq ($(KEYSTONE_ENABLE_CUDA),0)
     ifeq ($(shell command -v nvcc >/dev/null 2>&1 && echo yes),yes)
         CUDA_CFLAGS := -DKEYSTONE_ENABLE_CUDA $(if $(CUDA_INCLUDE),-I$(CUDA_INCLUDE))
-        CUDA_LDFLAGS := -L./cuda -lkeystone_cuda -lcudart -Wl,-rpath,'$$ORIGIN/cuda' -Wl,-rpath,'$$ORIGIN/../cuda'
+        CUDA_LDFLAGS := -L./cuda -lkeystone_cuda -Wl,-rpath,'$$ORIGIN/cuda' -Wl,-rpath,'$$ORIGIN/../cuda'
+        ifneq ($(CUDA_LIB),)
+            CUDA_LDFLAGS += -L$(CUDA_LIB) -Wl,-rpath,'$(CUDA_LIB)'
+        endif
         CFLAGS  += $(CUDA_CFLAGS)
         LDFLAGS += $(CUDA_LDFLAGS)
     endif
