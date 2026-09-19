@@ -1,7 +1,21 @@
 #include "../include/keystone.h"
 #include "../cuda/keystone_cuda.h"
 #include "../src/keystone_avx512.h"
-#include <cuda_runtime.h>
+#if defined(__has_include)
+#  if __has_include(<cuda_runtime.h>)
+#    include <cuda_runtime.h>
+#  else
+typedef int cudaError_t;
+#    define cudaSuccess 0
+extern cudaError_t cudaGetDeviceCount(int *count);
+extern const char* cudaGetErrorString(cudaError_t error);
+#  endif
+#else
+typedef int cudaError_t;
+#  define cudaSuccess 0
+extern cudaError_t cudaGetDeviceCount(int *count);
+extern const char* cudaGetErrorString(cudaError_t error);
+#endif
 #include "test_macros.h"
 #include <stdint.h>
 #include <stdio.h>
