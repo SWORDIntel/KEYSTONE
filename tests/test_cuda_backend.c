@@ -218,6 +218,18 @@ static void test_vector_engine_cuda(void) {
 }
 
 #if defined(__x86_64__)
+#include <immintrin.h>
+#if defined(__linux__)
+#include <sys/syscall.h>
+#include <unistd.h>
+#ifndef ARCH_REQ_XCOMP_PERM
+#define ARCH_REQ_XCOMP_PERM 0x1023
+#endif
+#ifndef XFEATURE_XTILEDATA
+#define XFEATURE_XTILEDATA 18
+#endif
+#endif
+
 __attribute__((target("amx-tile,amx-int8")))
 static int execute_amx_tile_matmul(void) {
     amx_tilecfg_t cfg;
@@ -230,7 +242,7 @@ static int execute_amx_tile_matmul(void) {
     cfg.rows[2] = 16;
     cfg.colsb[2] = 64;
 
-    __asm__ volatile("ldtilecfg %0" : : "m"(cfg));
+    _tile_loadconfig(&cfg);
 
     int8_t a_matrix[16 * 64];
     int8_t b_matrix[16 * 64];
@@ -239,12 +251,12 @@ static int execute_amx_tile_matmul(void) {
     memset(b_matrix, 1, sizeof(b_matrix));
     memset(c_matrix, 0, sizeof(c_matrix));
 
-    __asm__ volatile("tilezero %%tmm0" : : : "memory");
-    __asm__ volatile("tileloadd (%0), %%tmm1" : : "r"(a_matrix) : "memory");
-    __asm__ volatile("tileloadd (%0), %%tmm2" : : "r"(b_matrix) : "memory");
-    __asm__ volatile("tdpbssd %%tmm2, %%tmm1, %%tmm0" : : : "memory");
-    __asm__ volatile("tilestored %%tmm0, (%0)" : : "r"(c_matrix) : "memory");
-    __asm__ volatile("tilerelease" : : : "memory");
+    _tile_zero(0);
+    _tile_loadd(1, a_matrix, 64);
+    _tile_loadd(2, b_matrix, 64);
+    _tile_dpbssd(0, 1, 2);
+    _tile_stored(0, c_matrix, 64);
+    _tile_release();
 
     return c_matrix[0];
 }
@@ -271,6 +283,18 @@ static void test_amx_silicon_and_fallback(void) {
         }
     }
 #endif
+
+    if (has_amx) {
+#if defined(__linux__) && defined(__x86_64__)
+        /* Linux kernel 5.16+ requires userspace processes to request permission
+         * to use AMX tiles before executing tile instructions, else SIGILL is raised. */
+        long rc = syscall(SYS_arch_prctl, ARCH_REQ_XCOMP_PERM, XFEATURE_XTILEDATA);
+        if (rc != 0) {
+            printf("  [WARN] Kernel refused ARCH_REQ_XCOMP_PERM for AMX (rc=%ld). Graceful fallback.\n", rc);
+            has_amx = 0;
+        }
+#endif
+    }
 
     if (has_amx) {
         printf("  [DETECT] Intel AMX-TILE is supported and enabled in XCR0!\n");
