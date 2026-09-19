@@ -120,14 +120,19 @@ SRC     := src/keystone.c src/dsmil_keystone_wrapper.c src/dsmil_telemetry_proce
 OBJS    := $(SRC:.c=.o)
 
 TEST_SRC := tests/test_core_native.c tests/test_auto_backend.c \
-            tests/test_fortran_backend.c tests/test_telemetry_processor_perf.c \
+            tests/test_telemetry_processor_perf.c \
             tests/dsmil_integration_test.c tests/test_performance_fix.c \
-            tests/test_trigram_index.c tests/test_fortran_workloads.c \
+            tests/test_trigram_index.c \
             tests/test_memory_ramp.c
-TEST_BIN := bin/test_enhanced bin/test_auto_backend bin/test_fortran_backend \
+TEST_BIN := bin/test_enhanced bin/test_auto_backend \
             bin/test_telemetry_processor_perf bin/test_performance_fix \
             bin/test_core_native bin/test_trigram_index \
-            bin/test_fortran_workloads bin/test_memory_ramp
+            bin/test_memory_ramp
+
+ifneq ($(FORTRAN_OBJ),)
+TEST_SRC += tests/test_fortran_backend.c tests/test_fortran_workloads.c
+TEST_BIN += bin/test_fortran_backend bin/test_fortran_workloads
+endif
 
 ifeq ($(KEYSTONE_ENABLE_TAR_ZST),1)
 SRC     += src/keystone_tar_zst.c
