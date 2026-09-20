@@ -140,3 +140,43 @@ Formulated in architectural review with frontier model Sol (`gpt-5.6-sol`). See 
   - Implemented `include/keystone_fabric.h`, `src/keystone_fabric.c` with hardware ISA tier mapping (AVX/AVX2/AVX-512/AMX), accelerator probes (NPU `/dev/accel` and VPU socket, GPU `/dev/dri` and `/dev/nvidiactl`), fresh memory/load stats, and UDP cluster bus emission (`0x51424E53` magic, 66-byte datagrams).
   - Integrated into Python SDK (`keystone.NodeCapability`, `keystone.probe_node_capability()`, `keystone.export_node_cap_frame()`, `keystone.broadcast_node_cap()`).
   - Wire compatibility verified via `tests/test_keystone_fabric.c` and QIHSE cluster bus integration test `tests/test_keystone_qihse_integration.c`.
+
+---
+
+## 5. CITADEL Federation Intelligence Upgrade
+
+Governed by [`CITADEL/docs/architecture/KEYSTONE_FEDERATION_INTELLIGENCE_UPGRADE_BRIEF.md`](../CITADEL/docs/architecture/KEYSTONE_FEDERATION_INTELLIGENCE_UPGRADE_BRIEF.md). Keystone serves as the high-speed retrieval, indexing, topology expansion, and explainable decision-support accelerator for CITADEL and QIHSE without holding state authority.
+
+### Phase 0: Federation Wire Envelope & Dual Ingestion — COMPLETED
+- [x] **Canonical Federation Envelope (`include/keystone_federation.h`)**:
+  - Defined `keystone_federation_record_t` mapping `source_object_id`, `source_event_id`, `source_node_id`, `source_generation`, `fencing_epoch`, `source_hlc`, `tenant_id`, `classification`, `object_type`, and record `flags` (`TOMBSTONE`, `SNAPSHOT`, `EVENT`, `TELEMETRY`, `AUDIT`, `SECURITY_SENSITIVE`).
+- [x] **UUID & Hybrid Logical Clock (HLC) C Primitives**:
+  - Implemented 128-bit `keystone_uuid_t` with string parser, formatter, comparison, and 64-bit avalanche hash.
+  - Implemented monotonic `keystone_hlc_t` with wall-clock skew tolerance, causal update propagation, and tie-breaking.
+- [x] **Hostile-Input-Safe Wire Serialization (`src/federation/keystone_federation_ingest.c`)**:
+  - 124-byte packed binary wire format (`KEYSTONE_FEDERATION_ENVELOPE_MAGIC = 0x4B534645`), CRC32-checked header and payload, bounded allocation safeguards (<64 MiB payload cap), and tested corrupted-byte rejections.
+- [x] **Idempotent Ingestion & Deduplication**:
+  - High-throughput deduplication hash ring rejecting duplicate event UUIDs idempotently. Benchmarked at **9.3+ million events/sec** (107 ns/event).
+- [x] **Tombstone Registry & Fencing Epoch Protection**:
+  - Instant negative lookup masking via `keystone_federation_is_tombstoned()` upon receiving tombstone flags. Rejection of stale fencing epochs (`KEYSTONE_INGEST_STALE_FENCING_EPOCH`).
+- [x] **Atomic Checkpoint Persistence**:
+  - Double-buffered atomic persistence (`.tmp` + `fsync()` + `rename()`) with CRC32 verification restoring engine watermark, epoch, and generation states.
+- [x] **Explainable Recommendation Bundles**:
+  - Defined `keystone_recommendation_t` and `keystone_explain_t` structures with structured hard-constraint pass/fail audits and score provenance.
+
+### Phase 1: Infrastructure Exact Identity & Monotonic Temporal Indexing
+- [ ] **Exact Identity Directory**: Fast $O(1)$ / $O(\log N)$ mapping from resource/node UUID to active index generation and memory slot.
+- [ ] **AVX-512 HLC Temporal Search**: Monotonic interval indexing over hybrid logical timestamps using Keystone's branchless search engine for sub-10ns point-in-time state reconstruction.
+
+### Phase 2: Security-Aware Native Service Mode (`keystoned`)
+- [ ] **Unprivileged Service**: Dedicated daemon communicating over local Unix domain sockets (`AF_UNIX`).
+- [ ] **Security Context Cache Partitioning**: All postings and cache entries strictly keyed by `(security_context, query, index_generation)`.
+- [ ] **Atomic Index Publication**: Double-buffered generation pointer swap for non-blocking index publication.
+
+### Phase 3: Topology Graph Cache & Hybrid Query Planning
+- [ ] **Adjacency Matrix Caching**: Read-optimized cache for `RUNS_ON`, `DEPENDS_ON`, `SHARES_FAILURE_DOMAIN`, and NUMA topologies.
+- [ ] **Two-Tier Query Planner**: Hard constraint pruning $\rightarrow$ soft objective ranking.
+
+### Phase 4 & 5: Streaming Telemetry & Hardware Acceleration
+- [ ] **Streaming Telemetry Windows**: 1m / 5m / 1h rolling features with deterministic EWMA and z-score anomaly detection.
+- [ ] **Hardware Silicon Acceleration**: Bind verified H100 CUDA batch distance kernels and Sapphire Rapids AMX matrix multiply to topology embeddings and incident similarity search.

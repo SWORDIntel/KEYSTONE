@@ -383,6 +383,7 @@ size_t keystone_anchor_seed_batch(
 
 #include "keystone_trigram.h"
 #include "keystone_fabric.h"
+#include "keystone_federation.h"
 
 #ifdef KEYSTONE_ENABLE_TAR_ZST
 #include "keystone_tar_zst.h"
