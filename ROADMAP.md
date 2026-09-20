@@ -193,6 +193,23 @@ Governed by [`CITADEL/docs/architecture/KEYSTONE_FEDERATION_INTELLIGENCE_UPGRADE
   - Tier 2: Soft objective ranking (weighted normalized free RAM, thermal headroom, CPU load, NUMA locality).
   - Emits explainable recommendation bundles (`keystone_recommendation_t`, `keystone_explain_t`) with full pass/fail constraint rationales and generation/HLC decision provenance.
 
-### Phase 4 & 5: Streaming Telemetry & Hardware Acceleration
-- [ ] **Streaming Telemetry Windows**: 1m / 5m / 1h rolling features with deterministic EWMA and z-score anomaly detection.
-- [ ] **Hardware Silicon Acceleration**: Bind verified H100 CUDA batch distance kernels and Sapphire Rapids AMX matrix multiply to topology embeddings and incident similarity search.
+### Phase 4 & 5: Streaming Telemetry & Hardware Silicon Acceleration — COMPLETED
+- [x] **Streaming Telemetry Windows (`include/keystone_telemetry.h`, `src/telemetry/keystone_telemetry_engine.c`)**:
+  - High-throughput circular ring buffer ingestion with per-node and per-metric online statistical state tracking.
+  - Multi-tier rolling feature extraction windows (1m, 5m, 15m, 1h, 24h) computing mean, variance, stddev, EWMA, min/max bounds, linear regression slope/trend ($dv/dt$), burst counts, and error rates.
+  - Multi-stage deterministic anomaly engine: static warning/critical threshold violation and statistical z-score outlier detection ($|z| \ge 3.0$).
+  - Structured anomaly evidence bundles (`keystone_explain_t`) capturing baseline mean/stddev, observed deviations, severity ratings, and generation/HLC audit provenance.
+- [x] **Hardware Silicon Acceleration & Incident Similarity Search (`include/keystone_incident.h`, `src/incident/keystone_incident_engine.c`)**:
+  - Normalized vector embedding engine synthesizing failure patterns from streaming telemetry metrics, slope deltas, ISA features, and error tokens.
+  - Multi-tier hardware silicon acceleration dispatch: NVIDIA CUDA GPU batch distance, Intel Sapphire Rapids AMX quantized tile matrix multiplication (`_tile_dpbssd`), AVX-512 vector FMA, AVX2+FMA SIMD, and guaranteed Scalar CPU reference fallback.
+  - Historical incident matching emitting advisory mitigation recommendations (`keystone_recommendation_t`) with complete audit evidence and strict non-authoritative invariants.
+- [x] **Comprehensive Hardware & Integration Test Suite (`tests/test_telemetry_incident_engine.c`)**:
+  - Validates static threshold alarms, statistical z-score outliers, linear slope trends, historical incident matching, cross-backend bit accuracy (Scalar vs AVX2), and non-authoritative recommendation bundles.
+
+### Phase 6: Federated Distributed Query & Partial Result Merging
+- [ ] **Multi-Node Fan-Out & Routing**: Distribute queries across local compute node indexers and site aggregators with timeout resilience.
+- [ ] **Partial-Result Merging**: Resilient aggregation of top-k scores, HLC timelines, and exact IDs during partial cluster partition.
+
+### Phase 7: AI/RAG Context Retrieval & Model Governance
+- [ ] **Structured Evidence Context Packs**: AI/RAG query endpoint delivering citations, topology neighborhood, and freshness metadata.
+- [ ] **Model Governance**: Manifest validation, feature schema versioning, and provenance tracking for learned models.
