@@ -160,9 +160,9 @@ TEST_BIN += bin/test_keystone_fabric bin/test_cuda_backend bin/test_federation_e
 OBJS    := $(SRC:.c=.o)
 
 BENCH_SRC := benchmarks/dsmil_benchmark.c benchmarks/performance_proof.c benchmarks/trigram_benchmark.c \
-             benchmarks/bench_memory_ramp.c
+             benchmarks/bench_memory_ramp.c benchmarks/bench_federation.c
 BENCH_BIN := benchmarks/dsmil_benchmark benchmarks/performance_proof benchmarks/trigram_benchmark \
-             benchmarks/bench_memory_ramp
+             benchmarks/bench_memory_ramp benchmarks/bench_federation
 
 .PHONY: all lib tests test check run-tests benchmarks clean tgrep keystoned
 
@@ -285,6 +285,9 @@ benchmarks/trigram_benchmark: $(OBJS) $(FORTRAN_OBJ) benchmarks/trigram_benchmar
 	$(CC) -o $@ $^ $(LDFLAGS)
 
 benchmarks/bench_memory_ramp: $(OBJS) $(FORTRAN_OBJ) benchmarks/bench_memory_ramp.o benchmarks/benchmark_writer.o
+	$(CC) -o $@ $^ $(LDFLAGS)
+
+benchmarks/bench_federation: $(OBJS) $(FORTRAN_OBJ) benchmarks/bench_federation.o benchmarks/benchmark_writer.o
 	$(CC) -o $@ $^ $(LDFLAGS)
 
 # Standalone CLI tools

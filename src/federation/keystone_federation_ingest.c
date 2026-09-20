@@ -528,14 +528,34 @@ static void dedup_remove(keystone_federation_ingest_t* ing, const keystone_uuid_
     uint64_t h = keystone_uuid_hash64(id);
     size_t idx = (size_t)(h & ing->dedup_mask);
 
-    for (size_t probe = 0; probe < ing->dedup_capacity; probe++) {
-        size_t slot = (idx + probe) & ing->dedup_mask;
+    size_t slot = idx;
+    size_t probe = 0;
+    while (probe < ing->dedup_capacity) {
         if (!ing->dedup_slots[slot].occupied) return;
-        if (keystone_uuid_equal(&ing->dedup_slots[slot].key, id)) {
-            ing->dedup_slots[slot].occupied = 0;
-            return;
-        }
+        if (keystone_uuid_equal(&ing->dedup_slots[slot].key, id)) break;
+        slot = (slot + 1) & ing->dedup_mask;
+        probe++;
     }
+    if (probe >= ing->dedup_capacity || !ing->dedup_slots[slot].occupied) return;
+
+    /* Backward-shift deletion for linear probing to preserve cluster connectivity */
+    size_t curr = slot;
+    size_t next = (curr + 1) & ing->dedup_mask;
+    while (ing->dedup_slots[next].occupied) {
+        size_t nat_idx = (size_t)(keystone_uuid_hash64(&ing->dedup_slots[next].key) & ing->dedup_mask);
+        bool should_move = false;
+        if (curr < next) {
+            if (nat_idx <= curr || nat_idx > next) should_move = true;
+        } else {
+            if (nat_idx <= curr && nat_idx > next) should_move = true;
+        }
+        if (should_move) {
+            ing->dedup_slots[curr] = ing->dedup_slots[next];
+            curr = next;
+        }
+        next = (next + 1) & ing->dedup_mask;
+    }
+    ing->dedup_slots[curr].occupied = 0;
 }
 
 static void dedup_insert(keystone_federation_ingest_t* ing, const keystone_uuid_t* id) {
