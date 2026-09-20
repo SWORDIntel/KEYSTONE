@@ -596,20 +596,14 @@ void keystone_incident_embed_telemetry(
     if (!out_embedding) return;
     memset(out_embedding, 0, sizeof(float) * KEYSTONE_INCIDENT_EMBED_DIM);
 
-    /* Dimensions 0-10: Normalized feature means */
-    size_t max_f = num_features < 11 ? num_features : 11;
-    for (size_t i = 0; i < max_f; i++) {
-        out_embedding[i] = (float)(features[i].mean / 100.0);
-    }
-
-    /* Dimensions 11-21: Normalized feature slopes */
-    for (size_t i = 0; i < max_f; i++) {
-        out_embedding[11 + i] = (float)(features[i].slope / 10.0);
-    }
-
-    /* Dimensions 22-32: Normalized burst counts */
-    for (size_t i = 0; i < max_f; i++) {
-        out_embedding[22 + i] = (float)features[i].burst_count / 5.0f;
+    /* Map features into designated metric dimensions (0-10 means, 11-21 slopes, 22-32 bursts) */
+    for (size_t i = 0; i < num_features; i++) {
+        uint32_t m = features[i].metric_type;
+        if (m < 11) {
+            out_embedding[m] = (float)(features[i].mean / 100.0);
+            out_embedding[11 + m] = (float)(features[i].slope / 10.0);
+            out_embedding[22 + m] = (float)features[i].burst_count / 5.0f;
+        }
     }
 
     /* Dimensions 33-40: Hardware ISA flag weights */

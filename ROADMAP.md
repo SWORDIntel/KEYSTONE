@@ -206,10 +206,23 @@ Governed by [`CITADEL/docs/architecture/KEYSTONE_FEDERATION_INTELLIGENCE_UPGRADE
 - [x] **Comprehensive Hardware & Integration Test Suite (`tests/test_telemetry_incident_engine.c`)**:
   - Validates static threshold alarms, statistical z-score outliers, linear slope trends, historical incident matching, cross-backend bit accuracy (Scalar vs AVX2), and non-authoritative recommendation bundles.
 
-### Phase 6: Federated Distributed Query & Partial Result Merging
-- [ ] **Multi-Node Fan-Out & Routing**: Distribute queries across local compute node indexers and site aggregators with timeout resilience.
-- [ ] **Partial-Result Merging**: Resilient aggregation of top-k scores, HLC timelines, and exact IDs during partial cluster partition.
+### Phase 6: Federated Distributed Query & Partial Result Merging — COMPLETED
+- [x] **Multi-Node Fan-Out & Routing Coordinator (`include/keystone_federated_query.h`, `src/federation/keystone_federated_query.c`)**:
+  - Remote node registry tracking indexer nodes, sites, latency, index generations, and live health status (`HEALTHY`, `DEGRADED`, `UNREACHABLE`).
+  - Strict conflict resolution across distributed nodes: resolves identity collisions via fencing epoch priority, source generation, and monotonic HLC tie-breakers (`keystone_federated_merge_exact_identity`).
+- [x] **Partial-Result Merging & Partition Resilience**:
+  - Multi-way monotonic timeline merge (`keystone_federated_merge_timelines`) preserving strict ascending HLC ordering and deduplicating events across nodes.
+  - Resilient top-K similarity search aggregation (`keystone_federated_merge_topk_incidents`) with rank preservation, deduplication, and partial execution tracking (`keystone_partial_status_t`).
+  - Graceful degradation: queries never fail completely when nodes time out or partition.
 
-### Phase 7: AI/RAG Context Retrieval & Model Governance
-- [ ] **Structured Evidence Context Packs**: AI/RAG query endpoint delivering citations, topology neighborhood, and freshness metadata.
-- [ ] **Model Governance**: Manifest validation, feature schema versioning, and provenance tracking for learned models.
+### Phase 7: AI/RAG Context Retrieval & Model Governance — COMPLETED
+- [x] **Structured Evidence Context Packs (`include/keystone_rag.h`, `src/query/keystone_rag_engine.c`)**:
+  - High-performance constrained AI retrieval endpoint (`keystone_rag_query_context`) extracting complete infrastructure context packs (`keystone_context_pack_t`).
+  - Assembles timeline changes, rolling telemetry feature summaries, active anomalies, similar historical incidents, and topology neighborhood relations.
+  - Strict security context partitioning: verifies caller clearance and compartment bitmasks, denying access with zero metadata leakage.
+  - Explicit traceable citations (`keystone_citation_t`) attaching origin node, source object UUID, generation, and HLC to every piece of context evidence.
+- [x] **Model Governance Engine**:
+  - Formal model registry (`keystone_model_manifest_t`) validating model versions, supported task capabilities (`KEYSTONE_TASK_PLACEMENT`, `ANOMALY`, `SIMILARITY`, `RAG`), and cryptographic SHA-256 weight hash integrity.
+  - Prevents unversioned, untracked, or tampered models from influencing infrastructure recommendations.
+- [x] **Comprehensive Federated Query & RAG Test Suite (`tests/test_federated_query_rag.c`)**:
+  - Validates coordinator registry, conflict resolution, multi-way timeline merging, top-K incident aggregation, security denial, context pack extraction, and model governance validation.

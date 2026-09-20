@@ -389,6 +389,7 @@ int keystone_telemetry_extract_features(
 
     uint64_t window_ms = keystone_window_to_ms(window);
     out_features->feature_schema_version = KEYSTONE_TELEMETRY_FEATURE_SCHEMA_VERSION;
+    out_features->metric_type = metric_type;
     out_features->window_ms = window_ms;
 
     if (engine->sample_count == 0) return 0;

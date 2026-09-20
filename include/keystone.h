@@ -391,6 +391,8 @@ size_t keystone_anchor_seed_batch(
 #include "keystone_hybrid.h"
 #include "keystone_telemetry.h"
 #include "keystone_incident.h"
+#include "keystone_federated_query.h"
+#include "keystone_rag.h"
 
 #ifdef KEYSTONE_ENABLE_TAR_ZST
 #include "keystone_tar_zst.h"

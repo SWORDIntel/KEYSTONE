@@ -145,14 +145,17 @@ SRC     += src/dsmil_hash_indexer.c src/dsmil_dirty_parser.c src/dsmil_model_bri
            src/federation/keystone_exact_index.c src/temporal/keystone_temporal_index.c \
            src/service/keystoned_server.c src/service/keystoned_client.c \
            src/topology/keystone_topology_index.c src/query/keystone_hybrid_planner.c \
-           src/telemetry/keystone_telemetry_engine.c src/incident/keystone_incident_engine.c
+           src/telemetry/keystone_telemetry_engine.c src/incident/keystone_incident_engine.c \
+           src/federation/keystone_federated_query.c src/query/keystone_rag_engine.c
 
 TEST_SRC += tests/test_keystone_fabric.c tests/test_cuda_backend.c tests/test_federation_envelope.c \
             tests/test_exact_temporal_index.c tests/test_keystoned_service.c \
-            tests/test_topology_hybrid_planner.c tests/test_telemetry_incident_engine.c
+            tests/test_topology_hybrid_planner.c tests/test_telemetry_incident_engine.c \
+            tests/test_federated_query_rag.c
 TEST_BIN += bin/test_keystone_fabric bin/test_cuda_backend bin/test_federation_envelope \
             bin/test_exact_temporal_index bin/test_keystoned_service \
-            bin/test_topology_hybrid_planner bin/test_telemetry_incident_engine
+            bin/test_topology_hybrid_planner bin/test_telemetry_incident_engine \
+            bin/test_federated_query_rag
 
 OBJS    := $(SRC:.c=.o)
 
@@ -266,6 +269,9 @@ bin/test_topology_hybrid_planner: $(OBJS) $(FORTRAN_OBJ) tests/test_topology_hyb
 	$(CC) -o $@ $^ $(LDFLAGS)
 
 bin/test_telemetry_incident_engine: $(OBJS) $(FORTRAN_OBJ) tests/test_telemetry_incident_engine.o | bin
+	$(CC) -o $@ $^ $(LDFLAGS)
+
+bin/test_federated_query_rag: $(OBJS) $(FORTRAN_OBJ) tests/test_federated_query_rag.o | bin
 	$(CC) -o $@ $^ $(LDFLAGS)
 
 # Benchmark binaries

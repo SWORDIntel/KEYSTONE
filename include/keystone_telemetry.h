@@ -79,6 +79,7 @@ typedef struct {
 /* --- Multi-tier Window Feature Summary --- */
 typedef struct {
     uint32_t feature_schema_version;  /* KEYSTONE_TELEMETRY_FEATURE_SCHEMA_VERSION */
+    uint32_t metric_type;             /* keystone_telemetry_metric_t */
     uint64_t window_ms;               /* Duration of window in ms */
     uint64_t sample_count;            /* Number of samples analyzed */
     double mean;                      /* Arithmetic mean of samples */
