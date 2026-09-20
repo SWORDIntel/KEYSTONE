@@ -141,10 +141,13 @@ TEST_BIN += bin/test_tar_zst
 endif
 
 SRC     += src/dsmil_hash_indexer.c src/dsmil_dirty_parser.c src/dsmil_model_bridge.c src/dsmil_micro_model.c src/keystone_trigram.c \
-           src/keystone_fabric.c src/federation/keystone_federation_ingest.c
+           src/keystone_fabric.c src/federation/keystone_federation_ingest.c \
+           src/federation/keystone_exact_index.c src/temporal/keystone_temporal_index.c
 
-TEST_SRC += tests/test_keystone_fabric.c tests/test_cuda_backend.c tests/test_federation_envelope.c
-TEST_BIN += bin/test_keystone_fabric bin/test_cuda_backend bin/test_federation_envelope
+TEST_SRC += tests/test_keystone_fabric.c tests/test_cuda_backend.c tests/test_federation_envelope.c \
+            tests/test_exact_temporal_index.c
+TEST_BIN += bin/test_keystone_fabric bin/test_cuda_backend bin/test_federation_envelope \
+            bin/test_exact_temporal_index
 
 OBJS    := $(SRC:.c=.o)
 
@@ -244,6 +247,9 @@ bin/test_cuda_backend: $(OBJS) $(FORTRAN_OBJ) tests/test_cuda_backend.o | bin
 	$(CC) -o $@ $^ $(LDFLAGS)
 
 bin/test_federation_envelope: $(OBJS) $(FORTRAN_OBJ) tests/test_federation_envelope.o | bin
+	$(CC) -o $@ $^ $(LDFLAGS)
+
+bin/test_exact_temporal_index: $(OBJS) $(FORTRAN_OBJ) tests/test_exact_temporal_index.o | bin
 	$(CC) -o $@ $^ $(LDFLAGS)
 
 # Benchmark binaries
