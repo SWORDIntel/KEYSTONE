@@ -142,3 +142,52 @@ The auto-backend selector behavior can be controlled at runtime without recompil
 | `KEYSTONE_HIT_RATE_PCT` | `100` | Controls target hit percentage (0–100) in benchmark workloads. |
 | `KEYSTONE_DATA_GAP` | `1` | Controls data array stride/gap in benchmark workloads. |
 | `KEYSTONE_QUERY_STRIDE` | `17` | Controls query key stride pattern in benchmark workloads. |
+
+## 12. Service Daemon Mode (`bin/keystoned`)
+To build the unprivileged native service daemon:
+
+```bash
+make bin/keystoned
+```
+**Features:**
+- Compiles the standalone daemon supporting local Unix domain sockets (`/run/keystone/keystoned.sock`, mode `0700`).
+- Embeds multi-threaded client poll loops, binary IPC framing, and atomic reader-writer generation publication.
+- Usage: `bin/keystoned -s /run/keystone/keystoned.sock -d`
+
+## 13. Standalone Trigram Search CLI (`bin/tgrep`)
+To build the standalone high-performance grep replacement:
+
+```bash
+make bin/tgrep
+```
+**Features:**
+- Compiles `bin/tgrep` utilizing the 24-bit direct directory engine and multi-threaded parallel construction.
+- Supports instant persistent index acceleration (`-I` / `.tgrep.idx`), case folding (`-i`), line numbering (`-n`), and thread scaling (`-j <threads>`).
+
+## 14. Federation Intelligence & Comprehensive Test Suite
+To compile and execute all 19 test suites across the core engine and all CITADEL Federation Intelligence phases:
+
+```bash
+make check
+```
+Runs:
+1. `bin/test_keystone` (Scalar & SIMD core search)
+2. `bin/test_keystone_calibration_cache` (Calibration cache & concurrency)
+3. `bin/test_keystone_provenance` (Workload shapes & decision provenance)
+4. `bin/test_keystone_fortran` (Fortran ABI & adapter)
+5. `bin/test_fortran_workloads` (Fortran multi-workload validation)
+6. `bin/test_memory_ramp` (Huge pages & bounded memory ramp)
+7. `bin/test_cuda_backend` (CUDA & AMX silicon detection)
+8. `bin/test_keystone_tar_zst` (Streaming .tar.zst archive reader)
+9. `bin/test_trigram_index` (Trigram engine correctness)
+10. `bin/test_trigram_sol` (Sol trigram optimization passes)
+11. `bin/test_trigram_parallel` (Multi-threaded parallel trigram build)
+12. `bin/test_keystone_fabric` (QIHSE capability frame broadcast)
+13. `bin/test_keystone_qihse_integration` (QIHSE cluster bus integration)
+14. `bin/test_federation_envelope` (Phase 0 wire envelope, dedup ring & checkpoints)
+15. `bin/test_exact_temporal_index` (Phase 1 exact identity & monotonic temporal index)
+16. `bin/test_keystoned_service` (Phase 2 daemon IPC & security context partitioning)
+17. `bin/test_topology_hybrid_planner` (Phase 3 topology cache & two-tier hybrid planner)
+18. `bin/test_telemetry_incident_engine` (Phase 4 & 5 telemetry, anomaly & silicon dispatch)
+19. `bin/test_federated_query_rag` (Phase 6 & 7 federated coordinator & RAG context packs)
+

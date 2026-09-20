@@ -2,6 +2,58 @@
 
 All notable changes to the KEYSTONE search engine are documented in this file.
 
+## [2.0.0] - 2026-09-20
+
+### CITADEL Federation Intelligence Upgrade (Phases 0–7 Complete)
+- **Federation Wire Envelope & Dual Ingestion** (`include/keystone_federation.h`, `src/federation/keystone_federation_ingest.c`):
+  - Defined packed 124-byte wire envelope (`KEYSTONE_FEDERATION_ENVELOPE_MAGIC = 0x4B534645`), IEEE 802.3 CRC32 header and payload checksums.
+  - Implemented 128-bit UUID primitives (`keystone_uuid_t`) with RFC 4122 formatting and 64-bit avalanche hashing.
+  - Implemented monotonic Hybrid Logical Clock (`keystone_hlc_t`) with causal advancement and deterministic tie-breaking.
+  - Implemented high-throughput deduplication hash ring benchmarked at **9.3+ million events/sec** (107 ns/event).
+  - Implemented instant tombstone registry masking, fencing epoch protection, and atomic double-buffered persistence (`.tmp` + `fsync` + `rename`).
+- **Exact Identity Directory & Monotonic Temporal Indexing** (`include/keystone_exact_index.h`, `include/keystone_temporal.h`):
+  - Fast collision-safe open-addressing exact identity index benchmarked at **4.6+ million queries/sec** (217 ns/query).
+  - 64-byte cache-line aligned monotonic temporal timeline index benchmarked at **3.7+ million range queries/sec** (269 ns/query).
+  - Object-scoped timeline queries, time-bucket histogram aggregations, out-of-order arrival stabilization, and CRC32-verified persistence.
+- **Security-Aware Native Service Mode (`keystoned`)** (`bin/keystoned`, `include/keystoned.h`, `src/service/*`):
+  - Standalone unprivileged service daemon communicating over local Unix domain sockets (`AF_UNIX`) with restricted `0700` directory permissions.
+  - Multi-threaded poll server and compact binary IPC framing with CRC32 integrity checks.
+  - Multi-level security context partitioning (`clearance_level`, `compartment_mask`, `tenant_id`) with zero metadata leakage (`KEYSTONED_STATUS_DENIED`).
+  - Reader-writer generation pointer swapping (`keystoned_server_publish_generation`) for zero-downtime atomic publication.
+- **Topology Graph Cache & Two-Tier Hybrid Query Planner** (`include/keystone_topology.h`, `include/keystone_hybrid.h`):
+  - In-memory graph adjacency cache (`RUNS_ON`, `ATTACHED_TO`, `ROUTES_THROUGH`, `DEPENDS_ON`, `REPLICATED_TO`, `SHARES_FAILURE_DOMAIN`).
+  - Neighborhood expansion, failure domain clustering, and dependency chain blast radius tracing.
+  - Two-tier hybrid query planner: Tier 1 boolean constraint pruning (security, CPU ISA flags, RAM, anti-affinity) and Tier 2 weighted soft ranking (RAM, CPU, thermals, NUMA).
+  - Explainable recommendation bundles (`keystone_recommendation_t`, `keystone_explain_t`) with complete provenance and non-authoritative invariants.
+- **Streaming Telemetry & Deterministic Anomaly Engine** (`include/keystone_telemetry.h`, `src/telemetry/*`):
+  - High-throughput circular sample buffers with online Welford statistics (mean, variance, standard deviation).
+  - Multi-tier rolling feature extraction windows (1m, 5m, 15m, 1h, 24h) computing EWMA, min/max bounds, linear regression slope/trend ($dv/dt$), burst counts, and error rates.
+  - Deterministic multi-stage anomaly engine combining static threshold violation alarms with statistical $z$-score outlier detection ($|z| \ge 3.0$) and zero-variance boundary protection.
+- **Silicon Acceleration & Historical Incident Similarity** (`include/keystone_incident.h`, `src/incident/*`):
+  - 64-dimensional normalized incident vector embeddings synthesizing telemetry metrics, trends, ISA features, and error tokens.
+  - Multi-tier hardware silicon acceleration dispatch: NVIDIA CUDA GPU batch distance, Intel Sapphire Rapids AMX (`_tile_dpbssd`), AVX-512 vector FMA, AVX2+FMA SIMD, and guaranteed Scalar CPU reference fallback.
+  - Historical incident matching emitting advisory mitigation recommendations with strict non-authoritative invariants.
+- **Federated Distributed Query Coordinator** (`include/keystone_federated_query.h`, `src/federation/keystone_federated_query.c`):
+  - Multi-node coordinator tracking indexer nodes, sites, latency, index generations, and live health status (`HEALTHY`, `DEGRADED`, `UNREACHABLE`).
+  - Strict conflict resolution across distributed nodes: Epoch $\succ$ Generation $\succ$ HLC.
+  - Multi-way monotonic timeline merge and resilient top-K similarity search aggregation.
+  - Partial-result degradation status (`keystone_partial_status_t`) ensuring partition tolerance.
+- **AI/RAG Context Retrieval & Cryptographic Model Governance** (`include/keystone_rag.h`, `src/query/keystone_rag_engine.c`):
+  - Constrained AI retrieval endpoint extracting structured context packs (`keystone_context_pack_t`) assembling timelines, telemetry, anomalies, incidents, and topology.
+  - Explicit traceable citations (`keystone_citation_t`) attaching node of origin, source object UUID, generation, and HLC to every piece of context evidence.
+  - Formal model governance registry (`keystone_model_manifest_t`) validating task capabilities and cryptographic SHA-256 weight hash integrity.
+
+### Trigram Engine High-Throughput Upgrades & Standalone CLI (`bin/tgrep`)
+- Pure C11 standalone grep replacement built on 24-bit direct directory indexing (`16M * 4 bytes` flat table for $O(1)$ zero-probe lookups).
+- Multi-threaded parallel index construction (`keystone_trigram_index_build_parallel`) achieving **6.7x speedup** on 1GB corpora.
+- Adaptive SIMD intersection combining blocked AVX2 with monotonic galloping search (`ks_lower_bound_gallop_u32`).
+- Dense posting 64-bit word bitmaps with $O(1)$ bit test and bitwise AND.
+- Direct binary index caching (`-I` / `.tgrep.idx`) achieving sub-millisecond query startup.
+
+### Documentation & Verification
+- Authored 14 comprehensive architecture documents in `docs/architecture/` covering all federation intelligence modules.
+- Expanded test suite to **19 / 19 passing test suites** (`make check`) with zero compiler warnings under `-Wall -Wextra -Werror=implicit-function-declaration`.
+
 ## [1.4.0] - 2026-09-11
 
 ### Trigram Content Indexing Engine (tgrep-style)

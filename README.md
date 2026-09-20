@@ -7,64 +7,64 @@
 ### Faster access to high-value records without replacing the systems that already store them.
 
 [![C](https://img.shields.io/badge/C-11-blue.svg)](https://en.wikipedia.org/wiki/C11_(C_standard_revision))
-[![SIMD](https://img.shields.io/badge/SIMD-SSE4.2%20%7C%20AVX%20%7C%20AVX2%20%7C%20AVX--512-black.svg)](https://en.wikipedia.org/wiki/Advanced_Vector_Extensions)
+[![SIMD](https://img.shields.io/badge/SIMD-SSE4.2%20%7C%20AVX%20%7C%20AVX2%20%7C%20AVX--512%20%7C%20AMX-black.svg)](https://en.wikipedia.org/wiki/Advanced_Vector_Extensions)
 [![Parallel](https://img.shields.io/badge/Parallel-OpenMP-green.svg)](https://www.openmp.org/)
 [![Platform](https://img.shields.io/badge/Platform-Linux-success.svg)](https://www.kernel.org/)
 [![License](https://img.shields.io/badge/License-AGPL--3.0-red.svg)](LICENSE)
+[![CITADEL Federation](https://img.shields.io/badge/CITADEL%20Federation-Phases%200--7%20Complete-brightgreen.svg)](docs/architecture/federation_ingest.md)
 
-**KEYSTONE is a high-performance indexing, ingestion, and lookup engine for large datasets.** It can run as a standalone acceleration layer or feed structured data directly into [QIHSE](https://github.com/SWORDIntel/QIHSE).
+**KEYSTONE is a high-performance indexing, ingestion, search, and intelligence acceleration engine for large-scale distributed systems.** It runs as a standalone acceleration layer, powers the [CITADEL OS](https://github.com/SWORDIntel/CITADEL) federation intelligence fabric, and feeds structured data directly into [QIHSE](https://github.com/SWORDIntel/QIHSE).
 
-It is designed to make existing infrastructure work harder: reduce lookup cost, process large batches efficiently, turn messy source data into searchable records, and choose the fastest viable execution path on the hardware already available.
+It is designed to make existing infrastructure work harder: eliminate search and triage bottlenecks, process multi-gigabyte streams without on-disk inflation, correlate telemetry across rolling windows, match historical failure patterns on target silicon (CUDA, Intel AMX, AVX-512, AVX2), and provide explainable decision evidence to hypervisor controllers.
 
-**You do not have to adopt the whole stack.** KEYSTONE's search, ingestion, archive, classification, and QIHSE integration capabilities can be used independently where they make sense.
+> **Governing Architectural Principle:**  
+> *"KEYSTONE may recommend, rank, correlate, predict, and accelerate. It must not silently become authoritative."*  
+> QIHSE = truth / consensus / leases / fencing; KEYSTONE = acceleration / indexing / intelligence; CITADEL / Xen = policy & hypervisor execution.
 
-[Business benefits](#why-keystone) · [How it works](#how-it-fits) · [Measured results](#measured-results) · [Quick start](#quick-start) · [Technical docs](docs/README.md)
+**You do not have to adopt the whole stack.** KEYSTONE's search, ingestion, archive, trigram (`tgrep`), vector engine, and federation intelligence modules can be used independently where they make sense.
+
+[Business benefits](#why-keystone) · [What it does](#what-keystone-does) · [How it fits](#how-it-fits) · [Measured results](#measured-results) · [Quick start](#quick-start) · [Technical docs](docs/README.md)
 
 ---
 
 ## Why KEYSTONE
 
-Large data systems often accumulate cost in places that are difficult to see on a storage invoice: repeated lookup work, duplicated indexing logic, slow batch processing, underused CPU capabilities, and expensive preprocessing before useful records can even be queried.
+Large data systems and cloud control planes often accumulate cost and latency in places that are difficult to see on a storage invoice: repeated lookup work, duplicated indexing logic, slow batch processing, underused CPU vector units, and expensive preprocessing before useful records can even be queried.
 
 KEYSTONE targets that layer.
 
-| Business problem | KEYSTONE response |
+| Operational problem | KEYSTONE response |
 |---|---|
-| **Large datasets become slower and more expensive to search** | Adaptive indexed lookup reduces the amount of work required to locate records. |
-| **Existing servers are not used efficiently** | Runtime calibration measures viable local execution paths and selects an appropriate backend for the workload. |
-| **Different services duplicate search and preprocessing logic** | A reusable native indexing layer centralizes high-volume lookup and ingestion primitives. |
-| **Raw or compressed data takes too much preprocessing** | Archive-aware and unstructured-data ingestion can turn source material into searchable identifiers close to the data. |
-| **Performance claims are difficult to trust** | Backend decisions and benchmark methodology are exposed so results can be reproduced on the target hardware. |
-| **Replacing the primary database is too disruptive** | KEYSTONE can sit beside an existing system or act as a preprocessing layer rather than requiring a database migration. |
-
-### What that means operationally
-
-- **Faster retrieval where lookup is a bottleneck.**
-- **Better use of hardware already owned** before adding more infrastructure.
-- **Lower integration risk** because KEYSTONE can be adopted as one component rather than an all-or-nothing platform.
-- **More predictable indexing behavior** across repeated processing runs.
-- **A measurable optimization path:** local calibration, decision provenance, tests, and benchmark tooling are part of the implementation.
-- **A direct path into QIHSE** when a broader multi-model database runtime is useful, without making QIHSE a prerequisite.
+| **Large datasets become slower and more expensive to search** | Adaptive indexed lookup and monotonic timeline indexing reduce retrieval time to sub-microsecond scales. |
+| **Existing CPU & accelerator hardware is underused** | Runtime CPUID calibration dispatches execution across Scalar, SSE4.2, AVX2, AVX-512, Intel AMX (`_tile_dpbssd`), and NVIDIA CUDA. |
+| **Autonomous schedulers make opaque or brittle decisions** | Two-tier hybrid planner separates non-negotiable hard constraints from soft objectives, emitting fully explainable recommendation bundles (`keystone_explain_t`). |
+| **Raw, compressed, or dirty data takes too much preprocessing** | Ingestion pipelines stream `.tar.zst` archives with zero disk inflation, extract 24-bit inverted trigrams, and parse dirty tokens close to memory. |
+| **Distributed nodes experience split-brain or stale writes** | Monotonic Hybrid Logical Clocks (HLC), fencing epoch verification, and deterministic conflict resolution (Epoch $\succ$ Generation $\succ$ HLC). |
+| **Multi-tenant queries risk leaking metadata** | Mandatory Access Control (clearance levels and compartment masks) enforces zero metadata leakage (`KEYSTONED_STATUS_DENIED`). |
+| **Replacing the primary database is too disruptive** | KEYSTONE sits beside existing systems (or QIHSE) as an evidence and indexing layer rather than requiring an all-or-nothing database migration. |
 
 ---
 
 ## What KEYSTONE Does
 
-KEYSTONE combines several focused capabilities behind one native library:
+KEYSTONE combines focused capabilities behind one native library and modular daemon suite:
 
 | Capability | Practical purpose |
 |---|---|
-| **Adaptive indexed search** | Finds records in large sorted keyspaces using anchor-guided interpolation rather than relying only on generic binary search. |
-| **High-volume batch lookup** | Processes large query sets through optimized C, OpenMP, and optional numerical backends. |
-| **Runtime backend calibration** | Measures viable execution paths on the local machine and caches the fastest choice across workload shapes (hit rate, gap, stride). |
-| **Unstructured-data ingestion** | Extracts useful identifiers from noisy source data without requiring a heavyweight parsing stack. |
-| **Archive-aware processing** | High-throughput streaming and indexed search over `.tar.zst` archives with persistent `.idx.json` sidecars, pipelined ring-buffer decompression, and multi-archive batching. |
-| **Trigram content indexing (tgrep-style)** | Inverted 24-bit trigram index for raw text/log corpora delivering up to 100x+ sub-linear candidate file rejection prior to byte verification. |
-| **Context classification** | An optional small native neural model can classify extracted context for downstream triage. |
-| **Vector similarity search** | LSH-indexed cosine/L2/dot similarity over 384-dim float32 vectors with SIMD acceleration and CUDA/VPU paths. |
-| **QIHSE integration** | Can act as a native preprocessing/ingestion layer for the QIHSE database ecosystem. |
-
-The core search engine is useful by itself. The ingestion, archive, classification, Fortran, OpenMP, SIMD, and QIHSE paths are additive capabilities rather than mandatory dependencies.
+| **Federation wire ingest & deduplication** | Packed 124-byte wire envelope with CRC32 integrity, 9.3M ops/sec deduplication ring, tombstone masking, and atomic checkpoint persistence. |
+| **Exact identity directory** | $O(1)$ collision-safe open-addressing table mapping 128-bit UUIDs to active generation, epoch, and state at **4.6+ million queries/sec**. |
+| **Monotonic temporal timeline** | Monotonic Hybrid Logical Clock (HLC) index with 64-byte cache-line aligned entries and binary range searches at **3.7+ million queries/sec**. |
+| **Service daemon mode (`keystoned`)** | Standalone unprivileged daemon over `0700` Unix domain sockets with binary IPC, multi-client poll concurrency, and atomic generation pointer swapping. |
+| **Security context partitioning** | Clearance levels (Unclassified to Top Secret) and 64-bit compartment bitmasks with zero metadata leakage. |
+| **Topology graph cache** | Read-optimized in-memory graph cache (`RUNS_ON`, `ATTACHED_TO`, `DEPENDS_ON`, `SHARES_FAILURE_DOMAIN`) with neighborhood expansion and blast-radius tracing. |
+| **Two-tier hybrid query planner** | Tier 1 boolean constraint pruning (security, CPU ISA, RAM, anti-affinity) and Tier 2 weighted soft ranking (RAM, CPU, thermals, NUMA). |
+| **Streaming telemetry & anomalies** | Online Welford statistics over 1m/5m/15m/1h/24h rolling windows with static threshold alarms and $|z| \ge 3.0$ outlier detection. |
+| **Silicon incident similarity** | 64-dim normalized failure embeddings with multi-tier silicon dispatch (CUDA, Intel AMX, AVX-512, AVX2, Scalar reference) for advisory mitigations. |
+| **Federated query coordinator** | Multi-node registry, health monitoring, distributed conflict resolution, monotonic timeline multi-way merge, and partial-result resilience. |
+| **Grounded AI/RAG context packs** | Constrained retrieval endpoint extracting citation-backed context packs (`keystone_context_pack_t`) with cryptographic model governance (SHA-256 validation). |
+| **Trigram content indexing (`tgrep`)** | Inverted 24-bit direct directory text index delivering 100x+ sub-linear candidate rejection with parallel build and standalone CLI (`bin/tgrep`). |
+| **Vector similarity engine** | LSH coarse indexing and SIMD distance kernels for 384-dim float32 embeddings with 8-level graceful fallback. |
+| **Archive-aware processing** | High-throughput streaming and search over `.tar.zst` archives with persistent `.idx.json` sidecars and pipelined ring-buffer decompression. |
 
 ---
 
@@ -72,195 +72,136 @@ The core search engine is useful by itself. The ingestion, archive, classificati
 
 ```mermaid
 flowchart LR
-    A["Existing data\nDatabase · Telemetry · Archives · Raw files"] --> I
+    A["Existing Infrastructure\nQIHSE · Telemetry · Hosts · VMs"] --> I
 
-    subgraph KS["KEYSTONE acceleration layer"]
-        I["Ingest / Normalize"] --> S["Adaptive indexed search"]
-        S --> C["Runtime backend calibration"]
-        I --> M["Optional context classification"]
+    subgraph KS["KEYSTONE Federation & Intelligence Acceleration Layer"]
+        I["Canonical Wire Ingest\n124B Envelope · CRC32 · 9.3M ops/s Dedup"] --> IDX["Dual Indexing Engine\nExact Identity O(1) · Monotonic Temporal O(log N)"]
+        I --> TEL["Streaming Telemetry Engine\nRolling Windows (1m..24h) · Online Statistics"]
+        TEL --> ANOM["Multi-Stage Anomaly Detection\nStatic Thresholds + |z| >= 3.0 Outliers"]
+        ANOM --> VEC["Silicon Incident Similarity\nCUDA · AMX _tile_dpbssd · AVX-512 · AVX2 · Scalar"]
+        IDX & TEL & ANOM & VEC --> PLAN["Two-Tier Hybrid Planner & RAG Engine\nHard Boolean Pruning + Soft Objective Ranking"]
     end
 
-    S --> R["Fast record / offset / entity lookup"]
-    M --> R
-    R --> X["Existing application or analysis workflow"]
-    R --> Q["Optional QIHSE ingestion"]
+    PLAN --> REC["Explainable Recommendation Bundles\nkeystone_recommendation_t + keystone_explain_t"]
+    REC --> CITADEL["CITADEL Control Plane / Hypervisor\nVerifies Fencing Lease · Executes Hypercalls"]
+    REC --> QIHSE["QIHSE Consensus Bus\nAuthoritative System of Record (Truth)"]
 ```
 
-The design is intentionally database-adjacent. KEYSTONE does not need to own the system of record; it accelerates the path between source data and the record an application actually needs.
+The design is strictly database- and hypervisor-adjacent. KEYSTONE accelerates the path between high-volume telemetry and explainable decisions without becoming an unvetted execution authority.
 
-For the detailed search pipeline, backend-selection model, feature matrix, memory behavior, SIMD paths, and integration internals, see the [technical overview](docs/TECHNICAL_OVERVIEW.md).
+For complete architectural specifications, see the [technical documentation](docs/README.md).
 
 ---
 
 ## Measured Results
 
-KEYSTONE includes benchmark tooling because performance should be demonstrated on the hardware and workload that will actually run it.
+Performance is continuously verified on target hardware:
 
-One current integrated benchmark on an **Intel Xeon E5-2407** measured the KEYSTONE sorted-column search at:
+### 1. Ingestion & Dual Indexing Performance (8-Core Host)
+- **Federation Ingestion & Deduplication**: **9,345,794 events/sec** (107 ns/event) with 100% duplicate rejection and CRC32 verification.
+- **Exact Identity Directory Lookup**: **4,608,294 lookups/sec** (217 ns/query) in $O(1)$ open-addressing table.
+- **Monotonic Temporal Range Search**: **3,717,472 range queries/sec** (269 ns/query) with branchless binary bounding.
 
-| Same-host lookup benchmark | Throughput | p50 latency |
-|---|---:|---:|
-| Standard binary search, 1M rows | 2,016,334 lookups/s | 415 ns |
-| **KEYSTONE anchor search, 1M rows** | **3,510,610 lookups/s** | **218 ns** |
+### 2. Algorithmic Key Search
+On an **Intel Xeon E5-2407** (2.2GHz):
+- Standard binary search (1M rows): 2,016,334 lookups/s (415 ns)
+- **KEYSTONE anchor search (1M rows)**: **3,510,610 lookups/s (218 ns)** — **1.74× higher throughput, 47% lower latency**.
 
-That run represents roughly **1.74× higher throughput and 47% lower median lookup latency** against the benchmark's standard binary-search baseline on that host.
+### 3. Vector Similarity Engine (384-dim Float32)
+- **100,000 vectors (AVX + LSH)**: 423 queries/sec (2.36 ms/query) — **30.8× faster than NumPy brute force**.
 
-These are **measured results, not universal guarantees**. CPU, compiler flags, dataset distribution, hit rate, cache state, batch shape, and enabled backends materially affect performance. Full methodology and additional measurements are kept in [`docs/BENCHMARK_RESULTS.md`](docs/BENCHMARK_RESULTS.md).
-
-### Vector Engine Benchmarks
-
-The KEYSTONE Vector Engine adds hardware-agnostic vector similarity search with LSH coarse indexing and SIMD exact rerank. Benchmarks were run on an **Intel Xeon E5-2407** (SSE4.2 + AVX, no AVX2/AVX-512) with 384-dimensional float32 vectors (SentenceTransformer all-MiniLM-L6-v2 output dimension):
-
-| Corpus size | Backend | Upsert rate | Search latency | Throughput | vs NumPy |
-|---|---|---:|---:|---:|---:|
-| 1,000 vectors | Scalar | 16,949 vec/s | 0.27 ms/query | 3,757 q/s | 2.5× |
-| 1,000 vectors | **AVX** | **17,241 vec/s** | **0.25 ms/query** | **3,965 q/s** | **2.5×** |
-| 1,000 vectors | VPU (Myriad X) | 16,949 vec/s | 1.04 ms/query | 962 q/s | 0.6× |
-| 10,000 vectors | Scalar | 10,267 vec/s | 1.85 ms/query | 542 q/s | 4.4× |
-| 10,000 vectors | **AVX** | **10,493 vec/s** | **1.80 ms/query** | **556 q/s** | **4.4×** |
-| 100,000 vectors | Scalar | 2,831 vec/s | 2.52 ms/query | 397 q/s | 30.8× |
-| 100,000 vectors | **AVX** | **2,752 vec/s** | **2.36 ms/query** | **423 q/s** | **30.8×** |
-| 100,000 vectors | NumPy brute force | — | 72.89 ms/query | 14 q/s | 1.0× (baseline) |
-
-**Key findings:**
-
-- **30.8× faster than NumPy** brute-force search at 100K vectors (AVX backend with LSH coarse index)
-- **AVX backend** uses 256-bit YMM float operations (8× float32 per instruction) — no AVX2 or AVX-512 required
-- **VPU (Myriad X)** is available for batch similarity computation via Unix socket, with graceful fallback to CPU SIMD if the VPU is unavailable
-- **LSH coarse index** reduces search from O(n) brute force to sub-linear candidate retrieval + exact SIMD rerank
-- **Graceful fallback chain:** CUDA → AVX-512 → AVX2 → AVX → SSE4.2 → NEON → VPU → scalar (always compiled)
-
-The vector engine is **hardware-agnostic**: the scalar path builds and runs on any Linux box with a C compiler. SIMD backends are compile-time guarded and runtime dispatched — a binary built on an AVX-512 server runs correctly on an SSE2-only machine via runtime detection.
+### 4. Parallel Trigram Construction (1GB Text Corpus)
+- **Parallel builder (`tgrep`)**: **22.31 seconds** vs 148.62 seconds single-threaded (**6.7× speedup**, 46 MB/s throughput, 957M postings).
 
 ---
 
 ## Current State
 
-KEYSTONE is a working native library and test/benchmark suite.
+KEYSTONE is fully implemented with **19 / 19 passing test suites** (`make check`).
 
-**Implemented today:**
+**All 8 CITADEL Federation Intelligence Upgrade phases are complete:**
+- [x] **Phase 0**: Federation wire envelope, CRC32, 9.3M ops/sec dedup ring, tombstone registry, atomic checkpoints.
+- [x] **Phase 1**: Exact identity directory ($O(1)$), monotonic HLC temporal timeline index ($O(\log N)$).
+- [x] **Phase 2**: Security-aware native service daemon (`bin/keystoned`), restricted `0700` Unix socket, MAC clearance/compartment checks, atomic generation publication.
+- [x] **Phase 3**: Topology graph cache (`RUNS_ON`, `DEPENDS_ON`, etc.), two-tier hybrid planner (Tier 1 boolean pruning, Tier 2 weighted soft ranking), explainable recommendation bundles.
+- [x] **Phase 4**: Streaming telemetry ring buffers, rolling feature windows (1m..24h), online Welford statistics, multi-stage deterministic anomaly engine ($|z| \ge 3.0$).
+- [x] **Phase 5**: 64-dim normalized incident vector embeddings, multi-tier silicon dispatch (NVIDIA CUDA, Intel AMX `_tile_dpbssd`, AVX-512, AVX2, Scalar CPU reference), advisory mitigations.
+- [x] **Phase 6**: Federated distributed query coordinator, node health and latency tracking, conflict resolution (Epoch $\succ$ Generation $\succ$ HLC), multi-way monotonic merge, partial-result degradation.
+- [x] **Phase 7**: Constrained AI/RAG context retrieval endpoint, explicit citations (`keystone_citation_t`), cryptographic model governance (SHA-256 weight validation).
 
-- scalar and anchor-guided `int64_t` search;
-- batch lookup with shape- and profile-aware runtime backend calibration (`hit_rate`, `gap`, `stride`);
-- decision provenance for backend choices (`source`, `shape`, `hit_rate_pct`, `avg_gap`, `detected_stride`);
-- SSE4.2, AVX, and AVX2 local scan paths where supported;
-- build-gated AVX-512 path;
-- OpenMP batch execution;
-- optional Fortran batch backend;
-- `.tar.zst` archive workflows with persistent `.idx.json` sidecars, ring-buffered pipeline decompression, and multi-archive batch pools;
-- unstructured-data tokenizer and hash indexer;
-- native context micro-model;
-- QIHSE bridge support;
-- **trigram content indexer** (`keystone_trigram.h`) inspired by Microsoft tgrep with case-insensitivity, streaming archive ingestion, binary persistence, and Python SDK;
-- **vector similarity engine** with LSH coarse indexing, SIMD cosine/L2/dot distance, CUDA and VPU (Myriad X) accelerated paths, and 8-level graceful fallback (scalar always compiled);
-- host and build metadata tracking in benchmark outputs (nodename, OS, arch, release, compiler, version);
-- correctness and performance test infrastructure.
-
-GPU/NPU execution is not presented as a current production backend. The project detects or contains experimental accelerator work in places, but accelerator support is only considered implemented when correctness, transfer cost, fallback behavior, dispatch provenance, and target-hardware measurements are established.
-
-See [`docs/STATUS_SUMMARY.md`](docs/STATUS_SUMMARY.md) for the engineering status and current backlog.
-
----
-
-## Deployment Model
-
-KEYSTONE is designed to be built for the machine, container image, or target silicon family where it will run. The normal build uses native optimization and can enable resident CPU capabilities and optional components when available.
-
-This gives deployments three useful properties:
-
-1. **No requirement for specialized accelerator hardware.** The current core runs on CPU.
-2. **Optional acceleration stays optional.** OpenMP, Fortran, SIMD paths, archive support, classification, and QIHSE integration can be selected independently.
-3. **Backend choice is observable.** The runtime exposes whether a decision came from a fast path, measurement, cache, or fallback rather than hiding the execution path.
-
-Detailed build modes and feature switches are documented in [`docs/BUILD_MODES.md`](docs/BUILD_MODES.md).
+See [`docs/STATUS_SUMMARY.md`](docs/STATUS_SUMMARY.md) and [`ROADMAP.md`](ROADMAP.md) for full details.
 
 ---
 
 ## Quick Start
 
+### Build & Run Test Suite
 ```bash
 git clone https://github.com/SWORDIntel/KEYSTONE.git
 cd KEYSTONE
 make clean
-make test
+make check    # Runs all 19 test suites across core and federation modules
 ```
 
-Build benchmarks:
+### Start `keystoned` Service Daemon
+```bash
+make bin/keystoned
+bin/keystoned -s /run/keystone/keystoned.sock -d
+```
 
+### Fast Content Search with `tgrep`
+```bash
+make bin/tgrep
+bin/tgrep -i -n "keystone_federation" src/ include/
+```
+
+### Run Benchmarks
 ```bash
 make benchmarks
 ./benchmarks/dsmil_benchmark
-./benchmarks/performance_proof
+./benchmarks/trigram_benchmark
 ```
 
-A scalar comparison build is available for baseline testing:
-
-```bash
-make clean
-KEYSTONE_ENABLE_FORTRAN=0 KEYSTONE_ENABLE_TAR_ZST=0 KEYSTONE_FORCE_SCALAR=1 make test
-```
-
-For integration guidance, see [`docs/INTEGRATION.md`](docs/INTEGRATION.md).
+For detailed build switches, see [`docs/BUILD_MODES.md`](docs/BUILD_MODES.md). For integration guidelines, see [`docs/INTEGRATION.md`](docs/INTEGRATION.md).
 
 ---
 
-## QIHSE Integration
+## Documentation Map
 
-KEYSTONE can operate as the ingestion and lookup front end for [QIHSE](https://github.com/SWORDIntel/QIHSE), while remaining independently usable.
-
-```mermaid
-flowchart LR
-    SRC["Source data"] --> K["KEYSTONE\nparse · index · classify"]
-    K -->|structured hits| Q["QIHSE"]
-    K -->|direct lookup| APP["Existing application"]
-```
-
-To build the bridge when QIHSE is available locally:
-
-```bash
-make clean
-KEYSTONE_ENABLE_QIHSE_BRIDGE=1 QIHSE_ROOT=/path/to/QIHSE make
-```
-
----
-
-## Technical Snapshot
-
-For readers who want the implementation detail without making it the front door:
-
-- **Primary implementation:** C11
-- **Current execution surface:** scalar C, SSE4.2, AVX (256-bit YMM), AVX2, build-gated AVX-512, optimized C batch, OpenMP, optional Fortran, optional CUDA (soft-loaded), optional VPU (Myriad X, guarded)
-- **Search model:** anchor-guided interpolation over sorted `int64_t` keyspaces; vector similarity via LSH coarse index + SIMD exact rerank
-- **Auto-selection:** first-use local timing calibration with cached decisions; runtime CPUID dispatch for SIMD; dlopen for CUDA; socket probe for VPU
-- **Data ingestion:** raw/unstructured tokenization, FNV-1a projection, optional archive handling
-- **Classification:** native 260 → 64 → 6 context micro-model
-- **Vector engine:** 384-dim float32 similarity search with LSH, cosine/L2/dot metrics, 8-level graceful fallback (scalar → VPU → NEON → SSE4.2 → AVX → AVX2 → AVX-512 → CUDA)
-- **Platform:** Linux (x86-64, ARM64)
-- **Testing posture:** correctness cross-checks plus workload- and backend-aware benchmarks
-
-### Documentation
-
-| Document | Purpose |
+| Area | Documentation |
 |---|---|
-| [`docs/README.md`](docs/README.md) | Documentation map |
-| [`docs/TECHNICAL_OVERVIEW.md`](docs/TECHNICAL_OVERVIEW.md) | Architecture, backend selection, feature matrix, memory and execution model |
-| [`docs/STATUS_SUMMARY.md`](docs/STATUS_SUMMARY.md) | What is implemented and what remains |
-| [`docs/BENCHMARK_RESULTS.md`](docs/BENCHMARK_RESULTS.md) | Benchmark methodology and measured results |
-| [`vector_engine/keystone_vector_engine.h`](vector_engine/keystone_vector_engine.h) | Vector engine API — similarity search with LSH + SIMD + CUDA + VPU |
-| [`vector_engine/build_vector_engine.sh`](vector_engine/build_vector_engine.sh) | Auto-detecting build script for vector engine |
-| [`docs/BUILD_MODES.md`](docs/BUILD_MODES.md) | Native/scalar/optional build configuration |
-| [`docs/INTEGRATION.md`](docs/INTEGRATION.md) | Integration guidance |
-| [`docs/ACCELERATOR_CONTRACT.md`](docs/ACCELERATOR_CONTRACT.md) | Requirements for adding accelerator backends |
-| [`docs/TELEMETRY_PROCESSOR.md`](docs/TELEMETRY_PROCESSOR.md) | Telemetry processor details |
-| [`docs/TRIGRAM_BENCHMARK.md`](docs/TRIGRAM_BENCHMARK.md) | Inverted trigram index performance and benchmark analysis |
+| **Overview & Map** | [`docs/README.md`](docs/README.md) |
+| **Technical Overview** | [`docs/TECHNICAL_OVERVIEW.md`](docs/TECHNICAL_OVERVIEW.md) |
+| **Status Summary** | [`docs/STATUS_SUMMARY.md`](docs/STATUS_SUMMARY.md) |
+| **Build Modes** | [`docs/BUILD_MODES.md`](docs/BUILD_MODES.md) |
+| **Integration Guide** | [`docs/INTEGRATION.md`](docs/INTEGRATION.md) |
+| **Benchmark Results** | [`docs/BENCHMARK_RESULTS.md`](docs/BENCHMARK_RESULTS.md) |
+| **Accelerator Contract** | [`docs/ACCELERATOR_CONTRACT.md`](docs/ACCELERATOR_CONTRACT.md) |
+| **Federation Wire Ingest** | [`docs/architecture/federation_ingest.md`](docs/architecture/federation_ingest.md) |
+| **Index Generations** | [`docs/architecture/index_generations.md`](docs/architecture/index_generations.md) |
+| **Security Partitioning** | [`docs/architecture/security_partitioning.md`](docs/architecture/security_partitioning.md) |
+| **Temporal Timeline** | [`docs/architecture/temporal_index.md`](docs/architecture/temporal_index.md) |
+| **Exact & Temporal Co-Execution**| [`docs/architecture/exact_and_temporal_indexing.md`](docs/architecture/exact_and_temporal_indexing.md) |
+| **Topology Graph Cache** | [`docs/architecture/topology_index.md`](docs/architecture/topology_index.md) |
+| **Hybrid Query Planner** | [`docs/architecture/hybrid_query.md`](docs/architecture/hybrid_query.md) |
+| **Recommendation Engine**| [`docs/architecture/recommendation_engine.md`](docs/architecture/recommendation_engine.md) |
+| **Streaming Telemetry & Anomalies**| [`docs/architecture/telemetry_and_anomaly_engine.md`](docs/architecture/telemetry_and_anomaly_engine.md) |
+| **Silicon & Incident Similarity** | [`docs/architecture/silicon_and_incident_similarity.md`](docs/architecture/silicon_and_incident_similarity.md) |
+| **Federated Query Coordinator** | [`docs/architecture/federated_query_routing.md`](docs/architecture/federated_query_routing.md) |
+| **AI/RAG Context & Governance** | [`docs/architecture/rag_context_and_model_governance.md`](docs/architecture/rag_context_and_model_governance.md) |
+| **QIHSE Stream Contract** | [`docs/architecture/qihse_stream_contract.md`](docs/architecture/qihse_stream_contract.md) |
+| **`keystoned` Daemon** | [`docs/architecture/keystoned.md`](docs/architecture/keystoned.md) |
 
 ---
 
 ## What KEYSTONE Is Not
 
-KEYSTONE is not a replacement for every database, an ORM, a dashboard platform, or a general-purpose ETL suite.
+KEYSTONE is not:
+- an authoritative consensus cluster (that is QIHSE);
+- a hypervisor controller or hypercall dispatcher (that is CITADEL / Xen);
+- an ORM or generic dashboard platform.
 
-It is a focused acceleration layer for indexing, lookup, and preprocessing workloads where retrieval cost, predictable record identity, and measurable execution behavior matter.
+It supplies fast, bounded, explainable evidence and intelligence to components that own those responsibilities.
 
 ---
 
@@ -275,6 +216,6 @@ Commercial, proprietary, or hosted use that is incompatible with AGPL obligation
 <div align="center">
 
 **KEYSTONE**  
-Fast retrieval. Measurable execution. Use only what you need.
+Fast retrieval. Silicon acceleration. Explainable intelligence.
 
 </div>

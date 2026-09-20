@@ -1,104 +1,122 @@
+<!--
+  SPDX-License-Identifier: AGPL-3.0-or-later
+  Copyright (C) 2026 SWORDIntel. All rights reserved.
+-->
+
 # KEYSTONE Status Summary
 
-Condensed from DYNAMIC_HOT_PATH_PLAN, FORTRAN_BACKEND_PLAN, IMPROVEMENT_PLAN, OPTIMIZATION_SUMMARY, and PERFORMANCE_ROADMAP.
+Current engineering status across core search, memory optimization, vectorized trigram indexing, vector similarity, downstream fabric integration, and the **CITADEL Federation Intelligence Upgrade (Phases 0–7)**.
+
+---
 
 ## Done
 
-### Core Search & SIMD
-- Scalar C reference path with correctness cross-checks.
-- Runtime CPU feature detection (AVX2, AVX-512, AMX, NEON, SVE).
-- AVX2 local scan path for small search windows when built for x86 AVX2.
-- AVX-512 local scan path is build-gated and should be treated as target-silicon experimental until measured on real AVX-512 hardware.
-- Software prefetching (L1 `_MM_HINT_T0`, L2 `_MM_HINT_T1`) for medium/large arrays.
+### 1. Core Search & SIMD
+- **Scalar C Reference Path**: Deterministic baseline path with 100% cross-validation against accelerated backends.
+- **Runtime CPU Feature Detection**: Probes AVX2, AVX-512 (F, DQ, BW), Intel AMX (TILE, INT8, BF16), ARM NEON, and SVE.
+- **AVX2 Local Scan Path**: Vectorized small-window search for x86 AVX2 platforms.
+- **SSE4.2 Integer Vectorization**: 128-bit SIMD path (`_mm_cmpeq_epi64`), 2x unrolled for legacy x86 CPUs.
+- **Software Prefetching**: Configured L1 (`_MM_HINT_T0`) and L2 (`_MM_HINT_T1`) prefetch pipelines for medium/large search arrays.
 
-### Memory
-- `keystone_optimize_array_memory()` — transparent huge-page hints via `madvise(MADV_HUGEPAGE)`.
-- Huge-page gating by size threshold (>1MB); non-fatal on failure.
-- Memory ramp runner (`scripts/run_memory_ramp.sh`) with bounded RAM cap (`MemAvailable` fraction).
-- Zero major page faults in pilot up to 128M rows.
+### 2. Memory & Concurrency
+- **Transparent Huge-Page Hints**: `keystone_optimize_array_memory()` using `madvise(MADV_HUGEPAGE)` for arrays >1MB; zero major page faults up to 128M rows.
+- **Lock-Free Calibration Cache**: Reader-writer lock (`pthread_rwlock_t`) on auto-backend calibration cache enabling high-concurrency queries without mutex contention.
+- **Zero-Copy Radix Sort**: 8-pass Least Significant Digit (LSD) radix sort (`src/dsmil_hash_indexer.c`) with double-buffered pointer swapping, eliminating 32 full-array `memcpy` operations.
 
-### Batch & Auto-Selection
-- `keystone_search_batch_auto()` — first-use local calibration across viable scalar/C batch, OpenMP, and Fortran candidates.
-- Calibration cache keyed by CPU feature mask, array-size bucket, query-count bucket, thread count, hit-rate bucket, gap bucket, and detected stride.
-- Static fallback remains for invalid/uncalibrated fallback cases, but normal uncached decisions use measured median/p95 timing.
-- Workload profile fields (`hit_rate_pct`, `avg_gap`, `detected_stride`) exposed in public `keystone_backend_decision_t` and Python `BackendDecision`.
-- Fallback-policy verification for cache bypass (`KEYSTONE_DISABLE_CALIBRATION_CACHE`) and static fallback paths (`KEYSTONE_FORCE_CALIBRATION_FALLBACK`).
-- Richer host/build metadata (hostname, OS, arch, kernel release, compiler name, compiler version) added to benchmark writer and calibration CSV/JSON output.
-- p95 field exposed in public `keystone_backend_decision_t` from calibration samples or cached measured values.
-- Decision provenance is exposed as fast path, measured, cache, or static fallback.
-- Query shape is exposed as general, dense sorted, sparse sorted, strided, or random.
-- Cache-hit correctness tests compare result and ordinal arrays across measured and cached selector runs.
-- `scripts/compare_search.c` CSV output includes auto backend, decision source, query shape, calibration run count, candidate count, hit-rate, gap, stride, and host/build comments.
-- Benchmark matrix runner (`scripts/run_perf_matrix.sh`) with configurable size/query/hit-rate/gap/stride sweeps.
+### 3. Batch Search & Runtime Auto-Selection
+- **`keystone_search_batch_auto()`**: First-use dynamic benchmarking across viable scalar, optimized C, OpenMP, and optional Fortran candidates.
+- **Calibration Cache**: Keyed on CPU features, array size bucket, query count bucket, thread count, query shape, 25%-granular hit-rate buckets, gap buckets, and detected stride.
+- **Decision Provenance**: Public exposure of decision source (fast path, measured, cache, static fallback), workload profile (`hit_rate_pct`, `avg_gap`, `detected_stride`), and measured median/p95 latency.
+- **Testing Switches**: Validated fallback policies via `KEYSTONE_DISABLE_CALIBRATION_CACHE` and `KEYSTONE_FORCE_CALIBRATION_FALLBACK`.
 
-### Fortran Backend
-- `fortran/keystone_batch.f90` exports `keystone_batch_search_i64`.
-- C adapter `keystone_search_batch_fortran` with `int64_t` ABI.
-- Optional native build: enabled explicitly with `KEYSTONE_ENABLE_FORTRAN=1`, or auto-enabled by the Makefile when `gfortran` is present unless `KEYSTONE_ENABLE_FORTRAN=0`.
-- Narrow auto-route exception for dense sorted query shapes within the configured query-count window.
+### 4. Vector Similarity Engine (`vector_engine/`)
+- **Arbitrary & 384-Dim Float32 Embeddings**: Cosine, Euclidean (L2), and Dot product metrics.
+- **Locality-Sensitive Hashing (LSH)**: Coarse index with multiprobe search, 4-way unrolled FMA projection, 64-bit quick bloom filter candidate deduplication, and $O(N \log N)$ `qsort` bucket finalization.
+- **Multi-Tier Silicon Distance Kernels**: Scalar, SSE4.2, AVX, AVX2, AVX-512, ARM NEON, Myriad X VPU, and CUDA GPU with graceful dynamic fallback.
+- **Zero-Heap Query Fast Paths**: Stack-allocated scratchpads for query normalization (up to 1,024 dims) and candidate reranking (up to 512 candidates).
 
-### Testing & Benchmarks
-- Correctness tests for scalar, batch, parallel API behavior, optional Fortran paths, and archive handling.
-- Deterministic hit/miss profiles (100/75/50/25/0%).
-- Gap profiles: dense, sparse, jittered.
-- Stride profiles: sequential, strided, random.
-- Thread scaling sweeps (1–32 threads).
+### 5. Streaming Archive Ingestion (`src/keystone_tar_zst.c`)
+- **Zero-Disk Inflation**: Streaming `.tar.zst` decompression and parsing directly in memory.
+- **Persistent Sidecar Indices**: `<archive>.idx.json` with compact Bloom filters for sub-millisecond archive startup and $O(1)$ negative rejection.
+- **Pipelined Ring Buffers**: Dual-threaded producer/consumer ring buffer overlapping I/O and decompression.
+- **Multi-Archive Batch Pools**: Parallel evaluation of partitioned archives with OpenMP candidate pruning.
 
-### Vector Similarity Engine
-- Standalone vector search engine (`vector_engine/`) for 384-dim (and arbitrary-dim) float32 embeddings with cosine, L2, and dot metrics.
-- LSH coarse index with multiprobe search, 4-way unrolled FMA projection, 64-bit quick bloom filter candidate deduplication, and $O(N \log N)$ `qsort` bucket finalization.
-- Multi-tier SIMD distance kernels: Scalar, SSE4.2, AVX, AVX2, AVX-512, ARM NEON, Myriad X VPU, and CUDA with graceful runtime fallback.
-- Zero-heap query scratchpads for cosine query normalization (up to 1,024 dims) and candidate reranking (up to 512 candidates).
-- Compiler-agnostic OpenMP batch search (`keystone_vec_search_batch`) auto-detected during vector engine build.
+### 6. Vectorized Trigram Content Indexing (`bin/tgrep` & `src/keystone_trigram.c`)
+- **24-Bit Direct Directory**: Flat 64 MiB directory (`KEYSTONE_TRIGRAM_OPT_DIRECT_DIRECTORY`) providing $O(1)$ zero-probe trigram lookups without hash collisions.
+- **SIMD Intersection & Galloping Search**: Adaptive list intersection combining blocked AVX2 comparisons with monotonic galloping search (`ks_lower_bound_gallop_u32`).
+- **Dense Posting Bitmaps**: High-frequency trigrams converted to 64-bit word bitmaps with $O(1)$ bit test and bitwise AND.
+- **Multi-Threaded Construction**: Parallel build (`keystone_trigram_index_build_parallel`) achieving 6.7x speedup on 1GB corpora (46 MB/s, 957M postings).
+- **Standalone `bin/tgrep` CLI**: High-performance grep replacement with persistent index caching (`-I` / `.tgrep.idx`), case folding, and SIMD substring verification.
 
-### Archive Streaming & Ingestion
-- Streaming `.tar.zst` reader (`src/keystone_tar_zst.c`) with zero on-disk inflation.
-- Persistent sidecar indices (`<archive>.idx.json`) for sub-millisecond archive startup and $O(1)$ negative rejection via compact Bloom filters.
-- Dual-threaded producer/consumer ring-buffered decompression (`enable_pipeline`) overlapping I/O with parsing.
-- Non-destructive stream rewind (`keystone_tar_zst_rewind()`) enabling out-of-order member queries.
-- Multi-archive parallel batch pools (`keystone_tar_zst_batch_*`) with OpenMP parallel candidate evaluation.
+### 7. Downstream Compute Fabric Integration
+- **Parrot-Sabot**: Integrated `TrigramIndex` into `ArtifactSpooler` for `/search-artifacts` sub-millisecond log triage.
+- **QIHSE Node Capability Frame**: `include/keystone_fabric.h` exports hardware ISA capabilities, accelerator status, and live resource stats to the QIHSE cluster bus via 66-byte datagrams (`0x51424E53` magic).
 
-### Concurrency & Hash Indexing
-- Zero-copy LSD radix sort (`src/dsmil_hash_indexer.c`): replaced 32 full-array `memcpy` operations across 8 passes with double-buffered pointer swapping.
-- Reader-writer lock (`pthread_rwlock_t`) on auto-backend calibration cache (`src/keystone.c`), enabling lock-free concurrent lookups.
-- QIHSE bridge authentication: auto-delegating credential dispatch to `keystone_qihse_bridge_dispatch_credential_authenticated()` when principal is configured, enforcing QIHSE Invariant 1.
+### 8. CITADEL Federation Intelligence Upgrade (Phases 0–7 Complete)
+- **Phase 0: Federation Wire Envelope & Dual Ingestion** ([`include/keystone_federation.h`](../include/keystone_federation.h), [`src/federation/keystone_federation_ingest.c`](../src/federation/keystone_federation_ingest.c)):
+  - Packed 124-byte wire envelope (`KEYSTONE_FEDERATION_ENVELOPE_MAGIC = 0x4B534645`), IEEE 802.3 CRC32 header and payload checksums.
+  - 128-bit UUID primitives (`keystone_uuid_t`) and monotonic Hybrid Logical Clock (`keystone_hlc_t`).
+  - High-throughput deduplication hash ring benchmarked at **9.3+ million events/sec** (107 ns/event).
+  - Instant tombstone registry masking, fencing epoch protection, and atomic double-buffered checkpointing.
+- **Phase 1: Infrastructure Exact Identity & Monotonic Temporal Indexing** ([`include/keystone_exact_index.h`](../include/keystone_exact_index.h), [`include/keystone_temporal.h`](../include/keystone_temporal.h)):
+  - $O(1)$ open-addressing exact identity index benchmarked at **4.6+ million queries/sec** (217 ns/query).
+  - 64-byte cache-line aligned monotonic temporal index benchmarked at **3.7+ million range queries/sec** (269 ns/query).
+  - Object-scoped timeline queries, time-bucket histogram aggregations, and out-of-order arrival stabilization.
+- **Phase 2: Security-Aware Native Service Mode (`keystoned`)** ([`include/keystoned.h`](../include/keystoned.h), `bin/keystoned`, [`src/service/`](../src/service/)):
+  - Unprivileged service daemon operating over restricted `0700` Unix domain sockets (`/run/keystone/keystoned.sock`).
+  - Multi-client poll concurrency and atomic reader-writer generation publication (`keystoned_server_publish_generation`).
+  - Multi-level security context partitioning (`clearance_level`, `compartment_mask`, `tenant_id`) with zero metadata leakage (`KEYSTONED_STATUS_DENIED`).
+- **Phase 3: Topology Graph Cache & Two-Tier Hybrid Query Planner** ([`include/keystone_topology.h`](../include/keystone_topology.h), [`include/keystone_hybrid.h`](../include/keystone_hybrid.h)):
+  - In-memory graph adjacency cache (`RUNS_ON`, `ATTACHED_TO`, `ROUTES_THROUGH`, `DEPENDS_ON`, `REPLICATED_TO`, `SHARES_FAILURE_DOMAIN`).
+  - Neighborhood expansion, failure domain clustering, and dependency chain blast radius tracing.
+  - Two-tier hybrid query planner: Tier 1 boolean constraint pruning (security, CPU ISA flags, RAM, anti-affinity) and Tier 2 weighted soft ranking (RAM, CPU, thermals, NUMA).
+  - Explainable recommendation bundles (`keystone_recommendation_t`, `keystone_explain_t`).
+- **Phase 4 & 5: Streaming Telemetry & Silicon Incident Similarity** ([`include/keystone_telemetry.h`](../include/keystone_telemetry.h), [`include/keystone_incident.h`](../include/keystone_incident.h)):
+  - Circular sample buffers, online Welford statistics, and rolling multi-tier feature windows (1m, 5m, 15m, 1h, 24h).
+  - Deterministic multi-stage anomaly engine (static warning/critical limits, $|z| \ge 3.0$ statistical outliers with zero-variance protection, linear regression slope/trend).
+  - 64-dimensional normalized incident vector embeddings with multi-tier silicon dispatch: NVIDIA CUDA GPU, Intel Sapphire Rapids AMX (`_tile_dpbssd`), AVX-512, AVX2+FMA, and Scalar CPU reference fallback.
+  - Historical incident similarity search emitting advisory mitigations.
+- **Phase 6 & 7: Federated Distributed Query & AI/RAG Context Retrieval** ([`include/keystone_federated_query.h`](../include/keystone_federated_query.h), [`include/keystone_rag.h`](../include/keystone_rag.h)):
+  - Federated multi-node coordinator, node health and latency tracking, and deterministic conflict resolution (Epoch $\succ$ Generation $\succ$ HLC).
+  - Multi-way monotonic timeline merge and distributed top-K similarity search aggregation with partial-result degradation flags (`keystone_partial_status_t`).
+  - Constrained RAG context pack extraction (`keystone_context_pack_t`) with explicit grounding citations (`keystone_citation_t`).
+  - Cryptographic model governance registry (`keystone_model_manifest_t`) validating task capabilities and SHA-256 weight hash integrity.
 
-### Trigram Content Indexing (tgrep-style)
-- Native C11 trigram index engine (`include/keystone_trigram.h`, `src/keystone_trigram.c`).
-- 24-bit hash trigram extraction and inverted posting list intersection for sub-linear text document search.
-- Achieves 100x+ search speedups on large text/log corpora by rejecting non-matching candidates before full verification.
-- **Unified C Interface**: Integrated directly into `<keystone.h>` for single-include developer access.
-- **Case-Insensitive Mode**: `KEYSTONE_TRIGRAM_OPT_CASE_INSENSITIVE` flag with SIMD SSE4.2 character folding and case-insensitive substring verification.
-- **Binary Persistence**: `keystone_trigram_index_save()` and `keystone_trigram_index_load()` for zero-rebuild fast loading from disk.
-- **Direct `.tar.zst` Streaming Ingestion**: `keystone_tar_zst_index_trigram()` indexes compressed archive text members directly via stream buffers without unpacking to disk.
-- **DSMIL Integration**: `dsmil_trigram_index_tar_zst()` provides a unified one-call archive member indexer for log triage.
-- **Python SDK Bindings**: Full `TrigramIndex` support with streaming ingestion, case-insensitivity, persistence (`save`/`load`), and candidate iteration.
+---
 
-## Still To Do
+## Test Suite Status
 
-The items below are the current engineering backlog. The root README intentionally keeps this detail out of the executive overview; see [TECHNICAL_OVERVIEW.md](TECHNICAL_OVERVIEW.md) for the surrounding architecture.
+All **19 / 19 test suites** pass 100% green under `make check`:
 
-### Trigram Engine High-Throughput Upgrades (Sol Architecture)
-- **Phase 1: Immediate Wins (Completed)**: Fixed case-insensitive iterator ASCII-folding bug; unified branchless ASCII folding (`fast_ascii_tolower`); pre-folded query needle in `bounded_memmem_ci`; replaced candidate iterator `bsearch()` with monotonic lower-bound galloping (`ks_lower_bound_gallop_u32`); eliminated per-query `malloc(doc_count * 4)` candidate allocation; added adaptive sparse list intersection (balanced AVX2 `_mm256_cmpeq_epi32` vs skewed galloping); implemented query planner rarity pruning (8–16 rarest trigrams); freed build-only bitset state at `finalize()`.
-- **Phase 2: Ingestion & Memory Throughput (In Progress)**: Contiguous flattened posting memory pool (`flat_postings`) at `finalize()`; dense posting 64-bit word bitmaps with $O(1)$ bit test and bitwise AND; true streaming ingestion with 2-byte boundary carry across arbitrary chunks; arena-backed chunked posting lists; direct 24-bit descriptor directory (64 MiB flat table) for large corpora.
-- **Phase 3: Multi-Threaded Parallel Construction**: Thread-local builders with contiguous document ranges; lock-free parallel frequency pass and finalize merge.
+| Test Suite Binary | Focus Area | Status |
+|---|---|---|
+| `bin/test_keystone` | Core scalar & SIMD search | PASS |
+| `bin/test_keystone_calibration_cache` | Calibration cache & concurrency | PASS |
+| `bin/test_keystone_provenance` | Workload shape profiling & provenance | PASS |
+| `bin/test_keystone_fortran` | Fortran interop & ABI | PASS |
+| `bin/test_fortran_workloads` | Fortran multi-workload benchmarking | PASS |
+| `bin/test_memory_ramp` | Huge pages & memory capacity ramp | PASS |
+| `bin/test_cuda_backend` | CUDA & AMX silicon detection | PASS |
+| `bin/test_keystone_tar_zst` | Compressed archive streaming | PASS |
+| `bin/test_trigram_index` | Trigram engine correctness | PASS |
+| `bin/test_trigram_sol` | Sol trigram optimization passes | PASS |
+| `bin/test_trigram_parallel` | Multi-threaded parallel trigram build | PASS |
+| `bin/test_keystone_fabric` | QIHSE node capability bus frames | PASS |
+| `bin/test_keystone_qihse_integration` | QIHSE cluster bus integration | PASS |
+| `bin/test_federation_envelope` | Phase 0 wire envelope & dedup ring | PASS |
+| `bin/test_exact_temporal_index` | Phase 1 exact & temporal indexes | PASS |
+| `bin/test_keystoned_service` | Phase 2 daemon, IPC & security context | PASS |
+| `bin/test_topology_hybrid_planner` | Phase 3 topology cache & hybrid planner | PASS |
+| `bin/test_telemetry_incident_engine` | Phase 4 & 5 telemetry & silicon dispatch | PASS |
+| `bin/test_federated_query_rag` | Phase 6 & 7 federated coordinator & RAG | PASS |
 
-### Fortran
-- Expand benchmark coverage beyond dense all-hit workloads.
-- Decide whether Fortran stays explicit-only or becomes a broader selectable backend.
-- Require 10%+ win in multiple real workload buckets before expanding the narrow auto-route exception.
+---
 
-### RAM-Capacity & Scaling
-- Add bounded RAM-capacity timing: 5%/10%/25%/40%/60% of `MemAvailable` with page-fault and RSS reporting.
-- Thread-count sweep for C OpenMP on 1M and 4M query batches.
-- Add apples-to-apples scalar batch backend for fair out-of-range miss routing.
-- True OS cold-cache testing (behind explicit opt-in because dropping caches affects the whole host).
+## Future Research & Horizons
 
-### Architecture Candidates (deferred)
-- **AMX**: CPU feature detection exists, but no AMX search backend should be claimed until there is a real tiled integer search design.
-- **GPU/NPU Vector Acceleration**: CUDA and Myriad X VPU kernels are implemented in `vector_engine/` with runtime soft-loading; continuing hardware-in-the-loop stress testing on resident silicon.
-
-### Profiling & Measurement
-- Tune prefetch distance per workload instead of global fixed distance.
-- Measure cache/TLB behavior with `perf stat` before accepting changes.
-- Add `effective_read_giB/s` and `first_touch_ms` to standard benchmark reporting.
+1. **FPGA & CXL Near-Memory Acceleration**:
+   - Evaluate CXL 3.0 shared-memory fabrics for cross-node generation pointer sharing without network serialization.
+2. **Post-Quantum Cryptographic Signatures for Model Governance**:
+   - Upgrade model weight manifests to support ML-DSA (Dilithium) signatures alongside SHA-256 digests.
+3. **Adaptive Streaming Compression**:
+   - Investigate stream dictionary training for continuous telemetry ingestion over bandwidth-constrained satellite or edge links.

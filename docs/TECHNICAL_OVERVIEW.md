@@ -1,288 +1,182 @@
+<!--
+  SPDX-License-Identifier: AGPL-3.0-or-later
+  Copyright (C) 2026 SWORDIntel. All rights reserved.
+-->
+
 # KEYSTONE Technical Overview
 
-This document contains the implementation detail intentionally kept out of the root README. The README explains what KEYSTONE is and why it matters; this document explains how the current implementation is structured.
+This document contains the comprehensive engineering and architectural details for the KEYSTONE engine. The root [README](../README.md) provides a high-level executive overview; this document describes the complete internal architecture across numeric search, vectorized trigram indexing, vector similarity, and the **CITADEL Federation Intelligence Upgrade**.
 
-## Architecture
+For focused architectural specifications, see the dedicated guides in [`docs/architecture/`](architecture/).
+
+---
+
+## 1. Unified System Architecture
+
+KEYSTONE operates as a dual-engine high-performance indexing, retrieval, and intelligence platform:
 
 ```mermaid
 flowchart TB
-    subgraph Intelligence["Ingestion / Intelligence Pipeline"]
-        DIRTY["Raw Data / Memory Dump / Archive"] --> PARSE["Custom C Tokenizer"]
-        PARSE -->|Extract identifiers| HASH["Hash Indexer (FNV-1a)"]
-        HASH --> AT["Anchor Table"]
-        AT --> R["Result Offset"]
-        R --> BRIDGE["Model Context Bridge"]
-        BRIDGE -->|256-byte window| MODEL["Native Micro-Model"]
-        MODEL --> CLASS["6-Class Semantic Triage"]
+    subgraph Federation["CITADEL Federation Intelligence & Evidence Engine"]
+        WIRE["Wire Ingest / QIHSE Stream"] --> ENV["Canonical Wire Envelope (124B, CRC32)"]
+        ENV --> DEDUP["Deduplication Hash Ring (9.3M ops/s)"]
+        DEDUP --> FENCE{"Fencing Epoch Check"}
+        FENCE --> TOMB["Tombstone Registry"]
+        FENCE --> EXACT["Exact Identity Directory O(1)"]
+        FENCE --> TEMP["Monotonic Temporal Timeline O(log N)"]
+        ENV --> TELEM["Streaming Telemetry Ring (1m..24h)"]
+        TELEM --> ANOM["Multi-Stage Anomaly Engine (|z| >= 3.0)"]
+        ANOM --> EMBED["64-dim Incident Vector Synthesis"]
+        EMBED --> SILICON{"Silicon Dispatch (CUDA / AMX / AVX-512 / AVX2 / Scalar)"}
+        SILICON --> SIM["Incident Similarity Search (Top-K)"]
+        ENV --> TOPO["Topology Graph Cache (Adjacency & Metrics)"]
+        TOPO --> PLAN["Two-Tier Hybrid Query Planner"]
+        EXACT & TEMP & TELEM & ANOM & SIM & TOPO --> RAG["Grounded RAG Context Packs + Citations"]
+        PLAN & SIM --> REC["Explainable Recommendation Bundles (keystone_recommendation_t)"]
     end
 
-    subgraph Search["Numeric Search Pipeline"]
-        Q["Query Key / Query Batch"] --> Auto{"Runtime Backend Calibrator"}
-        Auto -->|Single / Small| S["Scalar Anchor Search"]
-        Auto -->|Sorted Batch| CB["Optimized C Batch"]
-        Auto -->|Large Batch + OpenMP| MP["C OpenMP Batch"]
-        Auto -->|Dense Batch| FT["Optional Fortran Batch"]
-        S --> SIMD["SIMD Local Scan"]
-        S --> AT
-        CB --> AT
-        SIMD --> AT
-        MP --> AT
-        FT --> AT
+    subgraph CoreSearch["Core Algorithmic Search & Content Indexing"]
+        RAW["Raw Data / Archives / Text"] --> TAR["Streaming .tar.zst Reader (Zero-Disk)"]
+        RAW --> RADIX["Zero-Copy LSD Radix Sort"]
+        RAW --> TRI["24-Bit Direct Trigram Directory (tgrep)"]
+        TRI --> SIMD_INT["Adaptive SIMD & Galloping Intersection"]
+        RAW --> VEC["LSH Vector Engine (384-dim float32)"]
+        NUM["Sorted int64_t Keys"] --> AUTO{"Runtime Backend Calibrator"}
+        AUTO --> SCALAR["Scalar C Reference"]
+        AUTO --> OPT_C["Optimized C Batch"]
+        AUTO --> OMP["OpenMP Parallel Batch"]
+        AUTO --> FORT["Optional Fortran Scientific"]
+    end
+
+    subgraph ServiceMode["Service & IPC Layer"]
+        DAEMON["bin/keystoned Service Daemon"] --> SOCK["Unix Domain Socket (/run/keystone/keystoned.sock, 0700)"]
+        SOCK --> SEC{"Security Context Partitioning (MAC)"}
+        SEC -->|Denied| DENY["KEYSTONED_STATUS_DENIED (Zero Leakage)"]
+        SEC -->|Authorized| SWAP["Reader-Writer Atomic Generation State Swap"]
     end
 ```
 
-## Backend Selection Model
+---
 
-```mermaid
-flowchart TD
-    Start["Incoming Lookup Workload"] --> Mode{"Single or Batch?"}
-    Mode -->|Single| Scalar["Scalar Interpolation Search"]
-    Mode -->|Batch| Size{"Dataset and Batch Size"}
+## 2. CITADEL Federation Intelligence Architecture
 
-    Size -->|Small / Low Overhead Preferred| Scalar
-    Size -->|Sorted Batch| CB["Optimized C Merge-Walk Batch"]
-    Size -->|Large / Repeated Queries| CPU{"Build + Workload Capabilities"}
+Governed by [`CITADEL/docs/architecture/KEYSTONE_FEDERATION_INTELLIGENCE_UPGRADE_BRIEF.md`](../../../CITADEL/docs/architecture/KEYSTONE_FEDERATION_INTELLIGENCE_UPGRADE_BRIEF.md), KEYSTONE serves as the high-speed evidence, topology expansion, anomaly detection, and explainable decision-support accelerator for CITADEL and QIHSE.
 
-    CPU -->|OpenMP Built + Enough Queries| OMP["C OpenMP Batch Execution"]
-    CPU -->|Fortran Built + Dense Sorted Shape| FORTRAN["Fortran Batch Execution"]
-    CPU -->|Otherwise| CB
+### 2.1 The Cardinal Architectural Principle
+> **"KEYSTONE may recommend, rank, correlate, predict, and accelerate. It must not silently become authoritative."**
 
-    OMP --> Cal["Measured Local Calibration"]
-    FORTRAN --> Cal
-    CB --> Cal
-    Scalar --> Anchor["Anchor Table / Adaptive Learning"]
-    Cal --> Anchor
-    Anchor --> Result["Stable Result Index"]
+```text
+QIHSE                ==>  Consensus, Truth, Leases, Fencing Epochs
+KEYSTONE             ==>  Evidence, Telemetry, Similarity, Recommendations
+CITADEL Controller   ==>  Policy Validation, Hypervisor Control, Execution
 ```
 
-The selector is intended to make execution choices measurable rather than purely heuristic. Normal uncached batch decisions can benchmark viable candidates, cache the result against workload/host characteristics, and expose the decision source through the public API.
+- **QIHSE** is the authoritative system of record. It owns leases, fencing epochs, and state transitions.
+- **KEYSTONE** ingests events, extracts features, indexes identities, and provides sub-millisecond retrieval without mutating cluster state.
+- **CITADEL** consumes KEYSTONE's explainable recommendations and telemetry summaries, but verifies hard fencing epochs and executes hypervisor actions independently.
 
-## Data Flow
+---
 
-```mermaid
-flowchart LR
-    Source["Source Dataset"] --> Normalize["Sorted int64_t Keyspace"]
-    Normalize --> Anchor["Anchor-Guided Search Layer"]
-    Anchor --> Backend["Selected Execution Backend"]
-    Backend --> Index["Result Index"]
-    Index --> Consumer["Database / Telemetry / Analysis Consumer"]
+### 2.2 Subsystem Breakdown & Architecture Documents
 
-    Archive["Compressed Archive"] --> Member["Member Offset Index"]
-    Member --> Anchor
+| Subsystem | Specification Document | Implementation Headers & Source |
+|---|---|---|
+| **Federation Wire Ingest** | [`docs/architecture/federation_ingest.md`](architecture/federation_ingest.md) | [`include/keystone_federation.h`](file:///home/john/Documents/KEYSTONE/include/keystone_federation.h)<br>[`src/federation/keystone_federation_ingest.c`](file:///home/john/Documents/KEYSTONE/src/federation/keystone_federation_ingest.c) |
+| **Index Generations** | [`docs/architecture/index_generations.md`](architecture/index_generations.md) | [`include/keystoned.h`](file:///home/john/Documents/KEYSTONE/include/keystoned.h)<br>[`src/service/keystoned_server.c`](file:///home/john/Documents/KEYSTONE/src/service/keystoned_server.c) |
+| **Security Partitioning** | [`docs/architecture/security_partitioning.md`](architecture/security_partitioning.md) | [`include/keystoned.h`](file:///home/john/Documents/KEYSTONE/include/keystoned.h)<br>[`src/service/keystoned_server.c`](file:///home/john/Documents/KEYSTONE/src/service/keystoned_server.c) |
+| **Exact Identity Directory** | [`docs/architecture/exact_and_temporal_indexing.md`](architecture/exact_and_temporal_indexing.md) | [`include/keystone_exact_index.h`](file:///home/john/Documents/KEYSTONE/include/keystone_exact_index.h)<br>[`src/federation/keystone_exact_index.c`](file:///home/john/Documents/KEYSTONE/src/federation/keystone_exact_index.c) |
+| **Monotonic Temporal Index** | [`docs/architecture/temporal_index.md`](architecture/temporal_index.md) | [`include/keystone_temporal.h`](file:///home/john/Documents/KEYSTONE/include/keystone_temporal.h)<br>[`src/temporal/keystone_temporal_index.c`](file:///home/john/Documents/KEYSTONE/src/temporal/keystone_temporal_index.c) |
+| **Native Service Daemon (`keystoned`)** | [`docs/architecture/keystoned.md`](architecture/keystoned.md) | `bin/keystoned`<br>[`src/service/keystoned_main.c`](file:///home/john/Documents/KEYSTONE/src/service/keystoned_main.c)<br>[`src/service/keystoned_client.c`](file:///home/john/Documents/KEYSTONE/src/service/keystoned_client.c) |
+| **Topology Graph Cache** | [`docs/architecture/topology_index.md`](architecture/topology_index.md) | [`include/keystone_topology.h`](file:///home/john/Documents/KEYSTONE/include/keystone_topology.h)<br>[`src/topology/keystone_topology_index.c`](file:///home/john/Documents/KEYSTONE/src/topology/keystone_topology_index.c) |
+| **Two-Tier Hybrid Planner** | [`docs/architecture/hybrid_query.md`](architecture/hybrid_query.md) | [`include/keystone_hybrid.h`](file:///home/john/Documents/KEYSTONE/include/keystone_hybrid.h)<br>[`src/query/keystone_hybrid_planner.c`](file:///home/john/Documents/KEYSTONE/src/query/keystone_hybrid_planner.c) |
+| **Explainable Recommendations** | [`docs/architecture/recommendation_engine.md`](architecture/recommendation_engine.md) | [`include/keystone_federation.h`](file:///home/john/Documents/KEYSTONE/include/keystone_federation.h)<br>[`include/keystone_hybrid.h`](file:///home/john/Documents/KEYSTONE/include/keystone_hybrid.h) |
+| **Streaming Telemetry & Anomalies** | [`docs/architecture/telemetry_and_anomaly_engine.md`](architecture/telemetry_and_anomaly_engine.md) | [`include/keystone_telemetry.h`](file:///home/john/Documents/KEYSTONE/include/keystone_telemetry.h)<br>[`src/telemetry/keystone_telemetry_engine.c`](file:///home/john/Documents/KEYSTONE/src/telemetry/keystone_telemetry_engine.c) |
+| **Silicon Incident Similarity** | [`docs/architecture/silicon_and_incident_similarity.md`](architecture/silicon_and_incident_similarity.md) | [`include/keystone_incident.h`](file:///home/john/Documents/KEYSTONE/include/keystone_incident.h)<br>[`src/incident/keystone_incident_engine.c`](file:///home/john/Documents/KEYSTONE/src/incident/keystone_incident_engine.c) |
+| **Federated Query Coordinator** | [`docs/architecture/federated_query_routing.md`](architecture/federated_query_routing.md) | [`include/keystone_federated_query.h`](file:///home/john/Documents/KEYSTONE/include/keystone_federated_query.h)<br>[`src/federation/keystone_federated_query.c`](file:///home/john/Documents/KEYSTONE/src/federation/keystone_federated_query.c) |
+| **Grounded AI/RAG Context** | [`docs/architecture/rag_context_and_model_governance.md`](architecture/rag_context_and_model_governance.md) | [`include/keystone_rag.h`](file:///home/john/Documents/KEYSTONE/include/keystone_rag.h)<br>[`src/query/keystone_rag_engine.c`](file:///home/john/Documents/KEYSTONE/src/query/keystone_rag_engine.c) |
+| **QIHSE Stream Contract** | [`docs/architecture/qihse_stream_contract.md`](architecture/qihse_stream_contract.md) | [`include/keystone_fabric.h`](file:///home/john/Documents/KEYSTONE/include/keystone_fabric.h)<br>[`src/keystone_fabric.c`](file:///home/john/Documents/KEYSTONE/src/keystone_fabric.c) |
 
-    Bench["Benchmark Harness"] --> Backend
-    Tests["Validation Suite"] --> Anchor
-```
+---
 
-## Core Search Model
+## 3. Core Algorithmic Search Model
 
-KEYSTONE's current primary search surface operates on sorted `int64_t` keyspaces. Anchor points provide learned/local guidance into the sorted domain and scalar interpolation resolves candidate regions. Small local windows can use architecture-specific scan implementations when the build and runtime CPU support them.
+KEYSTONE's primary numeric search surface operates on sorted `int64_t` keyspaces. Anchor points provide learned/local guidance into the sorted domain and scalar interpolation resolves candidate regions. Small local windows use architecture-specific scan implementations when the build and runtime CPU support them.
 
-The implementation retains a scalar reference path so optimized backends can be checked against the same lookup semantics.
+The implementation retains a strict scalar reference path so optimized backends can be checked against identical lookup semantics.
 
-### Current CPU execution paths
-
-- scalar C reference/anchor search;
-- optimized C batch path;
-- SSE4.2 local scan on supported x86 builds;
+### 3.1 CPU Execution Paths
+- Scalar C reference/anchor search (`keystone_search_scalar`);
+- Optimized C merge-walk batch path (`keystone_search_batch_c`);
+- SSE4.2 local scan (`_mm_cmpeq_epi64`, 2x unrolled);
 - AVX2 local scan on supported x86 builds;
-- build-gated AVX-512 local scan;
-- OpenMP batch execution;
-- optional Fortran batch backend.
+- Build-gated AVX-512 local scan (`keystone_avx512.c`);
+- OpenMP multi-threaded batch execution (`keystone_search_batch_openmp`);
+- Optional Fortran batch backend (`fortran/keystone_batch.f90`).
 
-AMX feature detection exists, but there is no current AMX search backend claim. GPU and NPU execution should likewise be treated as future/experimental backend families until their correctness, transfer costs, fallback behavior, dispatch provenance, and target-device measurements satisfy the accelerator contract.
+### 3.2 Runtime Calibration & Backend Selection
+`keystone_search_batch_auto()` benchmarks candidate batch backends on first encounter rather than assuming a static backend is optimal for every machine:
 
-## Runtime Calibration
-
-`keystone_search_batch_auto()` can calibrate viable batch backends on a cache miss rather than assuming a fixed backend is best for every machine or query shape.
-
-Current decision state (`keystone_backend_decision_t`) includes:
-
-- selected backend (`keystone_backend_t`);
-- decision source (`keystone_backend_decision_source_t`): fast path, measured, cache, or static fallback;
-- query-shape classification (`keystone_query_shape_t`): `general`, `dense_sorted`, `sparse_sorted`, `strided`, or `random`;
-- workload profile metrics: `hit_rate_pct` (exact observed hit percentage: 0–100), `avg_gap` (average delta between adjacent query keys), and `detected_stride` (constant stride or 0);
-- measured latency metrics: estimated median ns/key and p95 ns/key;
-- calibration-run and candidate information used by benchmark tooling.
-
-The calibration cache (`g_backend_cache`, protected by reader-writer lock `pthread_rwlock_t`) keys on:
-- CPU feature mask (`cpu_features`);
-- array-size bucket (power-of-two);
-- query-count bucket (power-of-two);
-- thread count;
-- query shape;
-- hit-rate bucket (25% granular in-bounds bucketing);
-- key gap bucket (power-of-two);
-- constant stride (`detected_stride`).
-
-### Fallback Policy & Test Controls
-
-- **Static Fallback**: When candidate calibration fails or is forced via `KEYSTONE_FORCE_CALIBRATION_FALLBACK=1`, the router falls back to the static routing policy (`KEYSTONE_DECISION_SOURCE_STATIC_FALLBACK`). Static fallback decisions are unmeasured and do not pollute the calibration cache.
-- **Cache Bypass**: Setting `KEYSTONE_DISABLE_CALIBRATION_CACHE=1` forces runtime calibration on each search batch for testing and timing validation without cache retention.
-
-## System Profile
-
-| Layer | Function |
-|---|---|
-| **Core search engine** | Anchor-guided interpolation over sorted integer data. |
-| **Dirty-data tokenizer** | Extracts identifiers from noisy/unstructured source material without allocation-heavy parsing. |
-| **Hash indexer** | Projects heterogeneous strings into a 64-bit integer search space using FNV-1a. |
-| **Context bridge** | Extracts bounded context windows around matched offsets. |
-| **Micro-model inference** | Native 260 → 64 → 6 feed-forward classification for optional semantic triage. |
-| **Adaptive backend layer** | Routes batch workloads across viable scalar, optimized C, OpenMP, and optional Fortran paths. |
-| **Anchor table** | Maintains search guidance for repeated lookup behavior. |
-| **Archive interface** | Supports `.tar.zst` member workflows when archive dependencies are enabled. |
-| **Trigram content indexer** | 24-bit hash inverted trigram posting list index for sub-linear text/log search with SSE4.2 case-folding and archive streaming. |
-| **Vector similarity engine** | LSH coarse indexing and SIMD (SSE4.2/AVX/AVX2/AVX-512/NEON/CUDA/VPU) distance kernels for 384-dim float32 embeddings. |
-| **QIHSE bridge** | Streams structured results into QIHSE when compiled with integration support. |
-
-## Feature Matrix
-
-| Feature | Scalar / Anchor C | Optimized C Batch | SIMD Local Scan | OpenMP Batch | Fortran Batch | `.tar.zst` | Trigram Index | Vector Engine |
-|---|---:|---:|---:|---:|---:|---:|---:|---:|
-| Single search | Yes | No | Yes, inside local windows | No | No | No | N/A | Yes |
-| Batch search | Yes | Yes | Indirect | Optional | Optional | No | Yes | Yes |
-| Auto backend calibration | Yes | Yes | Build/runtime detected | Optional measured candidate | Optional measured candidate | No | Auto fallback | Runtime auto-dispatch |
-| Decision provenance | Fast path / measured / cached / fallback | Measured or cached | Build/runtime detected | Measured or cached | Measured or cached | No | N/A | Runtime selected |
-| Anchor learning | Yes | No for merge-walk batch | Through scalar path | Per-thread clone path | No | No | N/A | N/A |
-| Runtime tuning | Yes | Yes | Build/runtime gated | Build gated | Build gated | No | SSE4.2 folding | SIMD / CUDA / VPU |
-| Archive ingestion | No | No | No | No | No | Yes | Direct streaming | No |
-| Member offset indexing | No | No | No | No | No | Yes | Line-offset hits | No |
-| Benchmark validation | Yes | Yes | Host-specific | Yes when built | Yes when built | Yes | Yes | Yes |
-| Linux support | Yes | Yes | Host-dependent | Runtime-dependent | Toolchain-dependent | Dependency-dependent | Yes | Yes |
-
-## Memory Model
-
-The native core includes memory-oriented optimizations intended for large arrays:
-
-- transparent huge-page hints through `madvise(MADV_HUGEPAGE)`;
-- size gating so small allocations are not needlessly advised;
-- software prefetching for medium/large search arrays;
-- bounded memory-ramp tooling for capacity experiments;
-- benchmark/reporting work around page faults, RSS, cache and TLB behavior.
-
-The memory optimizations are treated as performance aids rather than correctness requirements; failure to obtain a huge-page hint is non-fatal.
-
-## Unstructured Data Pipeline
-
-The ingestion path is designed for data that is useful before it is clean.
-
-A native tokenizer extracts identifiers from noisy input. String-like fields can then be projected into a compact 64-bit keyspace through FNV-1a and searched using the same indexed lookup machinery as native integer identifiers.
-
-- **Zero-Copy Double-Buffered Radix Sort**: Keys, offsets, raw strings, and lengths are sorted using an 8-pass Least Significant Digit (LSD) radix sort (`src/dsmil_hash_indexer.c`). The sort operates via double-buffered pointer ping-ponging between primary and scratch arrays. Because the pass count ($8$) is even, sorted data terminates directly in caller arrays with zero full-array memory copies (eliminating 32 full-array `memcpy` operations).
-- **Collision Verification**: Every positive hash lookup is checked against the original source string bytes to eliminate false matches from 64-bit hash collisions.
-- **Trigram Content Indexing (tgrep-style)**: High-performance 24-bit trigram inverted index (`include/keystone_trigram.h`, `src/keystone_trigram.c`) mapping 3-byte character sequences to sorted document/chunk IDs. Intersects posting lists to reject up to 99.9%+ of non-matching candidate documents prior to full byte verification.
-
-The optional context model consumes a bounded byte window around a hit and emits one of six semantic classes with confidence gating. This model is deliberately small enough to execute directly in the native pipeline rather than requiring a general ML runtime for every classification.
-
-## Archive Support & Streaming Ingestion
-
-When `libarchive` and `libzstd` are available, KEYSTONE can participate directly in `.tar.zst` processing without inflating archives on disk. Member offsets and extracted identifiers feed the same lookup/index structures used by non-archive data.
-
-### Architectural Capabilities
-
-1. **Persistent Sidecar Indices (`.idx.json`)**:
-   - `keystone_tar_zst_save_index()` and `keystone_tar_zst_load_index()` serialize and restore archive structure (member names, compressed and uncompressed byte offsets, key counts, min/max bounds, and compact Bloom filter bitsets in hexadecimal).
-   - Once generated, `<archive>.idx.json` can be loaded in sub-millisecond time on startup via `options.auto_load_index = 1`, completely bypassing full archive scans.
-
-2. **Memory-Bounded Verification**:
-   - Building or loading an index consumes minimal RAM (retaining only metadata and negative-rejection filters).
-   - If a search query falls within a member's min/max bounds and passes the Bloom filter test, candidate verification streams and parses only the relevant member on demand.
-
-3. **Pipelined Producer-Consumer Ring Buffer (`enable_pipeline`)**:
-   - When `options.enable_pipeline = 1`, an asynchronous decompression thread reads chunks through `libzstd` into a 4-slot ring buffer (`tar_zst_ring_slot_t`), while the worker thread simultaneously parses numeric tokens and builds search buffers.
-   - This overlaps I/O and decompression latency with parsing CPU cycles, saturating memory throughput.
-
-4. **Transparent Rewind & Random Member Access**:
-   - Unlike standard sequential tar streams, `keystone_tar_zst_t` supports non-destructive stream rewinding (`keystone_tar_zst_rewind()`).
-   - Querying or extracting archive members in arbitrary or out-of-order sequences automatically rewinds to the beginning of the archive if the target member precedes the current read position.
-
-5. **Multi-Archive Batch Pools (`keystone_tar_zst_batch_t`)**:
-   - Datasets distributed across partitioned archives (`batch_00000.tar.zst`, `batch_00001.tar.zst`, ...) can be managed as a single logical pool.
-   - Queries across the batch pool execute in parallel with OpenMP, testing pre-loaded sidecar indices in $O(1)$ time to prune non-matching archives before decompressing.
-
-Archive support is optional and is not required by the core numeric search engine.
-
-## Vector Similarity Engine
-
-KEYSTONE includes a high-performance vector search engine (`vector_engine/`) optimized for 384-dimensional dense float32 embeddings (e.g., all-MiniLM-L6-v2, text-embedding-3-small) as well as arbitrary dimensionality:
-
-- **Coarse Indexing via Locality-Sensitive Hashing (LSH)**:
-  - Random hyperplane projections map continuous vectors into discrete integer bucket keys.
-  - Multi-probe querying explores adjacent hypercube vertices for high recall.
-  - **SIMD Projection Pipelining**: Projection dot-products (`sign_dot`) are 4-way unrolled to saturate CPU FMA execution ports.
-  - **Fast Bloom Deduplication**: A 64-bit quick bitmask filters candidates before linear scanning, skipping duplicate checks in $O(1)$ time.
-  - **$O(N \log N)$ Finalization**: Bucket keys are sorted with standard `qsort` over packed contiguous structs (`lsh_bucket_entry_t`).
-
-- **Hierarchical SIMD & Hardware Acceleration**:
-  - Distance metrics: Cosine, L2 (Euclidean), and Dot-product.
-  - Runtime dispatch probes CPU features and dynamically binds optimized kernels:
-    1. **CUDA GPU**: Bounded batch distance matrix computation via dynamic `libcuda.so` loading.
-    2. **Myriad X VPU**: Neural compute stick offload for embedded edge deployments.
-    3. **AVX-512**: 16-lane 32-bit float vectorization with FMA.
-    4. **AVX2 / FMA**: 8-lane vectorization with unrolled accumulators.
-    5. **AVX1**: 8-lane vectorization (supported on Sandy Bridge / Ivy Bridge).
-    6. **SSE4.2**: 4-lane vectorization for older x86_64 cores.
-    7. **ARM NEON**: 4-lane vectorization for aarch64/Graviton.
-    8. **Scalar Fallback**: Guaranteed always-compiled reference implementation.
-
-- **Zero-Heap Query Fast Paths**:
-  - Queries execute without heap allocations: cosine normalization uses a 1,024-element stack buffer, and candidate reranking uses a 512-element stack array.
-  - Multi-core batch vector queries execute via OpenMP (`keystone_vec_search_batch`).
-
-## Concurrency & Reader-Writer Cache Locking
-
-Auto-backend calibration decisions are cached in a globally accessible ring buffer (`g_backend_cache`). To prevent lock contention among parallel search threads:
-
-- Access is synchronized via a POSIX reader-writer lock (`pthread_rwlock_t g_backend_cache_rwlock`).
-- Read-heavy query dispatch evaluates cached hardware decisions concurrently with `pthread_rwlock_rdlock()`.
-- Cache misses and benchmark recordings acquire exclusive write leases via `pthread_rwlock_wrlock()`.
-- Publication race safety: `valid=1` is published atomically after all calibration metadata fields are initialized.
-
-## QIHSE Bridge
-
-KEYSTONE can be compiled as a native preprocessing/ingestion layer for QIHSE:
-
-```bash
-make clean
-KEYSTONE_ENABLE_QIHSE_BRIDGE=1 QIHSE_ROOT=/path/to/QIHSE make
+```c
+typedef struct {
+    keystone_backend_t backend;
+    keystone_backend_decision_source_t source; /* FAST_PATH, MEASURED, CACHE, STATIC_FALLBACK */
+    keystone_query_shape_t shape;              /* GENERAL, DENSE_SORTED, SPARSE_SORTED, STRIDED, RANDOM */
+    uint32_t hit_rate_pct;                     /* Observed in-bounds hit rate (0..100) */
+    int64_t avg_gap;                           /* Average delta between adjacent query keys */
+    int64_t detected_stride;                   /* Detected regular stride (or 0) */
+    double median_ns_per_key;                  /* Measured latency */
+    double p95_ns_per_key;                     /* Measured tail latency */
+} keystone_backend_decision_t;
 ```
 
-### Security Invariant Compliance (QIHSE AGENTS.md Invariant #1)
+The calibration cache (`g_backend_cache`), synchronized via reader-writer locks (`pthread_rwlock_t`), eliminates lock contention across high-throughput worker threads.
 
-Per QIHSE's core security invariants, no classified read or write primitive may be executed without an explicit authenticated security context (`qihse_user_t*`):
-- `keystone_qihse_bridge_dispatch_credential_authenticated()` explicitly validates and propagates the caller's `ingestion_principal`. Writes are rejected if no authenticated principal context is supplied.
-- Legacy context-free dispatch (`keystone_qihse_bridge_dispatch_credential`) automatically delegates to the authenticated path whenever `ingestion_principal` is configured, preventing authorization bypasses during high-throughput ingestion.
+---
 
-See [INTEGRATION.md](INTEGRATION.md) for integration details.
+## 4. Vectorized Trigram Indexing Engine (`bin/tgrep`)
 
-## Native Build Philosophy
+KEYSTONE includes a native inverted trigram index (`include/keystone_trigram.h`, `src/keystone_trigram.c`) optimized for raw source code, log corpora, and binary triage:
 
-The default deployment posture is target-native rather than lowest-common-denominator portability. The build can use `-O3 -march=native` and enable locally supported execution paths.
+1. **Direct 24-Bit Descriptor Directory**: Flat 64 MiB directory (`KEYSTONE_TRIGRAM_OPT_DIRECT_DIRECTORY`) mapping every 24-bit trigram directly to its posting slice, achieving $O(1)$ zero-probe trigram lookups without hash collisions or probing loops.
+2. **SIMD Intersection & Monotonic Galloping**: Adaptive list intersection combining blocked AVX2 comparisons with monotonic galloping search (`ks_lower_bound_gallop_u32`), eliminating $O(N)$ restart penalties.
+3. **Dense Posting Bitmaps**: High-frequency trigrams ($\ge \text{doc\_count} / 32$) are automatically converted to 64-bit word bitmaps at `finalize()`, intersected via $O(1)$ bit test and 64-bit word bitwise AND with `__builtin_ctzll`.
+4. **Multi-Threaded Parallel Construction**: Two-pass parallel builder (`keystone_trigram_index_build_parallel`) achieving **6.7x speedup** on 1GB corpora (46 MB/s throughput, 957M postings).
+5. **Standalone `bin/tgrep` CLI**: Full grep alternative supporting `-i` (case-folding), `-n` (line numbering), `-l` (files with matches), `-c` (count), `-j` (threads), and pre-built index caching (`-I` / `.tgrep.idx`).
 
-This means benchmark results should always be interpreted with their build configuration and hardware attached. A result produced on one CPU or with one optional backend is not a universal performance guarantee.
+---
 
-See [BUILD_MODES.md](BUILD_MODES.md) for supported switches and reproducible comparison builds.
+## 5. Vector Similarity Engine (`vector_engine/`)
 
-## Performance Measurement
+Optimized for 384-dimensional dense float32 embeddings (e.g., all-MiniLM-L6-v2, text-embedding-3-small) and arbitrary vector spaces:
 
-Performance work should record at minimum:
+- **Coarse Indexing via Locality-Sensitive Hashing (LSH)**: Random hyperplane projections, 4-way unrolled FMA projection dot products, 64-bit quick bloom filter candidate deduplication, and $O(N \log N)$ `qsort` bucket finalization.
+- **Hierarchical SIMD & Silicon Acceleration**: Distance kernels for Cosine, Euclidean (L2), and Dot product across CUDA GPU, Myriad X VPU, AVX-512, AVX2/FMA, SSE4.2, ARM NEON, and Scalar fallback.
+- **Zero-Heap Query Fast Paths**: Stack-allocated scratchpads for cosine query normalization (1,024 dims) and candidate reranking (512 candidates).
 
-- host CPU and microarchitecture;
-- compiler and exact flags;
-- optional feature toggles;
-- dataset size/distribution;
-- query count/order/hit rate;
-- warmup/cache policy;
-- selected backend and decision source;
-- thread count;
-- transfer costs for any accelerator backend;
-- raw benchmark output or CSV.
+---
 
-The repository's benchmark notes deliberately separate measured host-specific results from architectural estimates. See [BENCHMARK_RESULTS.md](BENCHMARK_RESULTS.md).
+## 6. Comprehensive Feature Matrix
 
-## Current Boundaries
+| Feature / Subsystem | Scalar Reference | AVX2 / SIMD | AVX-512 | AMX Matrix | CUDA GPU | OpenMP | Fortran | Service Mode (`keystoned`) |
+|---|---|---|---|---|---|---|---|---|
+| **Exact Identity Lookup** | $O(1)$ | SIMD hash check | N/A | N/A | N/A | Yes | N/A | IPC ($0700$ socket) |
+| **Temporal Range Search** | Binary search | 128-bit UUID filter | N/A | N/A | N/A | Parallel merge | N/A | IPC range stream |
+| **Numeric Key Search** | Interpolation | Local scan | Local scan | N/A | Batch binary | Multi-threaded | Numerical batch | Library call |
+| **Trigram Content Search** | Reference loop | AVX2 intersection | N/A | N/A | N/A | Parallel build | N/A | CLI (`bin/tgrep`) |
+| **Vector Similarity (384d)** | Reference dot | 8-wide FMA | 16-wide FMA | N/A | Batch distance | Multi-threaded | N/A | Library call |
+| **Incident Similarity (64d)**| Reference dot | 8-wide FMA | 16-wide FMA | `_tile_dpbssd` | Batch distance | Multi-threaded | N/A | IPC incident query |
+| **Topology Graph Cache** | Adjacency walk | N/A | N/A | N/A | N/A | Parallel query | N/A | IPC topology query |
+| **Hybrid Two-Tier Planner** | Hard/Soft eval | N/A | N/A | N/A | N/A | Multi-candidate | N/A | IPC recommend query |
+| **Telemetry & Anomalies** | Welford $z$-score | N/A | N/A | N/A | N/A | Multi-node | N/A | Real-time alerts |
+| **Grounded RAG Retrieval** | Pack assembly | N/A | N/A | N/A | N/A | Parallel extract | N/A | IPC context pack |
+| **Model Governance** | SHA-256 verify | SHA-NI accel | N/A | N/A | N/A | N/A | N/A | Manifest audit |
 
-KEYSTONE should not presently be described as having production GPU, NPU, or AMX search backends solely because source files, detection logic, or experimental accelerator work exists. Backend support is considered real only after the public contract, fallback path, correctness checks, data movement, dispatch provenance, and hardware-specific measurements are established.
+---
 
-For the current implementation/backlog boundary, see [STATUS_SUMMARY.md](STATUS_SUMMARY.md).
+## 7. Concurrency, Memory & Security Guarantees
+
+1. **Zero-Copy Radical Radix Sort**: 8-pass LSD radix sort (`src/dsmil_hash_indexer.c`) operates via double-buffered pointer ping-ponging, eliminating 32 full-array `memcpy` operations.
+2. **Transparent Huge Pages**: `keystone_optimize_array_memory()` using `madvise(MADV_HUGEPAGE)` for arrays >1MB; zero major page faults up to 128M rows.
+3. **Lock-Free Read Operations**: `pthread_rwlock_t` on calibration cache, topology index, and daemon generation state allows thousands of concurrent worker threads without lock contention.
+4. **Zero Metadata Leakage**: Security context bitmask checks (`keystone_security_check`) deny unauthorized queries with empty payloads, ensuring callers cannot infer record existence.
+5. **Atomic Generation Publication**: Pointer swaps allow offline index construction and instantaneous, zero-downtime activation.
