@@ -9,7 +9,7 @@
  *
  * Version: 2.0.0
  * Author: DSMIL System
- * License: MIT
+ * License: GNU Affero General Public License v3.0 (AGPL-3.0)
  */
 
 #include "keystone_avx512.h"
