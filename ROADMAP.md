@@ -173,10 +173,15 @@ Governed by [`CITADEL/docs/architecture/KEYSTONE_FEDERATION_INTELLIGENCE_UPGRADE
   - Range search benchmarked at **3.7+ million queries/sec (269 ns/query)**.
   - Object-scoped timeline queries, reverse-chronological incident scans, time-bucket histogram aggregations, out-of-order arrival stabilization, and CRC32-verified atomic persistence.
 
-### Phase 2: Security-Aware Native Service Mode (`keystoned`)
-- [ ] **Unprivileged Service**: Dedicated daemon communicating over local Unix domain sockets (`AF_UNIX`).
-- [ ] **Security Context Cache Partitioning**: All postings and cache entries strictly keyed by `(security_context, query, index_generation)`.
-- [ ] **Atomic Index Publication**: Double-buffered generation pointer swap for non-blocking index publication.
+### Phase 2: Security-Aware Native Service Mode (`keystoned`) — COMPLETED
+- [x] **Unprivileged Service Daemon (`bin/keystoned`, `src/service/keystoned_main.c`, `src/service/keystoned_server.c`)**:
+  - Standalone daemon and server communicating over local Unix domain sockets (`AF_UNIX`) with restricted `0700` socket permissions.
+  - Multi-threaded poll worker and compact binary IPC framing with CRC32 header and payload integrity validation.
+- [x] **Security Context Partitioning & Client IPC (`include/keystoned.h`, `src/service/keystoned_client.c`)**:
+  - Clearance and compartment bitmask verification on every lookup and timeline range query (`keystone_security_check`).
+  - Strict isolation: callers lacking clearance receive instant `KEYSTONED_STATUS_DENIED` and sensitive records are completely filtered from temporal queries.
+- [x] **Atomic Generation Publication**:
+  - Reader-writer generation state pointer swap (`keystoned_server_publish_generation`) enabling offline index construction and atomic, zero-downtime publication.
 
 ### Phase 3: Topology Graph Cache & Hybrid Query Planning
 - [ ] **Adjacency Matrix Caching**: Read-optimized cache for `RUNS_ON`, `DEPENDS_ON`, `SHARES_FAILURE_DOMAIN`, and NUMA topologies.

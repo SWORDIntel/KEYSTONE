@@ -142,12 +142,13 @@ endif
 
 SRC     += src/dsmil_hash_indexer.c src/dsmil_dirty_parser.c src/dsmil_model_bridge.c src/dsmil_micro_model.c src/keystone_trigram.c \
            src/keystone_fabric.c src/federation/keystone_federation_ingest.c \
-           src/federation/keystone_exact_index.c src/temporal/keystone_temporal_index.c
+           src/federation/keystone_exact_index.c src/temporal/keystone_temporal_index.c \
+           src/service/keystoned_server.c src/service/keystoned_client.c
 
 TEST_SRC += tests/test_keystone_fabric.c tests/test_cuda_backend.c tests/test_federation_envelope.c \
-            tests/test_exact_temporal_index.c
+            tests/test_exact_temporal_index.c tests/test_keystoned_service.c
 TEST_BIN += bin/test_keystone_fabric bin/test_cuda_backend bin/test_federation_envelope \
-            bin/test_exact_temporal_index
+            bin/test_exact_temporal_index bin/test_keystoned_service
 
 OBJS    := $(SRC:.c=.o)
 
@@ -156,11 +157,13 @@ BENCH_SRC := benchmarks/dsmil_benchmark.c benchmarks/performance_proof.c benchma
 BENCH_BIN := benchmarks/dsmil_benchmark benchmarks/performance_proof benchmarks/trigram_benchmark \
              benchmarks/bench_memory_ramp
 
-.PHONY: all lib tests test check run-tests benchmarks clean tgrep
+.PHONY: all lib tests test check run-tests benchmarks clean tgrep keystoned
 
-all: lib tests benchmarks bin/tgrep
+all: lib tests benchmarks bin/tgrep bin/keystoned
 
 tgrep: bin/tgrep
+
+keystoned: bin/keystoned
 
 lib: libkeystone.so
 
@@ -252,6 +255,9 @@ bin/test_federation_envelope: $(OBJS) $(FORTRAN_OBJ) tests/test_federation_envel
 bin/test_exact_temporal_index: $(OBJS) $(FORTRAN_OBJ) tests/test_exact_temporal_index.o | bin
 	$(CC) -o $@ $^ $(LDFLAGS)
 
+bin/test_keystoned_service: $(OBJS) $(FORTRAN_OBJ) tests/test_keystoned_service.o | bin
+	$(CC) -o $@ $^ $(LDFLAGS)
+
 # Benchmark binaries
 benchmarks/dsmil_benchmark: $(OBJS) $(FORTRAN_OBJ) benchmarks/dsmil_benchmark.o benchmarks/benchmark_writer.o
 	$(CC) -o $@ $^ $(LDFLAGS)
@@ -267,6 +273,9 @@ benchmarks/bench_memory_ramp: $(OBJS) $(FORTRAN_OBJ) benchmarks/bench_memory_ram
 
 # Standalone CLI tools
 bin/tgrep: $(OBJS) $(FORTRAN_OBJ) src/tgrep.o | bin
+	$(CC) -o $@ $^ $(LDFLAGS)
+
+bin/keystoned: $(OBJS) $(FORTRAN_OBJ) src/service/keystoned_main.o | bin
 	$(CC) -o $@ $^ $(LDFLAGS)
 
 scripts/compare_search_auto: $(OBJS) $(FORTRAN_OBJ) scripts/compare_search.c
