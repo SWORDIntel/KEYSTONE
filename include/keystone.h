@@ -387,6 +387,8 @@ size_t keystone_anchor_seed_batch(
 #include "keystone_exact_index.h"
 #include "keystone_temporal.h"
 #include "keystoned.h"
+#include "keystone_topology.h"
+#include "keystone_hybrid.h"
 
 #ifdef KEYSTONE_ENABLE_TAR_ZST
 #include "keystone_tar_zst.h"

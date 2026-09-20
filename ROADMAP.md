@@ -183,9 +183,15 @@ Governed by [`CITADEL/docs/architecture/KEYSTONE_FEDERATION_INTELLIGENCE_UPGRADE
 - [x] **Atomic Generation Publication**:
   - Reader-writer generation state pointer swap (`keystoned_server_publish_generation`) enabling offline index construction and atomic, zero-downtime publication.
 
-### Phase 3: Topology Graph Cache & Hybrid Query Planning
-- [ ] **Adjacency Matrix Caching**: Read-optimized cache for `RUNS_ON`, `DEPENDS_ON`, `SHARES_FAILURE_DOMAIN`, and NUMA topologies.
-- [ ] **Two-Tier Query Planner**: Hard constraint pruning $\rightarrow$ soft objective ranking.
+### Phase 3: Topology Graph Cache & Hybrid Query Planning — COMPLETED
+- [x] **Adjacency Matrix Caching (`include/keystone_topology.h`, `src/topology/keystone_topology_index.c`)**:
+  - Read-optimized graph index for infrastructure relations (`RUNS_ON`, `ATTACHED_TO`, `ROUTES_THROUGH`, `DEPENDS_ON`, `REPLICATED_TO`, `SHARES_FAILURE_DOMAIN`).
+  - Node metrics tracking (CPU ISA features, RAM headroom, CPU load, thermal temperature, NUMA topology, failure domains, security classification).
+  - Graph traversal primitives: neighborhood expansion, failure domain clustering, dependency chain tracing, and affected resource mapping.
+- [x] **Two-Tier Query Planner & Recommendation Engine (`include/keystone_hybrid.h`, `src/query/keystone_hybrid_planner.c`)**:
+  - Tier 1: Hard constraint evaluation with boolean pruning (security clearance, required CPU ISA flags, minimum RAM/cores, failure domain anti-affinity).
+  - Tier 2: Soft objective ranking (weighted normalized free RAM, thermal headroom, CPU load, NUMA locality).
+  - Emits explainable recommendation bundles (`keystone_recommendation_t`, `keystone_explain_t`) with full pass/fail constraint rationales and generation/HLC decision provenance.
 
 ### Phase 4 & 5: Streaming Telemetry & Hardware Acceleration
 - [ ] **Streaming Telemetry Windows**: 1m / 5m / 1h rolling features with deterministic EWMA and z-score anomaly detection.
