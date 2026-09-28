@@ -1503,6 +1503,9 @@ int keystone_tar_zst_load_index(keystone_tar_zst_t* tz, const char* path) {
 
         val = json_find_key(obj_start, obj_end, "bloom_hashes");
         if (val) bloom_hashes = (size_t)strtoull(val, NULL, 10);
+        /* Hostile sidecars must not turn every lookup into a ~2^64-iteration
+         * loop: reject implausible hash counts (sweep 2026-09-28 #14). */
+        if (bloom_hashes == 0 || bloom_hashes > 16) goto skip_bloom;
 
         val = json_find_key(obj_start, obj_end, "bloom_hex");
         if (val && *val == '"' && bloom_bits > 0) {

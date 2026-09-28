@@ -216,6 +216,11 @@ int keystone_record_serialize(
     size_t* out_written
 );
 
+/*
+ * Decode one CRC-validated wire envelope. NOTE: out_rec->payload ALIASES
+ * in_buf (no copy) — it stays valid only as long as the caller's buffer
+ * does. Copy it if the record outlives the buffer.
+ */
 int keystone_record_deserialize(
     const void* in_buf,
     size_t in_len,

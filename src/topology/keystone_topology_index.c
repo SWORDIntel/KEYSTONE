@@ -40,6 +40,7 @@ struct keystone_topology_graph {
 
 static size_t next_pow2(size_t v) {
     if (v < 16) return 16;
+    if (v > (SIZE_MAX / 2u)) return SIZE_MAX / 2u + 1u; /* doubling would wrap (sweep #18) */
     v--;
     v |= v >> 1;
     v |= v >> 2;

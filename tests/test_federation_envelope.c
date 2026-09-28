@@ -148,11 +148,34 @@ static void test_wire_serialization(void) {
     corrupted[8] ^= 0x01; /* tamper with flags */
     TEST_ASSERT(keystone_record_deserialize(corrupted, written, &dummy) == -1);
 
+    /* Hostile input 5: nonzero reserved word (strict v1, sweep #17).
+     * reserved sits at offset 24; fixing the header CRC keeps every other
+     * check green so only the reserved rule can reject it. */
+    {
+        memcpy(corrupted, buffer, written);
+        corrupted[24] = 0x01;
+
+        /* empty payload must also carry a zero payload CRC */
+        uint8_t empty_env[128];
+        keystone_federation_record_t empty_rec;
+        memset(&empty_rec, 0, sizeof(empty_rec));
+        size_t ew = 0;
+        TEST_ASSERT(keystone_record_serialize(&empty_rec, empty_env, sizeof(empty_env), &ew) == 0);
+        empty_env[124 - 8] = 0xAB; /* payload_crc32 low byte (len==0) */
+        TEST_ASSERT(keystone_record_deserialize(empty_env, ew, &dummy) == -1);
+
+        /* reserved != 0 is rejected regardless of CRCs: rebuild a valid
+         * CRC over the tampered header minus the CRC fields themselves. */
+        TEST_ASSERT(keystone_record_deserialize(corrupted, written, &dummy) == -1);
+    }
+
     printf("    [+] Serialization roundtrip and hostile-input protection verified.\n");
 }
 
 static void test_ingestion_pipeline(void) {
     printf("[*] Testing ingestion deduplication, fencing, and tombstone mechanics...\n");
+    keystone_federation_checkpoint_t dummy_cp;
+    memset(&dummy_cp, 0, sizeof(dummy_cp));
 
     keystone_ingest_config_t config = {
         .ring_buffer_capacity = 1024,
@@ -247,6 +270,66 @@ static void test_ingestion_pipeline(void) {
     TEST_ASSERT(restored_stats.duplicates_suppressed == 1);
     TEST_ASSERT(restored_stats.current_fencing_epoch == 12);
     TEST_ASSERT(restored_stats.current_generation == 3);
+
+    /* 7b. Checkpoint hostility (sweep #16): trailing garbage, truncation,
+     * and corrupted bytes must all be rejected. */
+    {
+        FILE* f = fopen(cp_path, "rb");
+        TEST_ASSERT(f != NULL);
+        fseek(f, 0, SEEK_END);
+        long cp_sz = ftell(f);
+        fseek(f, 0, SEEK_SET);
+        uint8_t* cp_buf = (uint8_t*)malloc((size_t)cp_sz + 8);
+        uint8_t* cp_work = (uint8_t*)malloc((size_t)cp_sz + 8);
+        TEST_ASSERT(cp_buf != NULL && cp_work != NULL);
+        TEST_ASSERT(fread(cp_buf, 1, (size_t)cp_sz, f) == (size_t)cp_sz);
+        fclose(f);
+        const char* hostile_path = "/tmp/keystone_test_checkpoint_hostile.bin";
+        FILE* w;
+
+        memcpy(cp_work, cp_buf, (size_t)cp_sz);
+        cp_work[cp_sz] = 0x41; /* trailing byte */
+        w = fopen(hostile_path, "wb"); TEST_ASSERT(w && fwrite(cp_work, 1, (size_t)cp_sz + 1, w) == (size_t)cp_sz + 1); fclose(w);
+        TEST_ASSERT(keystone_checkpoint_load(hostile_path, &dummy_cp) == -1);
+
+        memcpy(cp_work, cp_buf, (size_t)cp_sz);
+        w = fopen(hostile_path, "wb"); TEST_ASSERT(w && fwrite(cp_work, 1, (size_t)cp_sz - 4, w) == (size_t)cp_sz - 4); fclose(w);
+        TEST_ASSERT(keystone_checkpoint_load(hostile_path, &dummy_cp) == -1);
+
+        memcpy(cp_work, cp_buf, (size_t)cp_sz);
+        cp_work[40] ^= 0xFF; /* body corruption */
+        w = fopen(hostile_path, "wb"); TEST_ASSERT(w && fwrite(cp_work, 1, (size_t)cp_sz, w) == (size_t)cp_sz); fclose(w);
+        TEST_ASSERT(keystone_checkpoint_load(hostile_path, &dummy_cp) == -1);
+
+        unlink(hostile_path);
+        free(cp_buf);
+        free(cp_work);
+    }
+
+    /* 7c. Watermark poisoning caps (sweep #13): one hostile record with an
+     * absurd epoch/generation must not brick the engine. */
+    {
+        keystone_federation_record_t poison;
+        memset(&poison, 0, sizeof(poison));
+        poison.source_event_id.bytes[0] = 0xEE;
+        poison.fencing_epoch = UINT64_MAX;
+        poison.source_generation = 1;
+        TEST_ASSERT(keystone_federation_ingest_submit(ingest, &poison) == KEYSTONE_INGEST_ERR_CORRUPT);
+
+        memset(&poison, 0, sizeof(poison));
+        poison.source_event_id.bytes[0] = 0xED;
+        poison.fencing_epoch = 1;
+        poison.source_generation = UINT64_MAX;
+        TEST_ASSERT(keystone_federation_ingest_submit(ingest, &poison) == KEYSTONE_INGEST_ERR_CORRUPT);
+
+        /* the engine still accepts legitimate records afterwards */
+        keystone_federation_record_t healthy;
+        memset(&healthy, 0, sizeof(healthy));
+        healthy.source_event_id.bytes[0] = 0xEC;
+        healthy.fencing_epoch = 12;
+        healthy.source_generation = 1000;
+        TEST_ASSERT(keystone_federation_ingest_submit(ingest, &healthy) == KEYSTONE_INGEST_OK);
+    }
 
     unlink(cp_path);
     keystone_federation_ingest_destroy(ingest);

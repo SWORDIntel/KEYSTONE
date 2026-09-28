@@ -28,6 +28,8 @@
 #include <unistd.h>
 #include <fcntl.h>
 #include <pthread.h>
+#include <sys/types.h>
+#include <sys/stat.h>
 
 /* --- Packed Wire Record Header Layout --- */
 #pragma pack(push, 1)
@@ -299,6 +301,10 @@ int keystone_record_deserialize(
     if (hdr->magic != KEYSTONE_FEDERATION_ENVELOPE_MAGIC) return -1;
     if (hdr->version != KEYSTONE_FEDERATION_ENVELOPE_VERSION) return -1;
     if (hdr->payload_len > KEYSTONE_MAX_PAYLOAD_LEN) return -1;
+    /* Strict v1 wire format (sweep #17): spare word must be zero, and an
+     * empty payload must carry a zero CRC. */
+    if (hdr->reserved != 0) return -1;
+    if (hdr->payload_len == 0 && hdr->payload_crc32 != 0) return -1;
 
     size_t total_size = 0;
     if (!checked_add_size(sizeof(wire_record_header_t), (size_t)hdr->payload_len, &total_size)) {
@@ -350,13 +356,17 @@ int keystone_checkpoint_save(
     keystone_federation_checkpoint_t tmp_cp = *cp;
     tmp_cp.magic = KEYSTONE_CHECKPOINT_MAGIC;
     tmp_cp.version = KEYSTONE_CHECKPOINT_VERSION;
+    tmp_cp.reserved = 0; /* strict v1: the spare word must be zero (sweep #16) */
 
     /* Checksum covers all fields up to the crc32 member */
     size_t crc_len = offsetof(keystone_federation_checkpoint_t, crc32);
     tmp_cp.crc32 = crc32_ieee(&tmp_cp, crc_len);
 
     char tmp_path[512];
-    snprintf(tmp_path, sizeof(tmp_path), "%s.tmp.%d", filepath, (int)getpid());
+    int printed = snprintf(tmp_path, sizeof(tmp_path), "%s.tmp.%d", filepath, (int)getpid());
+    if (printed < 0 || (size_t)printed >= sizeof(tmp_path)) {
+        return -1; /* path too long: never write to a truncated temp name */
+    }
 
     FILE* f = fopen(tmp_path, "wb");
     if (!f) return -1;
@@ -392,6 +402,16 @@ int keystone_checkpoint_load(
     FILE* f = fopen(filepath, "rb");
     if (!f) return -1;
 
+    /* The file must be exactly one checkpoint: trailing bytes are corruption
+     * or a hostile append (sweep #16). Checked before the close. */
+    {
+        struct stat cp_st;
+        if (fstat(fileno(f), &cp_st) != 0 || (uint64_t)cp_st.st_size != (uint64_t)sizeof(*out_cp)) {
+            fclose(f);
+            return -1;
+        }
+    }
+
     keystone_federation_checkpoint_t cp;
     size_t read_bytes = fread(&cp, 1, sizeof(cp), f);
     fclose(f);
@@ -399,6 +419,7 @@ int keystone_checkpoint_load(
     if (read_bytes != sizeof(cp)) return -1;
     if (cp.magic != KEYSTONE_CHECKPOINT_MAGIC) return -1;
     if (cp.version != KEYSTONE_CHECKPOINT_VERSION) return -1;
+    if (cp.reserved != 0) return -1; /* strict v1 (sweep #16) */
 
     size_t crc_len = offsetof(keystone_federation_checkpoint_t, crc32);
     uint32_t computed = crc32_ieee(&cp, crc_len);
@@ -445,6 +466,7 @@ struct keystone_federation_ingest {
 
 static size_t next_power_of_two(size_t v) {
     if (v < 16) return 16;
+    if (v > (SIZE_MAX / 2u)) return SIZE_MAX / 2u + 1u; /* doubling would wrap (sweep #18) */
     v--;
     v |= v >> 1;
     v |= v >> 2;
@@ -597,10 +619,12 @@ static int tombstone_lookup(const keystone_federation_ingest_t* ing, const keyst
     return 0;
 }
 
-static void tombstone_grow(keystone_federation_ingest_t* ing) {
+/* Returns false when the table cannot grow; callers must fail the insert
+ * (silent growth failure used to drop tombstones — sweep #18). */
+static bool tombstone_grow(keystone_federation_ingest_t* ing) {
     size_t new_cap = ing->tombstone_capacity * 2;
     tombstone_slot_t* new_slots = (tombstone_slot_t*)calloc(new_cap, sizeof(tombstone_slot_t));
-    if (!new_slots) return;
+    if (!new_slots) return false;
 
     size_t new_mask = new_cap - 1;
     for (size_t i = 0; i < ing->tombstone_capacity; i++) {
@@ -621,13 +645,16 @@ static void tombstone_grow(keystone_federation_ingest_t* ing) {
     ing->tombstone_slots = new_slots;
     ing->tombstone_capacity = new_cap;
     ing->tombstone_mask = new_mask;
+    return true;
 }
 
-static void tombstone_insert(keystone_federation_ingest_t* ing, const keystone_uuid_t* id) {
-    if (tombstone_lookup(ing, id)) return;
+static int tombstone_insert(keystone_federation_ingest_t* ing, const keystone_uuid_t* id) {
+    if (tombstone_lookup(ing, id)) return KEYSTONE_INGEST_OK; /* already applied */
 
     if (ing->tombstone_count * 2 >= ing->tombstone_capacity) {
-        tombstone_grow(ing);
+        if (!tombstone_grow(ing)) {
+            return KEYSTONE_INGEST_ERR_ALLOC; /* never silently drop a tombstone */
+        }
     }
 
     uint64_t h = keystone_uuid_hash64(id);
@@ -640,9 +667,10 @@ static void tombstone_insert(keystone_federation_ingest_t* ing, const keystone_u
             ing->tombstone_slots[slot].occupied = 1;
             ing->tombstone_count++;
             ing->stats.tombstones_active = ing->tombstone_count;
-            return;
+            return KEYSTONE_INGEST_OK;
         }
     }
+    return KEYSTONE_INGEST_ERR_ALLOC; /* table full and cannot grow */
 }
 
 keystone_ingest_status_t keystone_federation_ingest_submit(
@@ -650,6 +678,26 @@ keystone_ingest_status_t keystone_federation_ingest_submit(
     const keystone_federation_record_t* record
 ) {
     if (!ingest || !record) return KEYSTONE_INGEST_ERR_INVALID_PARAM;
+
+    /*
+     * Hostile watermarks (sweep 2026-09-28 #13): one valid-CRC record with
+     * fencing_epoch or source_generation near UINT64_MAX used to advance
+     * the engine's watermarks irreversibly — every later legitimate record
+     * was then stale-rejected and ingestion was bricked. Real generations
+     * are journal sequence numbers and real epochs are small; anything
+     * beyond 2^62 or an HLC more than 24h ahead of the wall clock is
+     * corrupt input.
+     */
+    if (record->fencing_epoch > (UINT64_C(1) << 62) ||
+        record->source_generation > (UINT64_C(1) << 62)) {
+        return KEYSTONE_INGEST_ERR_CORRUPT;
+    }
+    {
+        uint64_t now_ms = keystone_hlc_now(0).physical_ms;
+        if (record->source_hlc.physical_ms > now_ms + 86400000ULL) {
+            return KEYSTONE_INGEST_ERR_CORRUPT;
+        }
+    }
 
     if (ingest->concurrency_enabled) {
         pthread_mutex_lock(&ingest->lock);
@@ -689,7 +737,10 @@ keystone_ingest_status_t keystone_federation_ingest_submit(
     /* 6. Process Tombstones */
     keystone_ingest_status_t result = KEYSTONE_INGEST_OK;
     if (record->flags & KEYSTONE_RECORD_FLAG_TOMBSTONE) {
-        tombstone_insert(ingest, &record->source_object_id);
+        if (tombstone_insert(ingest, &record->source_object_id) != KEYSTONE_INGEST_OK) {
+            if (ingest->concurrency_enabled) pthread_mutex_unlock(&ingest->lock);
+            return KEYSTONE_INGEST_ERR_ALLOC;
+        }
         result = KEYSTONE_INGEST_TOMBSTONE_APPLIED;
     }
 

@@ -285,6 +285,9 @@ size_t keystone_temporal_index_aggregate_buckets(
 ) {
     if (!index || index->count == 0 || !out_buckets || max_buckets == 0) return 0;
     if (bucket_size_ms == 0 || start_ms >= end_ms) return 0;
+    /* The ceiling sum below must not wrap (sweep #19): reject ranges whose
+     * span plus one bucket would overflow. */
+    if (end_ms - start_ms > UINT64_MAX - bucket_size_ms) return 0;
 
     size_t num_buckets = (size_t)((end_ms - start_ms + bucket_size_ms - 1) / bucket_size_ms);
     if (num_buckets > max_buckets) {
