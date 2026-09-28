@@ -226,6 +226,151 @@ static void test_binary_persistence(void) {
     printf("✓ Binary persistence save/load verified.\n");
 }
 
+
+/*
+ * Persisted-format hostility (security sweep 2026-09-28, findings #1-#3/#9/#10):
+ * the V2 index file is untrusted input. Layout from the end:
+ *   ... keys(nb*4) meta(nb*8) flat(tp*4) [unique(8) total(8) nb(8)] [trailer 16]
+ * meta entry = {u32 count, u32 offset}; trailer = {u32 'KSCR', u32 0, u64 crc32}.
+ */
+static uint64_t tg_load_u64(const uint8_t* b) { /* little-endian, as written */
+    uint64_t v = 0;
+    for (int i = 0; i < 8; i++) v |= (uint64_t)b[i] << (8 * i);
+    return v;
+}
+static void tg_store_u64(uint8_t* b, uint64_t v) {
+    for (int i = 0; i < 8; i++) { b[i] = (uint8_t)v; v >>= 8; }
+}
+static void tg_store_u32(uint8_t* b, uint32_t v) {
+    b[0] = (uint8_t)v; b[1] = (uint8_t)(v >> 8); b[2] = (uint8_t)(v >> 16); b[3] = (uint8_t)(v >> 24);
+}
+static uint32_t tg_load_u32(const uint8_t* b) {
+    return (uint32_t)b[0] | ((uint32_t)b[1] << 8) | ((uint32_t)b[2] << 16) | ((uint32_t)b[3] << 24);
+}
+
+static void test_persistence_rejects_hostile_files(void) {
+    printf("Testing persisted-index hostility rejection...\n");
+
+    const char* path = "/tmp/test_keystone_trigram_hostile.bin";
+    keystone_trigram_index_t* idx = keystone_trigram_index_create_options(
+        4, KEYSTONE_TRIGRAM_OPT_CASE_INSENSITIVE);
+    TEST_ASSERT(idx != NULL);
+    const char* doc0 = "hostile input one";
+    const char* doc1 = "hostile input two";
+    TEST_ASSERT(keystone_trigram_index_add_document(idx, "h0", doc0, strlen(doc0), NULL) == KEYSTONE_TRIGRAM_OK);
+    TEST_ASSERT(keystone_trigram_index_add_document(idx, "h1", doc1, strlen(doc1), NULL) == KEYSTONE_TRIGRAM_OK);
+    TEST_ASSERT(keystone_trigram_index_finalize(idx) == KEYSTONE_TRIGRAM_OK);
+    TEST_ASSERT(keystone_trigram_index_save(idx, path) == KEYSTONE_TRIGRAM_OK);
+    keystone_trigram_index_destroy(idx);
+
+    /* Read the valid file */
+    FILE* f = fopen(path, "rb");
+    TEST_ASSERT(f != NULL);
+    fseek(f, 0, SEEK_END);
+    long sz = ftell(f);
+    fseek(f, 0, SEEK_SET);
+    uint8_t* valid = (uint8_t*)malloc((size_t)sz);
+    uint8_t* buf = (uint8_t*)malloc((size_t)sz + 64);
+    TEST_ASSERT(valid != NULL && buf != NULL);
+    TEST_ASSERT(fread(valid, 1, (size_t)sz, f) == (size_t)sz);
+    fclose(f);
+    const size_t valid_len = (size_t)sz;
+
+    /* Trailer sanity: magic 'KSCR' at [len-16, len-12) */
+    TEST_ASSERT(valid_len >= 16 && tg_load_u32(valid + valid_len - 16) == 0x4B534352u);
+
+    /*
+     * Parse front-to-back (the V2 section header sits BEFORE keys/meta/flat):
+     * magic(8) version(4) flags(4) stats doc_count(8) doc-records... then
+     * unique(8) total(8) nb(8) keys(nb*4) meta(nb*8) flat(tp*4) trailer(16).
+     */
+    size_t off = 8 + 4 + 4 + sizeof(keystone_trigram_stats_t);
+    uint64_t doc_n = tg_load_u64(valid + off);
+    off += 8;
+    for (uint64_t d = 0; d < doc_n; d++) {
+        off += 4; /* doc id */
+        uint32_t nl = tg_load_u32(valid + off);
+        off += 4 + nl;
+        uint8_t owns = valid[off];
+        off += 1;
+        uint64_t cl = tg_load_u64(valid + off);
+        off += 8;
+        if (owns) off += cl;
+    }
+    TEST_ASSERT(off + 24 < valid_len);
+    uint64_t nb = tg_load_u64(valid + off + 16);
+    uint64_t tp = tg_load_u64(valid + off + 8);
+    size_t keys_start = off + 24;
+    size_t meta_start = keys_start + (size_t)nb * 4;
+    size_t flat_start = meta_start + (size_t)nb * 8;
+    size_t base = flat_start + (size_t)tp * 4; /* end of V2 payload */
+    TEST_ASSERT(tp > 0 && nb > 0 && base + 16 == valid_len);
+
+#define TG_WRITE(len) do { \
+    FILE* w = fopen(path, "wb"); \
+    TEST_ASSERT(w != NULL); \
+    TEST_ASSERT(fwrite(buf, 1, (size_t)(len), w) == (size_t)(len)); \
+    fclose(w); \
+} while (0)
+
+    /* 1. Untouched (trailered) file loads */
+    memcpy(buf, valid, valid_len);
+    TG_WRITE(valid_len);
+    keystone_trigram_index_t* ld = keystone_trigram_index_load(path);
+    TEST_ASSERT(ld != NULL);
+    keystone_trigram_index_destroy(ld);
+    ld = NULL;
+
+    /* 2. Trailer stripped = legacy file: still loads (bounds-validated) */
+    memcpy(buf, valid, valid_len - 16);
+    TG_WRITE(valid_len - 16);
+    ld = keystone_trigram_index_load(path);
+    TEST_ASSERT(ld != NULL);
+    keystone_trigram_index_destroy(ld);
+    ld = NULL;
+
+    /* 3. Lying meta count (beyond total_postings), trailer stripped */
+    memcpy(buf, valid, valid_len - 16);
+    tg_store_u32(buf + meta_start, 0xFFFFFF00u); /* count huge, offset 0 */
+    TG_WRITE(valid_len - 16);
+    TEST_ASSERT(keystone_trigram_index_load(path) == NULL);
+
+    /* 4. Out-of-range doc-id in the postings, trailer stripped */
+    memcpy(buf, valid, valid_len - 16);
+    buf[flat_start] = 0xFF; buf[flat_start + 1] = 0xFF; /* did = 0xFFFF... */
+    TG_WRITE(valid_len - 16);
+    TEST_ASSERT(keystone_trigram_index_load(path) == NULL);
+
+    /* 5. Allocation bomb: num_buckets = 67108864 in a tiny file */
+    memcpy(buf, valid, valid_len - 16);
+    tg_store_u64(buf + off + 16, 67108864ull); /* the nb u64 (third of the three) */
+    TG_WRITE(valid_len - 16);
+    TEST_ASSERT(keystone_trigram_index_load(path) == NULL);
+
+    /* 6. CRC mismatch: flip a byte inside the keys region (trailered) */
+    memcpy(buf, valid, valid_len);
+    buf[meta_start - 1] ^= 0x5A;
+    TG_WRITE(valid_len);
+    TEST_ASSERT(keystone_trigram_index_load(path) == NULL);
+
+    /* 7. Trailing garbage after the trailer */
+    memcpy(buf, valid, valid_len);
+    buf[valid_len] = 0x41;
+    TG_WRITE(valid_len + 1);
+    TEST_ASSERT(keystone_trigram_index_load(path) == NULL);
+
+    /* 8. Truncated mid-postings, trailer stripped */
+    memcpy(buf, valid, flat_start + (size_t)tp * 2); /* half the postings */
+    TG_WRITE(flat_start + (size_t)tp * 2);
+    TEST_ASSERT(keystone_trigram_index_load(path) == NULL);
+
+#undef TG_WRITE
+    free(valid);
+    free(buf);
+    unlink(path);
+    printf("✓ Hostile trigram index files all rejected.\n");
+}
+
 #ifdef KEYSTONE_ENABLE_TAR_ZST
 static void test_archive_streaming_trigram(void) {
     printf("Testing tar.zst archive streaming trigram indexing...\n");
@@ -570,6 +715,7 @@ int main(void) {
     test_direct_24bit_directory();
     test_parallel_build();
     test_binary_persistence();
+    test_persistence_rejects_hostile_files();
 #ifdef KEYSTONE_ENABLE_TAR_ZST
     test_archive_streaming_trigram();
     test_dsmil_wrapper_tar_zst_trigram();

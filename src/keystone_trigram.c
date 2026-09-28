@@ -6,6 +6,9 @@
 #include <time.h>
 #include <ctype.h>
 #include <stdio.h>
+#include <sys/types.h>
+#include <sys/stat.h>
+#include <unistd.h>
 
 #ifdef _OPENMP
 #include <omp.h>
@@ -1993,6 +1996,26 @@ size_t keystone_trigram_index_memory_usage(
 #define TRIGRAM_FILE_MAGIC "KEYSTRIG"
 #define TRIGRAM_FILE_VERSION 2u
 
+/* Integrity trailer (save >= 2026-09-28): 16 bytes appended after the V2
+ * payload [u32 magic, u32 reserved=0, u64 crc32 over all preceding bytes].
+ * Legacy files without a trailer still load; the loader's bounds validation
+ * is the safety net for those. */
+#define KS_TRIGRAM_TRAILER_MAGIC 0x4B534352u /* 'KSCR' */
+
+/* Raw-state streaming CRC32 (IEEE 802.3 poly): seed with 0xFFFFFFFF, XOR the
+ * final state with 0xFFFFFFFF. Same table-free form as the federation
+ * checkers, chainable across buffered writes/reads. */
+static uint32_t ks_crc32_update(uint32_t state, const void* data, size_t len) {
+    const uint8_t* p = (const uint8_t*)data;
+    for (size_t i = 0; i < len; i++) {
+        state ^= p[i];
+        for (int b = 0; b < 8; b++) {
+            state = (state & 1u) ? (0xEDB88320u ^ (state >> 1)) : (state >> 1);
+        }
+    }
+    return state;
+}
+
 typedef struct ks_bucket_meta {
     uint32_t count;
     uint32_t offset;
@@ -2006,48 +2029,63 @@ int keystone_trigram_index_save(
         return KEYSTONE_TRIGRAM_EINVAL;
     }
 
-    FILE* fp = fopen(filepath, "wb");
+    /* Atomic publish (sweep 2026-09-28 #10): write to a temp file, fsync,
+     * rename over the target. A crash never leaves a torn index, and a
+     * truncated temp path is rejected rather than written elsewhere. */
+    char tmp_path[1024];
+    int printed = snprintf(tmp_path, sizeof(tmp_path), "%s.tmp.%d", filepath, (int)getpid());
+    if (printed < 0 || (size_t)printed >= sizeof(tmp_path)) {
+        return KEYSTONE_TRIGRAM_EINVAL;
+    }
+
+    FILE* fp = fopen(tmp_path, "wb");
     if (!fp) return KEYSTONE_TRIGRAM_EINVAL;
     setvbuf(fp, NULL, _IOFBF, 4u * 1024u * 1024u);
 
+    /* Whole-file running CRC; folded into the trailer at the end. */
+    uint32_t scrc = 0xFFFFFFFFu;
+    uint32_t scrc_final = 0u;
+
+#define KS_SAVE_WRITE(ptr, sz, n) do { \
+        if (fwrite((ptr), (sz), (n), fp) != (n)) goto save_fail; \
+        scrc = ks_crc32_update(scrc, (ptr), (size_t)(sz) * (size_t)(n)); \
+    } while (0)
+
     /* Write magic & version */
-    if (fwrite(TRIGRAM_FILE_MAGIC, 1, 8, fp) != 8) { fclose(fp); return KEYSTONE_TRIGRAM_EINVAL; }
+    KS_SAVE_WRITE(TRIGRAM_FILE_MAGIC, 1, 8);
     uint32_t version = TRIGRAM_FILE_VERSION;
-    if (fwrite(&version, sizeof(uint32_t), 1, fp) != 1) { fclose(fp); return KEYSTONE_TRIGRAM_EINVAL; }
+    KS_SAVE_WRITE(&version, sizeof(uint32_t), 1);
 
     /* Flags & stats */
     uint32_t flags = idx->flags;
-    if (fwrite(&flags, sizeof(uint32_t), 1, fp) != 1) { fclose(fp); return KEYSTONE_TRIGRAM_EINVAL; }
-    if (fwrite(&idx->stats, sizeof(keystone_trigram_stats_t), 1, fp) != 1) { fclose(fp); return KEYSTONE_TRIGRAM_EINVAL; }
+    KS_SAVE_WRITE(&flags, sizeof(uint32_t), 1);
+    KS_SAVE_WRITE(&idx->stats, sizeof(keystone_trigram_stats_t), 1);
 
     /* Document records */
     uint64_t doc_count = (uint64_t)idx->doc_count;
-    if (fwrite(&doc_count, sizeof(uint64_t), 1, fp) != 1) { fclose(fp); return KEYSTONE_TRIGRAM_EINVAL; }
+    KS_SAVE_WRITE(&doc_count, sizeof(uint64_t), 1);
 
     for (size_t i = 0u; i < idx->doc_count; i++) {
         const keystone_trigram_doc_t* doc = &idx->docs[i];
         uint32_t doc_id = doc->id;
-        if (fwrite(&doc_id, sizeof(uint32_t), 1, fp) != 1) { fclose(fp); return KEYSTONE_TRIGRAM_EINVAL; }
+        KS_SAVE_WRITE(&doc_id, sizeof(uint32_t), 1);
 
         size_t name_len_raw = doc->name ? strlen(doc->name) : 0u;
-        if (name_len_raw > UINT32_MAX) { fclose(fp); return KEYSTONE_TRIGRAM_EINVAL; }
+        if (name_len_raw > UINT32_MAX) goto save_fail;
         uint32_t name_len = (uint32_t)name_len_raw;
-        if (fwrite(&name_len, sizeof(uint32_t), 1, fp) != 1) { fclose(fp); return KEYSTONE_TRIGRAM_EINVAL; }
+        KS_SAVE_WRITE(&name_len, sizeof(uint32_t), 1);
         if (name_len > 0u) {
-            if (fwrite(doc->name, 1, name_len, fp) != name_len) { fclose(fp); return KEYSTONE_TRIGRAM_EINVAL; }
+            KS_SAVE_WRITE(doc->name, 1, name_len);
         }
 
         uint8_t owns_content = doc->owns_content ? 1u : 0u;
-        if (fwrite(&owns_content, sizeof(uint8_t), 1, fp) != 1) { fclose(fp); return KEYSTONE_TRIGRAM_EINVAL; }
+        KS_SAVE_WRITE(&owns_content, sizeof(uint8_t), 1);
 
         uint64_t content_len = (uint64_t)doc->content_len;
-        if (fwrite(&content_len, sizeof(uint64_t), 1, fp) != 1) { fclose(fp); return KEYSTONE_TRIGRAM_EINVAL; }
+        KS_SAVE_WRITE(&content_len, sizeof(uint64_t), 1);
 
         if (owns_content && content_len > 0u && doc->content) {
-            if (fwrite(doc->content, 1, doc->content_len, fp) != doc->content_len) {
-                fclose(fp);
-                return KEYSTONE_TRIGRAM_EINVAL;
-            }
+            KS_SAVE_WRITE(doc->content, 1, doc->content_len);
         }
     }
 
@@ -2056,21 +2094,20 @@ int keystone_trigram_index_save(
      * 2. bucket_keys: num_buckets * sizeof(uint32_t)
      * 3. bucket_meta: num_buckets * sizeof(ks_bucket_meta_t)
      * 4. flat_postings: total_postings * sizeof(uint32_t)
+     * 5. integrity trailer: [u32 magic 'KSCR', u32 reserved, u64 crc32]
      */
     uint64_t unique_trigrams = (uint64_t)idx->unique_trigrams;
     uint64_t total_postings = (uint64_t)idx->total_postings;
     uint64_t num_buckets = (uint64_t)idx->num_buckets;
 
-    if (fwrite(&unique_trigrams, sizeof(uint64_t), 1, fp) != 1) { fclose(fp); return KEYSTONE_TRIGRAM_EINVAL; }
-    if (fwrite(&total_postings, sizeof(uint64_t), 1, fp) != 1) { fclose(fp); return KEYSTONE_TRIGRAM_EINVAL; }
-    if (fwrite(&num_buckets, sizeof(uint64_t), 1, fp) != 1) { fclose(fp); return KEYSTONE_TRIGRAM_EINVAL; }
+    KS_SAVE_WRITE(&unique_trigrams, sizeof(uint64_t), 1);
+    KS_SAVE_WRITE(&total_postings, sizeof(uint64_t), 1);
+    KS_SAVE_WRITE(&num_buckets, sizeof(uint64_t), 1);
 
-    if (fwrite(idx->bucket_keys, sizeof(uint32_t), idx->num_buckets, fp) != idx->num_buckets) {
-        fclose(fp); return KEYSTONE_TRIGRAM_EINVAL;
-    }
+    KS_SAVE_WRITE(idx->bucket_keys, sizeof(uint32_t), idx->num_buckets);
 
     ks_bucket_meta_t* meta = (ks_bucket_meta_t*)calloc(idx->num_buckets, sizeof(ks_bucket_meta_t));
-    if (!meta) { fclose(fp); return KEYSTONE_TRIGRAM_ENOMEM; }
+    if (!meta) goto save_fail;
 
     for (size_t i = 0u; i < idx->num_buckets; i++) {
         if (idx->bucket_keys[i] != TRIGRAM_KEY_EMPTY && idx->bucket_lists[i].count > 0u && idx->bucket_lists[i].doc_ids) {
@@ -2080,18 +2117,44 @@ int keystone_trigram_index_save(
     }
 
     if (fwrite(meta, sizeof(ks_bucket_meta_t), idx->num_buckets, fp) != idx->num_buckets) {
-        free(meta); fclose(fp); return KEYSTONE_TRIGRAM_EINVAL;
+        free(meta);
+        goto save_fail;
     }
+    scrc = ks_crc32_update(scrc, meta, sizeof(ks_bucket_meta_t) * idx->num_buckets);
     free(meta);
 
     if (total_postings > 0u && idx->flat_postings) {
-        if (fwrite(idx->flat_postings, sizeof(uint32_t), idx->total_postings, fp) != idx->total_postings) {
-            fclose(fp); return KEYSTONE_TRIGRAM_EINVAL;
-        }
+        KS_SAVE_WRITE(idx->flat_postings, sizeof(uint32_t), idx->total_postings);
     }
 
+    /* Integrity trailer (its own bytes are not covered by the CRC). */
+    scrc_final = scrc ^ 0xFFFFFFFFu;
+    uint32_t tmagic = KS_TRIGRAM_TRAILER_MAGIC;
+    uint32_t treserved = 0u;
+    uint64_t tcrc = (uint64_t)scrc_final;
+    if (fwrite(&tmagic, sizeof(uint32_t), 1, fp) != 1 ||
+        fwrite(&treserved, sizeof(uint32_t), 1, fp) != 1 ||
+        fwrite(&tcrc, sizeof(uint64_t), 1, fp) != 1) {
+        goto save_fail;
+    }
+
+#undef KS_SAVE_WRITE
+
+    fflush(fp);
+    int fd = fileno(fp);
+    if (fd >= 0) fsync(fd);
     fclose(fp);
+
+    if (rename(tmp_path, filepath) != 0) {
+        unlink(tmp_path);
+        return KEYSTONE_TRIGRAM_EINVAL;
+    }
     return KEYSTONE_TRIGRAM_OK;
+
+save_fail:
+    fclose(fp);
+    unlink(tmp_path);
+    return KEYSTONE_TRIGRAM_EINVAL;
 }
 
 keystone_trigram_index_t* keystone_trigram_index_load(const char* filepath) {
@@ -2196,6 +2259,29 @@ keystone_trigram_index_t* keystone_trigram_index_load(const char* filepath) {
 
         if (num_buckets == 0 || num_buckets > 67108864u) goto load_fail;
 
+        /*
+         * Hostile-input bound (security sweep 2026-09-28 #9): the declared
+         * section sizes must fit in the bytes the file physically still
+         * contains. A tiny file can no longer commit ~800MB of allocations.
+         */
+        struct stat trig_st;
+        long long trig_v2_pos = (long long)ftell(fp);
+        if (trig_v2_pos < 0 || fstat(fileno(fp), &trig_st) != 0) goto load_fail;
+        {
+            if (total_postings > (uint64_t)(SIZE_MAX / sizeof(uint32_t))) goto load_fail;
+            unsigned long long need =
+                (unsigned long long)num_buckets * sizeof(uint32_t) +
+                (unsigned long long)num_buckets * sizeof(ks_bucket_meta_t) +
+                (unsigned long long)total_postings * sizeof(uint32_t);
+            unsigned long long remaining =
+                (trig_st.st_size > trig_v2_pos)
+                    ? (unsigned long long)(trig_st.st_size - trig_v2_pos)
+                    : 0ull;
+            /* 16 bytes fewer are acceptable: the optional integrity trailer
+             * is not part of the V2 payload. */
+            if (remaining < need || remaining - need > 16ull) goto load_fail;
+        }
+
         /* Free initial small hash table from create_options */
         free(idx->bucket_keys);
         free(idx->bucket_lists);
@@ -2226,6 +2312,30 @@ keystone_trigram_index_t* keystone_trigram_index_load(const char* filepath) {
 
         idx->bucket_lists = (keystone_trigram_posting_list_t*)calloc((size_t)num_buckets, sizeof(keystone_trigram_posting_list_t));
         if (!idx->bucket_lists) { free(meta); goto load_fail; }
+
+        /*
+         * Validate every declared slice before any pointer, bitmap, or
+         * query path can touch it (security sweep 2026-09-28 #1-#3):
+         *   - count > 0 requires a non-empty bucket key
+         *   - [offset, offset+count) must lie inside flat_postings
+         *   - every doc-id in the slice must be < doc_count (the dense
+         *     bitmap build writes bm[did>>6]; an unvalidated id was an
+         *     arbitrary-offset bit-set primitive)
+         */
+        for (size_t i = 0u; i < (size_t)num_buckets; i++) {
+            if (meta[i].count == 0u) continue;
+            if (idx->bucket_keys[i] == TRIGRAM_KEY_EMPTY) { free(meta); goto load_fail; }
+            if ((uint64_t)meta[i].offset > total_postings ||
+                (uint64_t)meta[i].count > total_postings - (uint64_t)meta[i].offset) {
+                free(meta);
+                goto load_fail;
+            }
+        }
+        if (total_postings > 0u && idx->flat_postings) {
+            for (uint64_t k = 0u; k < total_postings; k++) {
+                if (idx->flat_postings[k] >= doc_count) { free(meta); goto load_fail; }
+            }
+        }
 
         for (size_t i = 0u; i < (size_t)num_buckets; i++) {
             if (meta[i].count > 0u) {
@@ -2284,6 +2394,42 @@ keystone_trigram_index_t* keystone_trigram_index_load(const char* filepath) {
 
         idx->is_finalized = true;
         idx->stats = stats;
+
+        /*
+         * Integrity trailer (written by save since 2026-09-28). Exactly 16
+         * bytes must remain: [magic, reserved=0, crc32 over all preceding
+         * bytes]. Zero remaining bytes is a legacy trailer-less file — it
+         * still loads because the bounds validation above already made it
+         * memory-safe; anything else is corruption.
+         */
+        {
+            long long trig_end_v2 = (long long)ftell(fp);
+            long long trig_rem = (long long)trig_st.st_size - trig_end_v2;
+            if (trig_rem == 16) {
+                uint32_t tm = 0u, trsv = 0u;
+                uint64_t tcrc = 0u;
+                if (fread(&tm, sizeof(uint32_t), 1, fp) != 1 ||
+                    fread(&trsv, sizeof(uint32_t), 1, fp) != 1 ||
+                    fread(&tcrc, sizeof(uint64_t), 1, fp) != 1 ||
+                    tm != KS_TRIGRAM_TRAILER_MAGIC || trsv != 0u) {
+                    goto load_fail;
+                }
+                unsigned char tbuf[65536];
+                uint32_t tstate = 0xFFFFFFFFu;
+                long long left = trig_end_v2;
+                if (fseek(fp, 0, SEEK_SET) != 0) goto load_fail;
+                while (left > 0) {
+                    size_t chunk = left > (long long)sizeof(tbuf) ? sizeof(tbuf) : (size_t)left;
+                    if (fread(tbuf, 1, chunk, fp) != chunk) goto load_fail;
+                    tstate = ks_crc32_update(tstate, tbuf, chunk);
+                    left -= (long long)chunk;
+                }
+                if ((uint64_t)(tstate ^ 0xFFFFFFFFu) != tcrc) goto load_fail;
+            } else if (trig_rem != 0) {
+                goto load_fail; /* trailing garbage */
+            }
+        }
+
         fclose(fp);
         return idx;
     }

@@ -107,8 +107,15 @@ static void test_ram_sweeps(void) {
         printf("  [N=%8zu (~%6.1f MiB)] RSS=%ld KB, MinFlt=%+ld, MajFlt=%+ld, Optimize=OK\n",
                n, mib, max_rss_kb, delta_minflt, delta_majflt);
 
-        /* Zero major page faults expected in allocated RAM */
-        TEST_ASSERT(delta_majflt == 0);
+        /*
+         * Zero major page faults expected in allocated RAM. The budget is
+         * skipped for instrumented runs (KEYSTONE_SKIP_PERF_GATES): valgrind
+         * multiplies memory pressure and can legitimately page, and a busy
+         * host must not flake the correctness suite.
+         */
+        if (getenv("KEYSTONE_SKIP_PERF_GATES") == NULL) {
+            TEST_ASSERT(delta_majflt == 0);
+        }
 
         /* Validate correctness by searching sample elements across the array */
         const size_t num_queries = 2048;
