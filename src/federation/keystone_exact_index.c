@@ -16,6 +16,8 @@
 #include <string.h>
 #include <unistd.h>
 #include <fcntl.h>
+#include <sys/types.h>
+#include <sys/stat.h>
 
 #pragma pack(push, 1)
 typedef struct {
@@ -319,7 +321,11 @@ int keystone_exact_index_save(
     hdr.crc32 = crc;
 
     char tmp_path[512];
-    snprintf(tmp_path, sizeof(tmp_path), "%s.tmp.%d", filepath, (int)getpid());
+    int printed = snprintf(tmp_path, sizeof(tmp_path), "%s.tmp.%d", filepath, (int)getpid());
+    if (printed < 0 || (size_t)printed >= sizeof(tmp_path)) {
+        free(entries);
+        return -1; /* path too long: never write to a truncated temp name */
+    }
 
     FILE* f = fopen(tmp_path, "wb");
     if (!f) {
@@ -362,6 +368,7 @@ int keystone_exact_index_load(
     const char* filepath
 ) {
     if (!out_index || !filepath) return -1;
+    *out_index = NULL;
 
     FILE* f = fopen(filepath, "rb");
     if (!f) return -1;
@@ -376,10 +383,32 @@ int keystone_exact_index_load(
         fclose(f);
         return -1;
     }
+    if (hdr.reserved != 0) {
+        fclose(f); /* strict v1: the spare word must be zero */
+        return -1;
+    }
 
+    /*
+     * Persisted file is hostile input (same policy as the temporal index):
+     * the declared count is only credible if the file physically contains
+     * header + count*entry bytes. Bound every allocation by the real file
+     * size before reading anything.
+     */
     size_t entries_bytes = 0;
     if (!checked_mul_size((size_t)hdr.count, sizeof(keystone_exact_entry_t), &entries_bytes)) {
         fclose(f);
+        return -1;
+    }
+
+    size_t total_bytes = 0;
+    if (!checked_add_size(sizeof(hdr), entries_bytes, &total_bytes)) {
+        fclose(f);
+        return -1;
+    }
+
+    struct stat st;
+    if (fstat(fileno(f), &st) != 0 || (uint64_t)st.st_size != (uint64_t)total_bytes) {
+        fclose(f); /* truncated, trailing garbage, or lying count */
         return -1;
     }
 
