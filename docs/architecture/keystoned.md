@@ -38,7 +38,10 @@ flowchart TD
 - **Socket Path**: Defaults to `/run/keystone/keystoned.sock` (configurable via `-s <path>`).
 - **Directory Permissions**: Enforces `0700` (`rwx------`) on the parent socket directory.
 - **Unprivileged Execution**: Drops capabilities and runs under dedicated user `keystone`.
-- **Peer Credentials**: Verifies client UID and GID via Linux `SO_PEERCRED`.
+- **Peer Credentials**: Verifies the connecting client's UID via Linux `SO_PEERCRED` and drops connections from any user other than the daemon's own effective user (enforced since 2026-09-28; the security context inside each message remains client-asserted within that boundary — see the trust model below).
+- **Tenant Isolation**: query and ingest paths enforce `record.tenant_id == caller.tenant_id` (records with tenant 0 are legacy-untagged and readable by cleared callers); ingestion is strictly tenant-bound.
+- **SECURITY_SENSITIVE Gating**: records carrying `KEYSTONE_RECORD_FLAG_SECURITY_SENSITIVE` are denied to callers below `SECRET` on every query surface.
+- **Frame Strictness**: nonzero `reserved` words and malformed magic/version/CRC close the connection; each receive is bounded by a 10-second `SO_RCVTIMEO` so a silent client cannot hold the single-threaded service.
 
 ---
 

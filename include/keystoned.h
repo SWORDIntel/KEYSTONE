@@ -20,7 +20,7 @@ extern "C" {
 #include "keystone_exact_index.h"
 #include "keystone_temporal.h"
 
-#define KEYSTONED_DEFAULT_SOCKET "/tmp/keystone.sock"
+#define KEYSTONED_DEFAULT_SOCKET "/run/keystone/keystoned.sock"
 #define KEYSTONED_MAGIC 0x4B535356u /* 'KSSV' */
 #define KEYSTONED_VERSION 1u
 

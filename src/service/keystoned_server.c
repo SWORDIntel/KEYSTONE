@@ -9,6 +9,10 @@
  * AGPL-3.0 License.
  */
 
+#ifndef _GNU_SOURCE
+#define _GNU_SOURCE
+#endif
+
 #include "keystoned.h"
 #include "keystone_safe_alloc.h"
 
@@ -157,6 +161,23 @@ int keystoned_server_publish_generation(
     return 0;
 }
 
+/*
+ * Query-time authorization (sweep 2026-09-28 #5/#6): classification floor,
+ * tenant isolation (untagged tenant 0 = legacy, readable by any cleared
+ * caller), and the SECURITY_SENSITIVE flag gated at SECRET or above.
+ */
+static int ksd_entry_allowed(const keystone_security_context_t* ctx,
+                             uint32_t classification, uint32_t tenant_id, uint32_t flags) {
+    if (!ctx) return 0;
+    if (ctx->classification < classification) return 0;
+    if (tenant_id != 0u && tenant_id != ctx->tenant_id) return 0;
+    if ((flags & KEYSTONE_RECORD_FLAG_SECURITY_SENSITIVE) &&
+        ctx->classification < KEYSTONE_CLASSIFICATION_SECRET) {
+        return 0;
+    }
+    return 1;
+}
+
 int keystoned_server_query_exact(
     keystoned_server_t* server,
     const keystone_security_context_t* sec_ctx,
@@ -178,8 +199,7 @@ int keystoned_server_query_exact(
 
     if (rc != 0) return KEYSTONED_STATUS_NOT_FOUND;
 
-    /* Security check: verify caller has sufficient classification & compartments */
-    if (!keystone_security_check(sec_ctx, entry.classification, 0)) {
+    if (!ksd_entry_allowed(sec_ctx, entry.classification, entry.tenant_id, entry.flags)) {
         return KEYSTONED_STATUS_DENIED;
     }
 
@@ -213,12 +233,18 @@ size_t keystoned_server_query_temporal(
         return 0;
     }
 
-    size_t fetched = keystone_temporal_index_query_range(gen->temporal_index, hmin, hmax, raw, fetch_cap);
+    /*
+     * query_range returns the TOTAL match count; only fetch_cap entries were
+     * actually copied into raw. Iterating past fetch_cap read out of bounds
+     * for in-process callers with max_results > 1024 (sweep #11).
+     */
+    size_t total_matches = keystone_temporal_index_query_range(gen->temporal_index, hmin, hmax, raw, fetch_cap);
     pthread_rwlock_unlock(&server->gen_rwlock);
+    size_t copied = total_matches < fetch_cap ? total_matches : fetch_cap;
 
     size_t cleared_count = 0;
-    for (size_t i = 0; i < fetched && cleared_count < max_results; i++) {
-        if (keystone_security_check(sec_ctx, raw[i].classification, 0)) {
+    for (size_t i = 0; i < copied && cleared_count < max_results; i++) {
+        if (ksd_entry_allowed(sec_ctx, raw[i].classification, raw[i].tenant_id, raw[i].flags)) {
             out_entries[cleared_count++] = raw[i];
         }
     }
@@ -234,8 +260,12 @@ int keystoned_server_ingest(
 ) {
     if (!server || !sec_ctx || !rec) return -1;
 
-    /* Ingestion principal must have at least OPS or equivalent clearance */
+    /* Ingestion principal must have at least OPS or equivalent clearance,
+     * and may only ingest records for its own tenant (sweep #5). */
     if (sec_ctx->classification < KEYSTONE_CLASSIFICATION_OPS) {
+        return KEYSTONED_STATUS_DENIED;
+    }
+    if (rec->tenant_id != sec_ctx->tenant_id) {
         return KEYSTONED_STATUS_DENIED;
     }
 
@@ -262,6 +292,25 @@ int keystoned_server_ingest(
 /* --- Connection Handler --- */
 
 static void handle_client(keystoned_server_t* server, int client_fd) {
+    /*
+     * Peer authentication (sweep #4): the security context in each message
+     * is client-asserted; the socket restricts WHO can connect, and this
+     * credential check pins that to the daemon's own effective user. A
+     * cross-user process that reaches the socket is dropped here.
+     */
+    struct ucred cred;
+    socklen_t cred_len = sizeof(cred);
+    if (getsockopt(client_fd, SOL_SOCKET, SO_PEERCRED, &cred, &cred_len) != 0 ||
+        cred_len != sizeof(cred) || cred.uid != geteuid()) {
+        close(client_fd);
+        return;
+    }
+
+    /* Bounded blocking (sweep #12): one silent client must not hold the
+     * single-threaded service forever. Ten seconds per receive. */
+    struct timeval rcv_to = { .tv_sec = 10, .tv_usec = 0 };
+    setsockopt(client_fd, SOL_SOCKET, SO_RCVTIMEO, &rcv_to, sizeof(rcv_to));
+
     while (server->running) {
         keystoned_msg_header_t hdr;
         ssize_t n = recv(client_fd, &hdr, sizeof(hdr), MSG_WAITALL);
@@ -270,6 +319,9 @@ static void handle_client(keystoned_server_t* server, int client_fd) {
         if (n != sizeof(hdr) || hdr.magic != KEYSTONED_MAGIC || hdr.version != KEYSTONED_VERSION) {
             break;
         }
+
+        /* Strict v1 wire format: the spare word must be zero (sweep #4). */
+        if (hdr.reserved != 0) break;
 
         if (hdr.payload_len > KEYSTONED_MAX_MSG_LEN) break;
 
@@ -457,7 +509,27 @@ int keystoned_server_start(keystoned_server_t* server) {
     if (!server) return -1;
     if (server->running) return 0;
 
-    unlink(server->socket_path);
+    /* Best-effort parent-directory creation (e.g. /run/keystoned). */
+    {
+        char dir_buf[256];
+        snprintf(dir_buf, sizeof(dir_buf), "%s", server->socket_path);
+        char* slash = strrchr(dir_buf, '/');
+        if (slash && slash != dir_buf) {
+            *slash = '\0';
+            mkdir(dir_buf, 0755);
+        }
+    }
+
+    /*
+     * Sweep #15: a pre-existing socket path we cannot remove means either a
+     * running daemon or a hostile placeholder (e.g. in a world-writable
+     * dir). Fail loudly instead of silently missing the bind below.
+     */
+    if (unlink(server->socket_path) != 0 && errno != ENOENT) {
+        fprintf(stderr, "keystoned: cannot remove existing socket path %s: %s\n",
+                server->socket_path, strerror(errno));
+        return -1;
+    }
 
     server->listen_fd = socket(AF_UNIX, SOCK_STREAM, 0);
     if (server->listen_fd < 0) return -1;
