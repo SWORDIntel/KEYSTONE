@@ -16,6 +16,12 @@
 #include <string.h>
 #include <unistd.h>
 #include <fcntl.h>
+#include <sys/types.h>
+#include <sys/stat.h>
+
+/* Minimum slots any index array is allocated for, including loaded ones:
+ * append must always have a place to write its first entries. */
+#define KEYSTONE_TEMPORAL_MIN_CAPACITY 16u
 
 #pragma pack(push, 1)
 typedef struct {
@@ -122,7 +128,15 @@ int keystone_temporal_index_append(
 
     /* Expand capacity if full */
     if (index->count >= index->capacity) {
-        size_t new_cap = index->capacity * 2;
+        size_t new_cap;
+        if (index->capacity > SIZE_MAX / 2) {
+            new_cap = SIZE_MAX; /* doubling would wrap; let the byte check below fail */
+        } else {
+            new_cap = index->capacity * 2;
+        }
+        if (new_cap < KEYSTONE_TEMPORAL_MIN_CAPACITY) {
+            new_cap = KEYSTONE_TEMPORAL_MIN_CAPACITY;
+        }
         size_t new_bytes = 0;
         if (!checked_mul_size(new_cap, sizeof(keystone_temporal_entry_t), &new_bytes)) {
             return -1;
@@ -345,7 +359,10 @@ int keystone_temporal_index_save(
     hdr.crc32 = crc;
 
     char tmp_path[512];
-    snprintf(tmp_path, sizeof(tmp_path), "%s.tmp.%d", filepath, (int)getpid());
+    int printed = snprintf(tmp_path, sizeof(tmp_path), "%s.tmp.%d", filepath, (int)getpid());
+    if (printed < 0 || (size_t)printed >= sizeof(tmp_path)) {
+        return -1; /* path too long: never write to a truncated temp name */
+    }
 
     FILE* f = fopen(tmp_path, "wb");
     if (!f) return -1;
@@ -382,6 +399,7 @@ int keystone_temporal_index_load(
     const char* filepath
 ) {
     if (!out_index || !filepath) return -1;
+    *out_index = NULL;
 
     FILE* f = fopen(filepath, "rb");
     if (!f) return -1;
@@ -396,20 +414,55 @@ int keystone_temporal_index_load(
         fclose(f);
         return -1;
     }
+    if (hdr.reserved != 0) {
+        fclose(f); /* strict v1: the spare word must be zero */
+        return -1;
+    }
 
+    /*
+     * The persisted file is hostile input: the declared count is only
+     * credible if the file physically contains header + count*entry bytes.
+     * Bound every allocation by that size before reading anything.
+     */
     size_t payload_bytes = 0;
     if (!checked_mul_size((size_t)hdr.count, sizeof(keystone_temporal_entry_t), &payload_bytes)) {
         fclose(f);
         return -1;
     }
 
-    keystone_temporal_entry_t* entries = NULL;
-    if (hdr.count > 0) {
-        entries = (keystone_temporal_entry_t*)malloc(payload_bytes);
-        if (!entries) {
-            fclose(f);
-            return -1;
-        }
+    size_t total_bytes = 0;
+    if (!checked_add_size(sizeof(hdr), payload_bytes, &total_bytes)) {
+        fclose(f);
+        return -1;
+    }
+
+    struct stat st;
+    if (fstat(fileno(f), &st) != 0 || (uint64_t)st.st_size != (uint64_t)total_bytes) {
+        fclose(f); /* truncated, trailing garbage, or lying count */
+        return -1;
+    }
+
+    /*
+     * Allocate for capacity slots, never just the loaded count: the index
+     * hands the array to append(), which writes entries[count] whenever
+     * count < capacity. A capacity larger than the allocation is how the
+     * loaded-array overflow happened.
+     */
+    size_t capacity = ((size_t)hdr.count > KEYSTONE_TEMPORAL_MIN_CAPACITY)
+        ? (size_t)hdr.count : KEYSTONE_TEMPORAL_MIN_CAPACITY;
+    size_t capacity_bytes = 0;
+    if (!checked_mul_size(capacity, sizeof(keystone_temporal_entry_t), &capacity_bytes)) {
+        fclose(f);
+        return -1;
+    }
+
+    keystone_temporal_entry_t* entries = (keystone_temporal_entry_t*)calloc(capacity, sizeof(keystone_temporal_entry_t));
+    if (!entries) {
+        fclose(f);
+        return -1;
+    }
+
+    if (payload_bytes > 0) {
         if (fread(entries, 1, payload_bytes, f) != payload_bytes) {
             free(entries);
             fclose(f);
@@ -420,7 +473,7 @@ int keystone_temporal_index_load(
 
     size_t hdr_crc_len = offsetof(temporal_file_header_t, crc32);
     uint32_t expected_crc = crc32_temporal(&hdr, hdr_crc_len);
-    if (payload_bytes > 0 && entries) {
+    if (payload_bytes > 0) {
         expected_crc ^= crc32_temporal(entries, payload_bytes);
     }
 
@@ -435,9 +488,9 @@ int keystone_temporal_index_load(
         return -1;
     }
 
-    idx->capacity = (size_t)hdr.count > 16 ? (size_t)hdr.count : 16;
-    idx->count = (size_t)hdr.count;
     idx->entries = entries;
+    idx->capacity = capacity;
+    idx->count = (size_t)hdr.count;
 
     *out_index = idx;
     return 0;

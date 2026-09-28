@@ -290,6 +290,7 @@ static void bench_temporal_timeline(void) {
     printf("[*] Appending %u monotonic timeline events...\n", EVENT_COUNT);
     uint64_t start_ms = 1700000000000ULL;
 
+    uint64_t append_start = time_now_ns();
     for (uint32_t i = 0; i < EVENT_COUNT; i++) {
         keystone_temporal_entry_t entry;
         memset(&entry, 0, sizeof(entry));
@@ -306,6 +307,10 @@ static void bench_temporal_timeline(void) {
 
         keystone_temporal_index_append(timeline, &entry);
     }
+    uint64_t append_elapsed = time_now_ns() - append_start;
+    double append_rate = (double)EVENT_COUNT / ((double)append_elapsed / 1e9);
+    printf("  Append Throughput:        \033[1;32m%.2f million events/sec\033[0m (%.1f ns/append)\n",
+           append_rate / 1e6, (double)append_elapsed / (double)EVENT_COUNT);
 
     printf("[*] Running %u binary-search range queries (varying windows)...\n", QUERY_COUNT);
     uint32_t *latencies = malloc(QUERY_COUNT * sizeof(uint32_t));
@@ -369,6 +374,46 @@ static void bench_temporal_timeline(void) {
     double histo_rate = (double)HISTO_ROUNDS / ((double)h_elapsed / 1e9);
     printf("  Histogram Aggregation Rate: \033[1;32m%.2f k-aggregations/sec\033[0m (%.1f µs/aggregation)\n",
            histo_rate / 1e3, (double)h_elapsed / (double)HISTO_ROUNDS / 1e3);
+
+    /* Persistence resume path (journal-feed pattern): save, load, then
+     * keep appending past the loaded count. Exercises the loader's
+     * capacity/allocation invariant under the fixed code. */
+    const char *resume_path = "/tmp/ks_bench_temporal_resume.index";
+    const uint32_t RESUME_APPENDS = 20000;
+    uint64_t sv_t0 = time_now_ns();
+    if (keystone_temporal_index_save(timeline, resume_path) == 0) {
+        uint64_t sv_dt = time_now_ns() - sv_t0;
+        keystone_temporal_index_t *resumed = NULL;
+        uint64_t ld_t0 = time_now_ns();
+        if (keystone_temporal_index_load(&resumed, resume_path) == 0 && resumed) {
+            uint64_t ld_dt = time_now_ns() - ld_t0;
+            uint64_t ra_t0 = time_now_ns();
+            for (uint32_t i = 0; i < RESUME_APPENDS; i++) {
+                keystone_temporal_entry_t entry;
+                memset(&entry, 0, sizeof(entry));
+                entry.hlc.physical_ms = start_ms + ((EVENT_COUNT + i) * 10);
+                entry.hlc.node_id = 1;
+                entry.source_generation = 42;
+                entry.event_type = (i % 5) + 1;
+                entry.tenant_id = 1001;
+                if (keystone_temporal_index_append(resumed, &entry) != 0) break;
+            }
+            uint64_t ra_dt = time_now_ns() - ra_t0;
+            printf("  Resume Path (feed pattern): save %u entries %.1f ms | load %.1f ms | "
+                   "%u resume-appends \033[1;32m%.2f M/sec\033[0m (%.1f ns/append) | "
+                   "final count %zu\n",
+                   EVENT_COUNT, (double)sv_dt / 1e6, (double)ld_dt / 1e6,
+                   RESUME_APPENDS, ((double)RESUME_APPENDS / ((double)ra_dt / 1e9)) / 1e6,
+                   (double)ra_dt / (double)RESUME_APPENDS,
+                   keystone_temporal_index_count(resumed));
+            keystone_temporal_index_destroy(resumed);
+        } else {
+            printf("  Resume Path: LOAD FAILED\n");
+        }
+        remove(resume_path);
+    } else {
+        printf("  Resume Path: SAVE FAILED\n");
+    }
 
     free(result_buffer);
     free(latencies);

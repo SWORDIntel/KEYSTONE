@@ -253,6 +253,286 @@ static void test_temporal_index_lifecycle(void) {
     printf("    [+] Monotonic temporal index verified (100%% green).\n");
 }
 
+/*
+ * Feed-shaped resume reproducer (R6b journal feed, 2026-09-26).
+ *
+ * keystone_temporal_index_load claimed capacity 16 for any loaded count
+ * <= 16 but allocated only `count` entry slots, so appends past a small
+ * loaded array wrote past the end of the allocation (valgrind: invalid
+ * write of size 8 at the block boundary). The production feed worked
+ * around it by rebuilding the temporal index from its spool instead of
+ * resuming the persisted one.
+ */
+static void test_temporal_load_then_append_resume(void) {
+    printf("[*] Testing temporal index save/load/append resume (feed-shaped)...\n");
+
+    const char* path = "/tmp/keystone_temporal_resume_test.bin";
+
+    /* 1. Small index (5 entries — inside the <=16 danger window) */
+    keystone_temporal_index_t* tidx = keystone_temporal_index_create(8);
+    TEST_ASSERT(tidx != NULL);
+    for (size_t i = 0; i < 5; i++) {
+        keystone_temporal_entry_t te = {
+            .hlc = { .physical_ms = 2000000 + (i * 10), .logical = 0, .node_id = 1 },
+            .event_type = KEYSTONE_OBJ_LOG_STREAM,
+            .tenant_id = 7,
+            .classification = KEYSTONE_CLASSIFICATION_RESTRICTED,
+            .flags = KEYSTONE_RECORD_FLAG_AUDIT,
+            .source_generation = i + 1,
+            .payload_offset = i * 128
+        };
+        TEST_ASSERT(keystone_temporal_index_append(tidx, &te) == 0);
+    }
+    TEST_ASSERT(keystone_temporal_index_count(tidx) == 5);
+    TEST_ASSERT(keystone_temporal_index_save(tidx, path) == 0);
+    keystone_temporal_index_destroy(tidx);
+
+    /* 2. Resume: load, then keep appending. Entries 6..16 land in the
+     * claimed-but-unallocated capacity region (heap-buffer-overflow under
+     * ASan pre-fix); entries 17..21 force the growth path from a loaded
+     * index. */
+    keystone_temporal_index_t* loaded = NULL;
+    TEST_ASSERT(keystone_temporal_index_load(&loaded, path) == 0);
+    TEST_ASSERT(loaded != NULL);
+    TEST_ASSERT(keystone_temporal_index_count(loaded) == 5);
+
+    for (size_t i = 5; i < 21; i++) {
+        keystone_temporal_entry_t te = {
+            .hlc = { .physical_ms = 2000000 + (i * 10), .logical = 0, .node_id = 1 },
+            .event_type = KEYSTONE_OBJ_LOG_STREAM,
+            .tenant_id = 7,
+            .classification = KEYSTONE_CLASSIFICATION_RESTRICTED,
+            .flags = KEYSTONE_RECORD_FLAG_AUDIT,
+            .source_generation = i + 1,
+            .payload_offset = i * 128
+        };
+        TEST_ASSERT(keystone_temporal_index_append(loaded, &te) == 0);
+    }
+    TEST_ASSERT(keystone_temporal_index_count(loaded) == 21);
+
+    /* 3. Resumed timeline must serve pre- and post-resume entries alike */
+    keystone_hlc_t hmin = { .physical_ms = 2000000, .logical = 0, .node_id = 0 };
+    keystone_hlc_t hmax = { .physical_ms = 2000200, .logical = 0xFFFFFFFFu, .node_id = 0xFFFFFFFFu };
+    keystone_temporal_entry_t out[32];
+    TEST_ASSERT(keystone_temporal_index_query_range(loaded, &hmin, &hmax, out, 32) == 21);
+    TEST_ASSERT(out[0].hlc.physical_ms == 2000000);
+    TEST_ASSERT(out[20].hlc.physical_ms == 2000200);
+    TEST_ASSERT(out[20].source_generation == 21);
+
+    /* 4. Second resume cycle with count > 16 (capacity == count region) */
+    TEST_ASSERT(keystone_temporal_index_save(loaded, path) == 0);
+    keystone_temporal_index_t* reloaded = NULL;
+    TEST_ASSERT(keystone_temporal_index_load(&reloaded, path) == 0);
+    TEST_ASSERT(keystone_temporal_index_count(reloaded) == 21);
+
+    keystone_temporal_entry_t te = {
+        .hlc = { .physical_ms = 2000210, .logical = 0, .node_id = 1 },
+        .event_type = KEYSTONE_OBJ_LOG_STREAM,
+        .tenant_id = 7,
+        .classification = KEYSTONE_CLASSIFICATION_RESTRICTED,
+        .flags = KEYSTONE_RECORD_FLAG_AUDIT,
+        .source_generation = 22,
+        .payload_offset = 21 * 128
+    };
+    TEST_ASSERT(keystone_temporal_index_append(reloaded, &te) == 0);
+    TEST_ASSERT(keystone_temporal_index_count(reloaded) == 22);
+
+    keystone_temporal_index_destroy(loaded);
+    keystone_temporal_index_destroy(reloaded);
+    unlink(path);
+
+    printf("    [+] Temporal resume-after-load verified (no overflow past loaded array).\n");
+}
+
+/* An empty index persisted and resumed must accept its first append. */
+static void test_temporal_empty_persist_resume(void) {
+    printf("[*] Testing temporal empty-index persist/resume...\n");
+
+    const char* path = "/tmp/keystone_temporal_empty_test.bin";
+
+    keystone_temporal_index_t* tidx = keystone_temporal_index_create(4);
+    TEST_ASSERT(tidx != NULL);
+    TEST_ASSERT(keystone_temporal_index_count(tidx) == 0);
+    TEST_ASSERT(keystone_temporal_index_save(tidx, path) == 0);
+    keystone_temporal_index_destroy(tidx);
+
+    keystone_temporal_index_t* loaded = NULL;
+    TEST_ASSERT(keystone_temporal_index_load(&loaded, path) == 0);
+    TEST_ASSERT(loaded != NULL);
+    TEST_ASSERT(keystone_temporal_index_count(loaded) == 0);
+
+    keystone_temporal_entry_t te = {
+        .hlc = { .physical_ms = 3000000, .logical = 0, .node_id = 1 },
+        .event_type = KEYSTONE_OBJ_LOG_STREAM,
+        .tenant_id = 7,
+        .flags = KEYSTONE_RECORD_FLAG_AUDIT,
+        .source_generation = 1
+    };
+    TEST_ASSERT(keystone_temporal_index_append(loaded, &te) == 0);
+    TEST_ASSERT(keystone_temporal_index_count(loaded) == 1);
+
+    keystone_temporal_index_destroy(loaded);
+    unlink(path);
+
+    printf("    [+] Empty-index resume verified.\n");
+}
+
+/*
+ * Persisted-format hostility: the temporal index file is untrusted input
+ * (CITADEL brief #31). Layout (packed, little-endian):
+ *   off 0  u32 magic   'KSTM'   off 48 u32 crc32 (hdr[0..48) ^ entries)
+ *   off 4  u32 version 1        off 52 u32 reserved (must be 0)
+ *   off 8  u64 count            off 56 entries, 80 bytes each
+ *   off 16 hlc min/max (32 B)
+ */
+#define T_HDR_SIZE 56u
+#define T_ENTRY_SIZE 80u
+
+static uint32_t temporal_test_crc32(const void* data, size_t len) {
+    uint32_t crc = 0xFFFFFFFFu;
+    const uint8_t* p = (const uint8_t*)data;
+    for (size_t i = 0; i < len; i++) {
+        crc ^= p[i];
+        for (int b = 0; b < 8; b++) {
+            crc = (crc & 1u) ? (0xEDB88320u ^ (crc >> 1)) : (crc >> 1);
+        }
+    }
+    return crc ^ 0xFFFFFFFFu;
+}
+
+static void temporal_test_store_u32(uint8_t* buf, size_t off, uint32_t v) {
+    buf[off] = (uint8_t)v; buf[off + 1] = (uint8_t)(v >> 8);
+    buf[off + 2] = (uint8_t)(v >> 16); buf[off + 3] = (uint8_t)(v >> 24);
+}
+
+static void temporal_test_store_u64(uint8_t* buf, size_t off, uint64_t v) {
+    for (int i = 0; i < 8; i++) buf[off + (size_t)i] = (uint8_t)(v >> (8 * i));
+}
+
+static uint32_t temporal_test_file_crc(const uint8_t* file, size_t len) {
+    uint64_t count = 0;
+    for (int i = 0; i < 8; i++) count |= (uint64_t)file[8 + i] << (8 * i);
+    size_t payload = (size_t)count * T_ENTRY_SIZE;
+    uint32_t crc = temporal_test_crc32(file, 48);
+    if (payload > 0 && 56 + payload <= len) {
+        crc ^= temporal_test_crc32(file + T_HDR_SIZE, payload);
+    }
+    return crc;
+}
+
+static void test_temporal_persistence_rejects_corrupt(void) {
+    printf("[*] Testing temporal persisted-format corruption rejection...\n");
+
+    const char* path = "/tmp/keystone_temporal_corrupt_test.bin";
+
+    /* Valid 3-entry reference file */
+    keystone_temporal_index_t* tidx = keystone_temporal_index_create(8);
+    TEST_ASSERT(tidx != NULL);
+    for (size_t i = 0; i < 3; i++) {
+        keystone_temporal_entry_t te = {
+            .hlc = { .physical_ms = 4000000 + (i * 10), .logical = 0, .node_id = 1 },
+            .event_type = KEYSTONE_OBJ_LOG_STREAM,
+            .source_generation = i + 1
+        };
+        TEST_ASSERT(keystone_temporal_index_append(tidx, &te) == 0);
+    }
+    TEST_ASSERT(keystone_temporal_index_save(tidx, path) == 0);
+    keystone_temporal_index_destroy(tidx);
+
+    const size_t valid_len = T_HDR_SIZE + 3 * T_ENTRY_SIZE;
+    uint8_t* valid = (uint8_t*)malloc(valid_len);
+    uint8_t* buf = (uint8_t*)malloc(valid_len + 4096);
+    TEST_ASSERT(valid != NULL && buf != NULL);
+    FILE* f = fopen(path, "rb");
+    TEST_ASSERT(f != NULL);
+    TEST_ASSERT(fread(valid, 1, valid_len, f) == valid_len);
+    fclose(f);
+
+    keystone_temporal_index_t* loaded = NULL;
+
+    /* 1. Sanity: the untouched file loads */
+    memcpy(buf, valid, valid_len);
+    FILE* w = fopen(path, "wb");
+    TEST_ASSERT(w != NULL && fwrite(buf, 1, valid_len, w) == valid_len);
+    fclose(w);
+    TEST_ASSERT(keystone_temporal_index_load(&loaded, path) == 0);
+    TEST_ASSERT(keystone_temporal_index_count(loaded) == 3);
+    keystone_temporal_index_destroy(loaded);
+    loaded = NULL;
+
+    /* 2. Bad magic */
+    memcpy(buf, valid, valid_len);
+    temporal_test_store_u32(buf, 0, 0xDEADBEEFu);
+    w = fopen(path, "wb"); TEST_ASSERT(w != NULL && fwrite(buf, 1, valid_len, w) == valid_len); fclose(w);
+    TEST_ASSERT(keystone_temporal_index_load(&loaded, path) == -1);
+    TEST_ASSERT(loaded == NULL);
+
+    /* 3. Bad version */
+    memcpy(buf, valid, valid_len);
+    temporal_test_store_u32(buf, 4, 99);
+    w = fopen(path, "wb"); TEST_ASSERT(w != NULL && fwrite(buf, 1, valid_len, w) == valid_len); fclose(w);
+    TEST_ASSERT(keystone_temporal_index_load(&loaded, path) == -1);
+    TEST_ASSERT(loaded == NULL);
+
+    /* 4. Nonzero reserved word */
+    memcpy(buf, valid, valid_len);
+    temporal_test_store_u32(buf, 52, 1);
+    w = fopen(path, "wb"); TEST_ASSERT(w != NULL && fwrite(buf, 1, valid_len, w) == valid_len); fclose(w);
+    TEST_ASSERT(keystone_temporal_index_load(&loaded, path) == -1);
+    TEST_ASSERT(loaded == NULL);
+
+    /* 5. Truncated payload (declared count larger than the bytes present) */
+    memcpy(buf, valid, valid_len);
+    w = fopen(path, "wb"); TEST_ASSERT(w != NULL && fwrite(buf, 1, valid_len - 10, w) == valid_len - 10); fclose(w);
+    TEST_ASSERT(keystone_temporal_index_load(&loaded, path) == -1);
+    TEST_ASSERT(loaded == NULL);
+
+    /* 6. Trailing garbage after the declared payload */
+    memcpy(buf, valid, valid_len);
+    buf[valid_len] = 0x41;
+    w = fopen(path, "wb"); TEST_ASSERT(w != NULL && fwrite(buf, 1, valid_len + 1, w) == valid_len + 1); fclose(w);
+    TEST_ASSERT(keystone_temporal_index_load(&loaded, path) == -1);
+    TEST_ASSERT(loaded == NULL);
+
+    /* 7. Absurd declared count (allocation bomb attempt, stale CRC) */
+    memcpy(buf, valid, valid_len);
+    temporal_test_store_u64(buf, 8, 0x4000000000000000ULL);
+    w = fopen(path, "wb"); TEST_ASSERT(w != NULL && fwrite(buf, 1, valid_len, w) == valid_len); fclose(w);
+    TEST_ASSERT(keystone_temporal_index_load(&loaded, path) == -1);
+    TEST_ASSERT(loaded == NULL);
+
+    /* 8. CRC-valid lie: count patched down with recomputed CRC, leaving
+     * undeclared trailing entries — the loader must reject by explicit
+     * length, not trust the (self-consistent) header. */
+    memcpy(buf, valid, valid_len);
+    temporal_test_store_u64(buf, 8, 1);
+    temporal_test_store_u32(buf, 48, temporal_test_file_crc(buf, valid_len));
+    w = fopen(path, "wb"); TEST_ASSERT(w != NULL && fwrite(buf, 1, valid_len, w) == valid_len); fclose(w);
+    TEST_ASSERT(keystone_temporal_index_load(&loaded, path) == -1);
+    TEST_ASSERT(loaded == NULL);
+
+    /* 9. Corrupted entry byte (CRC mismatch) */
+    memcpy(buf, valid, valid_len);
+    buf[T_HDR_SIZE + 5] ^= 0xFF;
+    w = fopen(path, "wb"); TEST_ASSERT(w != NULL && fwrite(buf, 1, valid_len, w) == valid_len); fclose(w);
+    TEST_ASSERT(keystone_temporal_index_load(&loaded, path) == -1);
+    TEST_ASSERT(loaded == NULL);
+
+    /* 10. Header-only stub and empty file */
+    w = fopen(path, "wb"); TEST_ASSERT(w != NULL && fwrite(valid, 1, 20, w) == 20); fclose(w);
+    TEST_ASSERT(keystone_temporal_index_load(&loaded, path) == -1);
+    TEST_ASSERT(loaded == NULL);
+    w = fopen(path, "wb"); TEST_ASSERT(w != NULL); fclose(w);
+    TEST_ASSERT(keystone_temporal_index_load(&loaded, path) == -1);
+    TEST_ASSERT(loaded == NULL);
+
+    free(valid);
+    free(buf);
+    unlink(path);
+
+    printf("    [+] Corrupt/truncated/malformed temporal files all rejected.\n");
+}
+
 static void test_high_throughput_query_benchmark(void) {
     printf("[*] Running 100,000 temporal range query benchmark...\n");
 
@@ -306,6 +586,9 @@ int main(void) {
 
     test_exact_identity_lifecycle();
     test_temporal_index_lifecycle();
+    test_temporal_load_then_append_resume();
+    test_temporal_empty_persist_resume();
+    test_temporal_persistence_rejects_corrupt();
     test_high_throughput_query_benchmark();
 
     printf("=================================================================\n");
