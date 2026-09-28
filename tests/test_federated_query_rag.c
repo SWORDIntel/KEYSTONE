@@ -242,6 +242,42 @@ static void test_rag_context_retrieval_and_model_governance(void) {
     TEST_ASSERT(rc == -2); /* Access Denied */
     printf("  [PASS] Unclassified caller denied access to Restricted context pack\n");
 
+    /* Test 1b: Unauthenticated callers are denied outright (sweep #7) */
+    rc = keystone_rag_query_context(rag, &node_id, NULL, 3600000ULL, &pack);
+    TEST_ASSERT(rc == -2);
+    printf("  [PASS] NULL security context denied\n");
+
+    /* Test 1c: Per-event label filtering — a SECRET-flagged event on the
+     * target must not appear in a RESTRICTED caller's pack (sweep #7). */
+    {
+        keystone_temporal_entry_t secret_evt;
+        memset(&secret_evt, 0, sizeof(secret_evt));
+        secret_evt.object_id = node_id;
+        secret_evt.hlc = keystone_hlc_now(1); /* fresh, inside the window */
+        secret_evt.classification = KEYSTONE_CLASSIFICATION_SECRET;
+        secret_evt.tenant_id = 1;
+        secret_evt.flags = KEYSTONE_RECORD_FLAG_EVENT;
+        TEST_ASSERT(keystone_temporal_index_append(temporal, &secret_evt) == 0);
+
+        caller_sec.classification = KEYSTONE_CLASSIFICATION_RESTRICTED;
+        rc = keystone_rag_query_context(rag, &node_id, &caller_sec, 3600000ULL, &pack);
+        TEST_ASSERT(rc == 0);
+        for (uint32_t i = 0; i < pack.event_count; i++) {
+            TEST_ASSERT(pack.events[i].classification <= KEYSTONE_CLASSIFICATION_RESTRICTED);
+        }
+        printf("  [PASS] SECRET-flagged event filtered from RESTRICTED pack\n");
+
+        keystone_security_context_t secret_caller;
+        memset(&secret_caller, 0, sizeof(secret_caller));
+        secret_caller.classification = KEYSTONE_CLASSIFICATION_SECRET;
+        secret_caller.tenant_id = 1;
+        secret_caller.compartment_mask = 0x05; /* target compartments */
+        rc = keystone_rag_query_context(rag, &node_id, &secret_caller, 3600000ULL, &pack);
+        TEST_ASSERT(rc == 0);
+        TEST_ASSERT(pack.event_count >= 1); /* now includes the SECRET event */
+        printf("  [PASS] SECRET caller sees the full timeline\n");
+    }
+
     /* Test 2: Security Clearance Granted */
     caller_sec.classification = KEYSTONE_CLASSIFICATION_RESTRICTED;
     caller_sec.compartment_mask = 0x05;

@@ -72,6 +72,23 @@ static void add_citation(
     snprintf(c->context_type, sizeof(c->context_type), "%s", ctx_type);
 }
 
+/*
+ * Per-item authorization (sweep 2026-09-28 #7): every copied element must
+ * pass classification floor, tenant isolation (0 = untagged/legacy), and
+ * the SECURITY_SENSITIVE-at-SECRET gate — matching keystoned's model.
+ */
+static int rag_item_allowed(const keystone_security_context_t* caller,
+                            uint32_t classification, uint32_t tenant_id, uint32_t flags) {
+    if (!caller) return 0;
+    if (caller->classification < classification) return 0;
+    if (tenant_id != 0u && tenant_id != caller->tenant_id) return 0;
+    if ((flags & KEYSTONE_RECORD_FLAG_SECURITY_SENSITIVE) &&
+        caller->classification < KEYSTONE_CLASSIFICATION_SECRET) {
+        return 0;
+    }
+    return 1;
+}
+
 int keystone_rag_query_context(
     const keystone_rag_engine_t* engine,
     const keystone_uuid_t* resource_id,
@@ -101,13 +118,14 @@ int keystone_rag_query_context(
         }
     }
 
-    if (caller_security) {
-        if (caller_security->classification < target_class) {
-            return -2; /* Security access denied (insufficient classification) */
-        }
-        if ((target_compartments & ~caller_security->compartment_mask) != 0) {
-            return -2; /* Security access denied (missing required compartments) */
-        }
+    /* Authentication is mandatory (sweep #7): an unauthenticated in-process
+     * caller used to receive a full pack. */
+    if (!caller_security) return -2;
+    if (caller_security->classification < target_class) {
+        return -2; /* Security access denied (insufficient classification) */
+    }
+    if ((target_compartments & ~caller_security->compartment_mask) != 0) {
+        return -2; /* Security access denied (missing required compartments) */
     }
 
     out_pack->classification = target_class;
@@ -117,10 +135,19 @@ int keystone_rag_query_context(
     if (engine->topo) {
         keystone_uuid_t nbrs[KEYSTONE_MAX_RAG_NEIGHBORS];
         size_t n_count = keystone_topology_find_neighbors(engine->topo, resource_id, KEYSTONE_EDGE_ALL, nbrs, KEYSTONE_MAX_RAG_NEIGHBORS);
-        out_pack->neighbor_count = (uint32_t)n_count;
         for (size_t i = 0; i < n_count; i++) {
-            out_pack->neighbors[i] = nbrs[i];
-            out_pack->neighbor_relations[i] = KEYSTONE_EDGE_RUNS_ON;
+            /* Neighbors above the caller's clearance are excluded entirely —
+             * their ids are metadata and must not leak (sweep #7). */
+            keystone_node_metrics_t nm;
+            if (keystone_topology_get_node(engine->topo, &nbrs[i], &nm) == 0 &&
+                !rag_item_allowed(caller_security, nm.classification, 0, 0)) {
+                continue;
+            }
+            if (out_pack->neighbor_count < KEYSTONE_MAX_RAG_NEIGHBORS) {
+                out_pack->neighbors[out_pack->neighbor_count] = nbrs[i];
+                out_pack->neighbor_relations[out_pack->neighbor_count] = KEYSTONE_EDGE_RUNS_ON;
+                out_pack->neighbor_count++;
+            }
             add_citation(out_pack, &nbrs[i], NULL, resource_id, engine->index_generation, &out_pack->freshness_hlc, "TOPOLOGY_EDGE");
         }
     }
@@ -140,11 +167,23 @@ int keystone_rag_query_context(
             evts,
             KEYSTONE_MAX_RAG_EVENTS
         );
-        out_pack->event_count = (uint32_t)e_count;
-        for (size_t i = 0; i < e_count; i++) {
-            out_pack->events[i] = evts[i];
-            add_citation(out_pack, &evts[i].object_id, &evts[i].event_id, resource_id,
-                         engine->index_generation, &evts[i].hlc, "TIMELINE_EVENT");
+        /*
+         * query_object returns the TOTAL match count; only
+         * KEYSTONE_MAX_RAG_EVENTS were copied into evts. Iterating to the
+         * total read past the stack array (sweep #7 / same class as the
+         * keystoned #11 fix) — and every copied event must clear the
+         * caller's classification/tenant/SENSITIVE bar.
+         */
+        size_t e_copied = e_count < KEYSTONE_MAX_RAG_EVENTS ? e_count : KEYSTONE_MAX_RAG_EVENTS;
+        for (size_t i = 0; i < e_copied; i++) {
+            if (!rag_item_allowed(caller_security, evts[i].classification, evts[i].tenant_id, evts[i].flags)) {
+                continue;
+            }
+            if (out_pack->event_count < KEYSTONE_MAX_RAG_EVENTS) {
+                out_pack->events[out_pack->event_count++] = evts[i];
+                add_citation(out_pack, &evts[i].object_id, &evts[i].event_id, resource_id,
+                             engine->index_generation, &evts[i].hlc, "TIMELINE_EVENT");
+            }
         }
     }
 
