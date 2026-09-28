@@ -437,6 +437,130 @@ static void test_high_throughput_ingest_benchmark(void) {
     keystone_federation_ingest_destroy(ingest);
 }
 
+/*
+ * Stream edge cases (CITADEL brief §5.2 / §48, audit criterion 16):
+ * restart/replay, cursor rollback via epoch fencing, tombstone-before-
+ * create, out-of-order generations, and gap tolerance.
+ *
+ * Pinned contract (documented, matches the live feed design): ingestion is
+ * at-least-once per engine lifetime — the dedup window is memory-only and
+ * the persisted checkpoint restores watermarks, NOT the dedup table, so a
+ * replay after restart re-counts records and the CONSUMER's cursor is the
+ * dedup authority. Exact-index application stays idempotent under replay
+ * because upsert rejects non-increasing generations.
+ */
+static void test_stream_edge_cases(void) {
+    printf("[*] Testing stream edge cases (replay, rollback, tombstones, ordering)...\n");
+
+    keystone_ingest_config_t cfg;
+    memset(&cfg, 0, sizeof(cfg));
+    cfg.initial_fencing_epoch = 1;
+
+    keystone_federation_record_t ev1, ev2, ev_tomb, ev_late;
+    memset(&ev1, 0, sizeof(ev1));
+    memset(&ev2, 0, sizeof(ev2));
+    memset(&ev_tomb, 0, sizeof(ev_tomb));
+    memset(&ev_late, 0, sizeof(ev_late));
+    ev1.source_event_id.bytes[0] = 0x11;
+    ev2.source_event_id.bytes[0] = 0x22;
+    ev_tomb.source_event_id.bytes[0] = 0x33;
+    ev_late.source_event_id.bytes[0] = 0x44;
+    ev1.source_object_id.bytes[0] = 0xA1;
+    ev2.source_object_id.bytes[0] = 0xA2;
+    ev_tomb.source_object_id.bytes[0] = 0xA3;
+    ev_late.source_object_id.bytes[0] = 0xA4;
+    ev1.source_hlc = (keystone_hlc_t){ .physical_ms = 7000100, .logical = 0, .node_id = 1 };
+    ev2.source_hlc = (keystone_hlc_t){ .physical_ms = 7000200, .logical = 0, .node_id = 1 };
+    ev_tomb.source_hlc = (keystone_hlc_t){ .physical_ms = 7000300, .logical = 0, .node_id = 1 };
+    ev_late.source_hlc = (keystone_hlc_t){ .physical_ms = 7000050, .logical = 0, .node_id = 1 }; /* earlier */
+    ev1.fencing_epoch = 1; ev2.fencing_epoch = 1; ev_tomb.fencing_epoch = 1; ev_late.fencing_epoch = 1;
+    ev1.source_generation = 10; ev2.source_generation = 20;
+    ev_tomb.source_generation = 30; ev_late.source_generation = 5; /* lower than 10 */
+    ev_tomb.flags = KEYSTONE_RECORD_FLAG_TOMBSTONE;
+
+    /* 1. In-session duplicate: same event id twice -> DUPLICATE */
+    keystone_federation_ingest_t* ing = keystone_federation_ingest_create(&cfg);
+    TEST_ASSERT(ing != NULL);
+    TEST_ASSERT(keystone_federation_ingest_submit(ing, &ev1) == KEYSTONE_INGEST_OK);
+    TEST_ASSERT(keystone_federation_ingest_submit(ing, &ev1) == KEYSTONE_INGEST_DUPLICATE);
+
+    /* 2. Out-of-order stale GENERATION: accepted (the watermark only
+     * advances; only epoch regression is rejected) — pinned behavior. */
+    keystone_ingest_stats_t st;
+    TEST_ASSERT(keystone_federation_ingest_submit(ing, &ev2) == KEYSTONE_INGEST_OK);
+    TEST_ASSERT(keystone_federation_ingest_submit(ing, &ev_late) == KEYSTONE_INGEST_OK);
+    TEST_ASSERT(keystone_federation_get_stats(ing, &st) == 0);
+    TEST_ASSERT(st.current_generation == 20);
+    TEST_ASSERT(st.stale_generations_rejected == 0);
+    TEST_ASSERT(st.records_ingested == 3);
+
+    /* 3. Tombstone before create: deletion lands in the registry first and
+     * the engine keeps the object masked even when a create follows —
+     * serving-side un-deletion is the timeline's job (newest non-tombstone
+     * event), not the registry's. */
+    TEST_ASSERT(keystone_federation_ingest_submit(ing, &ev_tomb) == KEYSTONE_INGEST_TOMBSTONE_APPLIED);
+    TEST_ASSERT(keystone_federation_is_tombstoned(ing, &ev_tomb.source_object_id) == true);
+    keystone_federation_record_t ev_create_after;
+    memset(&ev_create_after, 0, sizeof(ev_create_after));
+    ev_create_after.source_object_id = ev_tomb.source_object_id;
+    ev_create_after.source_event_id.bytes[0] = 0x55;
+    ev_create_after.source_hlc = ev_tomb.source_hlc;
+    ev_create_after.source_hlc.physical_ms += 100;
+    ev_create_after.fencing_epoch = 1;
+    ev_create_after.source_generation = 40;
+    TEST_ASSERT(keystone_federation_ingest_submit(ing, &ev_create_after) == KEYSTONE_INGEST_OK);
+    TEST_ASSERT(keystone_federation_is_tombstoned(ing, &ev_tomb.source_object_id) == true);
+
+    /* 4. Epoch advance + cursor rollback via fencing: a rolled-back
+     * producer (older epoch) is stale-rejected after the checkpoint. */
+    TEST_ASSERT(keystone_federation_advance_fencing_epoch(ing, 12) == 0);
+    const char* cp = "/tmp/keystone_stream_edge_checkpoint.bin";
+    TEST_ASSERT(keystone_federation_save_checkpoint(ing, cp) == 0);
+
+    keystone_federation_ingest_t* restored = keystone_federation_ingest_create(&cfg);
+    TEST_ASSERT(restored != NULL);
+    TEST_ASSERT(keystone_federation_load_checkpoint(restored, cp) == 0);
+
+    keystone_federation_record_t ev_rollback;
+    memset(&ev_rollback, 0, sizeof(ev_rollback));
+    ev_rollback.source_event_id.bytes[0] = 0x66;
+    ev_rollback.source_object_id.bytes[0] = 0xA6;
+    ev_rollback.fencing_epoch = 5; /* behind the checkpointed epoch 12 */
+    ev_rollback.source_generation = 50;
+    TEST_ASSERT(keystone_federation_ingest_submit(restored, &ev_rollback) == KEYSTONE_INGEST_STALE_FENCING_EPOCH);
+
+    /* 5. Replay after restart is at-least-once. The persisted fencing
+     * watermark fences out replays from OLD epochs outright (stronger than
+     * the in-memory dedup); a replay at the current epoch re-ingests and
+     * re-counts because the dedup table is not checkpointed. The consumer
+     * cursor is the dedup authority (feed design). */
+    keystone_federation_record_t ev1_replay = ev1;
+    ev1_replay.fencing_epoch = 12; /* same event, current epoch */
+    TEST_ASSERT(keystone_federation_ingest_submit(restored, &ev1) == KEYSTONE_INGEST_STALE_FENCING_EPOCH); /* old-epoch replay fenced */
+    TEST_ASSERT(keystone_federation_ingest_submit(restored, &ev1_replay) == KEYSTONE_INGEST_OK); /* not DUPLICATE */
+    keystone_ingest_stats_t rst;
+    TEST_ASSERT(keystone_federation_get_stats(restored, &rst) == 0);
+    TEST_ASSERT(rst.current_fencing_epoch == 12);
+    TEST_ASSERT(rst.current_generation == 40); /* loaded watermark (ev_create_after); ev1 gen 10 does not regress it */
+    TEST_ASSERT(rst.records_ingested == 6); /* lifetime counter: 5 checkpointed + 1 replayed */
+
+    /* 6. Sequence gap tolerance: generations may jump (10 -> 999) with no
+     * rejection — gap DETECTION is deliberately not built at this layer
+     * (the brief's cursor-gap reconciliation lives with the consumer). */
+    keystone_federation_record_t ev_gap;
+    memset(&ev_gap, 0, sizeof(ev_gap));
+    ev_gap.source_event_id.bytes[0] = 0x77;
+    ev_gap.source_object_id.bytes[0] = 0xA7;
+    ev_gap.fencing_epoch = 12;
+    ev_gap.source_generation = 999;
+    TEST_ASSERT(keystone_federation_ingest_submit(restored, &ev_gap) == KEYSTONE_INGEST_OK);
+
+    keystone_federation_ingest_destroy(ing);
+    keystone_federation_ingest_destroy(restored);
+    unlink(cp);
+    printf("    [+] Stream edge cases verified (duplicate, ordering, tombstone-before-create, rollback fencing, replay, gaps).\n");
+}
+
 int main(void) {
     printf("========================================================\n");
     printf("  KEYSTONE Federation Wire Envelope & Ingestion Tests\n");
@@ -446,6 +570,7 @@ int main(void) {
     test_hlc_primitives();
     test_wire_serialization();
     test_ingestion_pipeline();
+    test_stream_edge_cases();
     test_explainable_recommendations();
     test_high_throughput_ingest_benchmark();
 
