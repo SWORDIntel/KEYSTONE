@@ -11,7 +11,7 @@
 [![Parallel](https://img.shields.io/badge/Parallel-OpenMP-green.svg)](https://www.openmp.org/)
 [![Platform](https://img.shields.io/badge/Platform-Linux-success.svg)](https://www.kernel.org/)
 [![License](https://img.shields.io/badge/License-AGPL--3.0-red.svg)](LICENSE)
-[![CITADEL Federation](https://img.shields.io/badge/CITADEL%20Federation-Phases%200--7%20Complete-brightgreen.svg)](docs/architecture/federation_ingest.md)
+[![CITADEL Federation](https://img.shields.io/badge/CITADEL%20Federation-Phases%200--7%20Implemented-brightgreen.svg)](docs/architecture/federation_ingest.md)
 
 **KEYSTONE is a high-performance indexing, ingestion, search, and intelligence acceleration engine for large-scale distributed systems.** It runs as a standalone acceleration layer, powers the [CITADEL OS](https://github.com/SWORDIntel/CITADEL) federation intelligence fabric, and feeds structured data directly into [QIHSE](https://github.com/SWORDIntel/QIHSE).
 
@@ -51,9 +51,9 @@ KEYSTONE combines focused capabilities behind one native library and modular dae
 
 | Capability | Practical purpose |
 |---|---|
-| **Federation wire ingest & deduplication** | Packed 124-byte wire envelope with CRC32 integrity, 9.3M ops/sec deduplication ring, tombstone masking, and atomic checkpoint persistence. |
-| **Exact identity directory** | $O(1)$ collision-safe open-addressing table mapping 128-bit UUIDs to active generation, epoch, and state at **4.6+ million queries/sec**. |
-| **Monotonic temporal timeline** | Monotonic Hybrid Logical Clock (HLC) index with 64-byte cache-line aligned entries and binary range searches at **3.7+ million queries/sec**. |
+| **Federation wire ingest & deduplication** | Packed 124-byte wire envelope with CRC32 integrity, deduplication ring, tombstone masking, and atomic checkpoint persistence. |
+| **Exact identity directory** | $O(1)$ collision-safe open-addressing table mapping 128-bit UUIDs to active generation, epoch, and state. |
+| **Monotonic temporal timeline** | Monotonic Hybrid Logical Clock (HLC) index with 80-byte entries and binary range, object-scoped, reverse, and bucket-aggregation queries. |
 | **Service daemon mode (`keystoned`)** | Standalone unprivileged daemon over `0700` Unix domain sockets with binary IPC, multi-client poll concurrency, and atomic generation pointer swapping. |
 | **Security context partitioning** | Clearance levels (Unclassified to Top Secret) and 64-bit compartment bitmasks with zero metadata leakage. |
 | **Topology graph cache** | Read-optimized in-memory graph cache (`RUNS_ON`, `ATTACHED_TO`, `DEPENDS_ON`, `SHARES_FAILURE_DOMAIN`) with neighborhood expansion and blast-radius tracing. |
@@ -75,7 +75,7 @@ flowchart LR
     A["Existing Infrastructure\nQIHSE · Telemetry · Hosts · VMs"] --> I
 
     subgraph KS["KEYSTONE Federation & Intelligence Acceleration Layer"]
-        I["Canonical Wire Ingest\n124B Envelope · CRC32 · 9.3M ops/s Dedup"] --> IDX["Dual Indexing Engine\nExact Identity O(1) · Monotonic Temporal O(log N)"]
+        I["Canonical Wire Ingest\n124B Envelope · CRC32 · Dedup Ring"] --> IDX["Dual Indexing Engine\nExact Identity O(1) · Monotonic Temporal O(log N)"]
         I --> TEL["Streaming Telemetry Engine\nRolling Windows (1m..24h) · Online Statistics"]
         TEL --> ANOM["Multi-Stage Anomaly Detection\nStatic Thresholds + |z| >= 3.0 Outliers"]
         ANOM --> VEC["Silicon Incident Similarity\nCUDA · AMX _tile_dpbssd · AVX-512 · AVX2 · Scalar"]
@@ -95,12 +95,17 @@ For complete architectural specifications, see the [technical documentation](doc
 
 ## Measured Results
 
-Performance is continuously verified on target hardware:
+Performance figures are host- and load-dependent; canonical recorded runs live in
+[`benchmarks/FEDERATION_BENCHMARK.md`](benchmarks/FEDERATION_BENCHMARK.md) (federation suite,
+2026-09-20 host) and [`docs/BENCHMARK_RESULTS.md`](docs/BENCHMARK_RESULTS.md) (core engine).
 
-### 1. Ingestion & Dual Indexing Performance (8-Core Host)
-- **Federation Ingestion & Deduplication**: **9,345,794 events/sec** (107 ns/event) with 100% duplicate rejection and CRC32 verification.
-- **Exact Identity Directory Lookup**: **4,608,294 lookups/sec** (217 ns/query) in $O(1)$ open-addressing table.
-- **Monotonic Temporal Range Search**: **3,717,472 range queries/sec** (269 ns/query) with branchless binary bounding.
+### 1. Ingestion & Dual Indexing (federation suite, 2026-09-20 host)
+- **Federation Ingestion & Deduplication**: 5.04M events/sec (198 ns/event) with 100% duplicate rejection and CRC32 verification.
+- **Exact Identity Directory Lookup**: 3.77M lookups/sec (p50 171 ns) in $O(1)$ open-addressing table.
+- **Monotonic Temporal Range Search**: 1.39M queries/sec (p50 574 ns) with branchless binary bounding.
+- A 2026-09-28 audit re-run on a loaded PVE container measured lower absolute numbers
+  (e.g. temporal p50 920 ns) with no code regression — see
+  [`docs/plans/KEYSTONE_FEDERATION_ALIGNMENT_AUDIT_2026-09-28.md`](docs/plans/KEYSTONE_FEDERATION_ALIGNMENT_AUDIT_2026-09-28.md).
 
 ### 2. Algorithmic Key Search
 On an **Intel Xeon E5-2407** (2.2GHz):
@@ -117,10 +122,16 @@ On an **Intel Xeon E5-2407** (2.2GHz):
 
 ## Current State
 
-KEYSTONE is fully implemented with **19 / 19 passing test suites** (`make check`).
+KEYSTONE's local test suite is green: **18 / 18 binaries pass** under `make check`
+(2026-09-28; includes the 2026-09-28 temporal-loader overflow fix and persistence-corruption
+tests). Local green ≠ production verified: as of 2026-09-28 exactly **one consumer path is
+live-verified** (the audit-journal feed against the production fleet); `keystoned` is not
+deployed and the federated query coordinator has no network transport yet. Full per-criterion
+status against the CITADEL upgrade brief:
+[`docs/plans/KEYSTONE_FEDERATION_ALIGNMENT_AUDIT_2026-09-28.md`](docs/plans/KEYSTONE_FEDERATION_ALIGNMENT_AUDIT_2026-09-28.md).
 
-**All 8 CITADEL Federation Intelligence Upgrade phases are complete:**
-- [x] **Phase 0**: Federation wire envelope, CRC32, 9.3M ops/sec dedup ring, tombstone registry, atomic checkpoints.
+**All 8 CITADEL Federation Intelligence Upgrade phases are implemented and locally tested:**
+- [x] **Phase 0**: Federation wire envelope, CRC32, dedup ring, tombstone registry, atomic checkpoints.
 - [x] **Phase 1**: Exact identity directory ($O(1)$), monotonic HLC temporal timeline index ($O(\log N)$).
 - [x] **Phase 2**: Security-aware native service daemon (`bin/keystoned`), restricted `0700` Unix socket, MAC clearance/compartment checks, atomic generation publication.
 - [x] **Phase 3**: Topology graph cache (`RUNS_ON`, `DEPENDS_ON`, etc.), two-tier hybrid planner (Tier 1 boolean pruning, Tier 2 weighted soft ranking), explainable recommendation bundles.
@@ -140,7 +151,7 @@ See [`docs/STATUS_SUMMARY.md`](docs/STATUS_SUMMARY.md) and [`ROADMAP.md`](ROADMA
 git clone https://github.com/SWORDIntel/KEYSTONE.git
 cd KEYSTONE
 make clean
-make check    # Runs all 19 test suites across core and federation modules
+make check    # Runs all 18 test suites across core and federation modules
 ```
 
 ### Start `keystoned` Service Daemon

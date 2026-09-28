@@ -56,12 +56,12 @@ Current engineering status across core search, memory optimization, vectorized t
 - **Phase 0: Federation Wire Envelope & Dual Ingestion** ([`include/keystone_federation.h`](../include/keystone_federation.h), [`src/federation/keystone_federation_ingest.c`](../src/federation/keystone_federation_ingest.c)):
   - Packed 124-byte wire envelope (`KEYSTONE_FEDERATION_ENVELOPE_MAGIC = 0x4B534645`), IEEE 802.3 CRC32 header and payload checksums.
   - 128-bit UUID primitives (`keystone_uuid_t`) and monotonic Hybrid Logical Clock (`keystone_hlc_t`).
-  - High-throughput deduplication hash ring benchmarked at **9.3+ million events/sec** (107 ns/event).
+  - High-throughput deduplication hash ring (measured rates in [`benchmarks/FEDERATION_BENCHMARK.md`](../benchmarks/FEDERATION_BENCHMARK.md); figures are host- and load-dependent).
   - Instant tombstone registry masking, fencing epoch protection, and atomic double-buffered checkpointing.
 - **Phase 1: Infrastructure Exact Identity & Monotonic Temporal Indexing** ([`include/keystone_exact_index.h`](../include/keystone_exact_index.h), [`include/keystone_temporal.h`](../include/keystone_temporal.h)):
-  - $O(1)$ open-addressing exact identity index benchmarked at **4.6+ million queries/sec** (217 ns/query).
-  - 64-byte cache-line aligned monotonic temporal index benchmarked at **3.7+ million range queries/sec** (269 ns/query).
-  - Object-scoped timeline queries, time-bucket histogram aggregations, and out-of-order arrival stabilization.
+  - $O(1)$ open-addressing exact identity index (see [`benchmarks/FEDERATION_BENCHMARK.md`](../benchmarks/FEDERATION_BENCHMARK.md) for measured lookup rates).
+  - Monotonic temporal index with 80-byte entries (HLC + event/object UUID + type/tenant/classification/flags + generation + payload offset); range, object-scoped, reverse-scan, and bucket-aggregation queries (see benchmark doc for measured rates).
+  - 2026-09-28: fixed a production heap overflow in `keystone_temporal_index_load` (claimed capacity exceeded the allocated array on resume) and hardened the loader against hostile persisted files — exact file-size bound, checked arithmetic, reserved-word and CRC validation. See [`docs/plans/KEYSTONE_FEDERATION_ALIGNMENT_AUDIT_2026-09-28.md`](plans/KEYSTONE_FEDERATION_ALIGNMENT_AUDIT_2026-09-28.md).
 - **Phase 2: Security-Aware Native Service Mode (`keystoned`)** ([`include/keystoned.h`](../include/keystoned.h), `bin/keystoned`, [`src/service/`](../src/service/)):
   - Unprivileged service daemon operating over restricted `0700` Unix domain sockets (`/run/keystone/keystoned.sock`).
   - Multi-client poll concurrency and atomic reader-writer generation publication (`keystoned_server_publish_generation`).
@@ -86,29 +86,53 @@ Current engineering status across core search, memory optimization, vectorized t
 
 ## Test Suite Status
 
-All **19 / 19 test suites** pass 100% green under `make check`:
+All **18 / 18 test suites** built by `make check` pass (verified 2026-09-28; see the live-verification note below for the local-vs-production distinction):
 
 | Test Suite Binary | Focus Area | Status |
 |---|---|---|
-| `bin/test_keystone` | Core scalar & SIMD search | PASS |
-| `bin/test_keystone_calibration_cache` | Calibration cache & concurrency | PASS |
-| `bin/test_keystone_provenance` | Workload shape profiling & provenance | PASS |
-| `bin/test_keystone_fortran` | Fortran interop & ABI | PASS |
-| `bin/test_fortran_workloads` | Fortran multi-workload benchmarking | PASS |
-| `bin/test_memory_ramp` | Huge pages & memory capacity ramp | PASS |
-| `bin/test_cuda_backend` | CUDA & AMX silicon detection | PASS |
-| `bin/test_keystone_tar_zst` | Compressed archive streaming | PASS |
+| `bin/test_enhanced` | DSMIL integration & error handling | PASS |
+| `bin/test_auto_backend` | Auto-backend calibration & fallback | PASS |
+| `bin/test_telemetry_processor_perf` | Telemetry processor | PASS |
+| `bin/test_performance_fix` | Performance regression guards | PASS |
+| `bin/test_core_native` | Core scalar & SIMD search | PASS |
 | `bin/test_trigram_index` | Trigram engine correctness | PASS |
-| `bin/test_trigram_sol` | Sol trigram optimization passes | PASS |
-| `bin/test_trigram_parallel` | Multi-threaded parallel trigram build | PASS |
+| `bin/test_memory_ramp` | Huge pages & memory capacity ramp | PASS |
+| `bin/test_fortran_backend` | Fortran interop & ABI | PASS |
+| `bin/test_fortran_workloads` | Fortran multi-workload benchmarking | PASS |
+| `bin/test_tar_zst` | Compressed archive streaming (incl. corrupt members) | PASS |
 | `bin/test_keystone_fabric` | QIHSE node capability bus frames | PASS |
-| `bin/test_keystone_qihse_integration` | QIHSE cluster bus integration | PASS |
-| `bin/test_federation_envelope` | Phase 0 wire envelope & dedup ring | PASS |
-| `bin/test_exact_temporal_index` | Phase 1 exact & temporal indexes | PASS |
-| `bin/test_keystoned_service` | Phase 2 daemon, IPC & security context | PASS |
+| `bin/test_cuda_backend` | CUDA & AMX silicon detection + fallback contracts | PASS |
+| `bin/test_federation_envelope` | Phase 0 wire envelope, dedup ring, checkpoints | PASS |
+| `bin/test_exact_temporal_index` | Phase 1 exact & temporal indexes + persistence corruption | PASS |
+| `bin/test_keystoned_service` | Phase 2 daemon, IPC & security context denial | PASS |
 | `bin/test_topology_hybrid_planner` | Phase 3 topology cache & hybrid planner | PASS |
 | `bin/test_telemetry_incident_engine` | Phase 4 & 5 telemetry & silicon dispatch | PASS |
 | `bin/test_federated_query_rag` | Phase 6 & 7 federated coordinator & RAG | PASS |
+
+Known caveat: the `ns_per_query < 500` assertion inside `test_exact_temporal_index` is a timing
+gate that is borderline on loaded hosts (it has been observed to flake at ~500 ns on a busy PVE
+container while passing at 477–498 ns on quiet runs). It is a performance gate, not a
+correctness failure.
+
+---
+
+## Live-Verification Status (2026-09-28)
+
+Local test/benchmark success is not production verification. Current evidence tiers:
+
+- **Live-verified (fleet):** one consumer path — the R6b audit-journal feed
+  (`../INFRA/parrot-sabot/scripts/keystone_journal_feed.py`), ctypes over `libkeystone`
+  federation/exact/temporal APIs, cursor resume + spool verification against the production
+  cluster (2026-09-26; re-verified read-only 2026-09-28, 3/4 items consistent, 1 item showing
+  source-side same-generation content drift — see the audit).
+- **Implemented + locally tested:** Phases 0–7 engines and their test binaries (above),
+  plus a clean ASan/UBSan and valgrind matrix over the temporal + federation suites (2026-09-28,
+  first recorded run; not yet wired as CI targets).
+- **Not verified / partial:** keystoned is not deployed anywhere; the federated query
+  coordinator has no network transport; no KEYSTONE-side consumer of QIHSE's
+  `KEYSTONE.FEED.NEXT` wire command exists yet; fuzzing and physical security partitioning are
+  unbuilt. Full per-criterion verdicts:
+  [`docs/plans/KEYSTONE_FEDERATION_ALIGNMENT_AUDIT_2026-09-28.md`](plans/KEYSTONE_FEDERATION_ALIGNMENT_AUDIT_2026-09-28.md).
 
 ---
 

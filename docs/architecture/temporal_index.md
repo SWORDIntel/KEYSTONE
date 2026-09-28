@@ -18,7 +18,7 @@ CITADEL infrastructure generates millions of telemetry, lifecycle, and security 
 KEYSTONE's temporal index is designed for:
 - **Monotonic Causal Ordering**: Indexed strictly by Hybrid Logical Clock (`keystone_hlc_t`), ensuring causal consistency without clock-skew vulnerabilities.
 - **Cache-Aligned Contiguous Memory**: Packed array structure maximizing L1/L2 cache line utilization.
-- **Sub-Microsecond Range Queries**: Monotonic lower/upper bound binary search executing at **3.7+ million queries/second** (269 ns/query).
+- **Sub-Microsecond Range Queries**: Monotonic lower/upper bound binary search (measured throughput is host-dependent — see [`benchmarks/FEDERATION_BENCHMARK.md`](../../benchmarks/FEDERATION_BENCHMARK.md)).
 - **Out-of-Order Arrival Stabilization**: Handles bounded network jitter and clock skew without corrupting timeline monotonicity.
 - **Zero-Allocation Query Filtering**: In-place filtering by target object UUID, event type bitmasks, and tenant security domains.
 
@@ -26,36 +26,40 @@ KEYSTONE's temporal index is designed for:
 
 ## 2. Memory Layout & Structures
 
-Defined in [`include/keystone_temporal.h`](file:///home/john/Documents/KEYSTONE/include/keystone_temporal.h):
+Defined in [`include/keystone_temporal.h`](../../include/keystone_temporal.h):
 
 ```c
 typedef struct {
-    keystone_hlc_t hlc;          /* 16 bytes: physical_ms, logical, node_id */
-    keystone_uuid_t event_id;    /* 16 bytes: unique event identifier */
-    keystone_uuid_t object_id;   /* 16 bytes: entity identifier (VM, Node) */
-    uint64_t source_generation;  /* 8 bytes: generation of origin */
-    uint32_t event_type;         /* 4 bytes: domain event classification */
-    uint32_t tenant_id;          /* 4 bytes: tenant isolation boundary */
-} keystone_temporal_entry_t;     /* Total: 64 bytes (perfect cache line fit) */
+    keystone_hlc_t hlc;              /* 16 bytes: physical_ms, logical, node_id */
+    keystone_uuid_t event_id;        /* 16 bytes: unique event identifier */
+    keystone_uuid_t object_id;       /* 16 bytes: entity identifier (VM, Node) */
+    uint32_t event_type;             /* 4 bytes: object type classification */
+    uint32_t tenant_id;              /* 4 bytes: tenant isolation boundary */
+    uint32_t classification;         /* 4 bytes: security classification */
+    uint32_t flags;                  /* 4 bytes: record flags (tombstone, audit, ...) */
+    uint64_t source_generation;      /* 8 bytes: generation of origin */
+    uint64_t payload_offset;         /* 8 bytes: spool/journal payload location */
+} keystone_temporal_entry_t;         /* Total: 80 bytes (aligned to 8) */
 ```
 
-### 64-Byte Cache Line Alignment
-Each `keystone_temporal_entry_t` occupies exactly 64 bytes. In modern x86_64 architectures:
-- An entry never spans across two L1 cache lines.
-- Sequential iteration and prefetching load precisely one complete temporal record per cache line fetch.
+### Contiguous Packed Array
+Each `keystone_temporal_entry_t` occupies exactly 80 bytes. Entries are stored in one
+contiguous sorted array:
+- Sequential iteration and prefetching stream whole temporal records per cache-line run.
 - SIMD and vector registers can inspect multiple entry headers in parallel.
 
 ```c
+/* src/temporal/keystone_temporal_index.c (internal) */
 typedef struct {
-    keystone_temporal_entry_t *entries; /* Contiguous, sorted entries array */
-    uint64_t count;                     /* Current entry count */
-    uint64_t capacity;                  /* Allocated capacity */
-    keystone_hlc_t min_hlc;             /* Minimum HLC watermark */
-    keystone_hlc_t max_hlc;             /* Maximum HLC watermark */
-    bool is_sorted;                     /* Monotonic sort state */
-    pthread_rwlock_t rwlock;            /* Concurrency synchronization */
+    keystone_temporal_entry_t* entries; /* Contiguous, sorted; capacity slots allocated */
+    size_t capacity;                    /* Allocated capacity (always ≥ allocated slots) */
+    size_t count;                       /* Current entry count (≤ capacity) */
 } keystone_temporal_index_t;
 ```
+
+**Invariant (enforced since the 2026-09-28 overflow fix):** the entries array is allocated
+for *capacity* slots — `count <= capacity <= allocated`. A loaded index must never claim more
+capacity than it allocated, or `append` writes past the array (the production R6b feed bug).
 
 ---
 
@@ -84,7 +88,7 @@ flowchart LR
 2. **Upper Bound**: $O(\log N)$ binary search finding the first entry where $\text{HLC} > HLC_{end}$.
 3. **Candidate Scan**: The resulting contiguous slice $[idx_{start}, idx_{end})$ is scanned directly from contiguous RAM with zero intermediate heap allocations.
 
-Under benchmark workloads on an 8-core host, range queries achieve **3.7+ million lookups per second** (median latency: 269 ns).
+Under benchmark workloads on the 2026-09-20 benchmark host, range queries achieved **1.39 million lookups per second** (median latency: 574 ns); a 2026-09-28 audit re-run on a loaded container measured 0.94M/s (p50 920 ns). See [`benchmarks/FEDERATION_BENCHMARK.md`](../../benchmarks/FEDERATION_BENCHMARK.md).
 
 ---
 
@@ -166,4 +170,9 @@ The temporal index is persisted to disk using double-buffered atomic checkpoints
 2. Contiguous entry arrays are streamed directly to disk (`.tmp`).
 3. `fsync()` guarantees durability.
 4. Atomic `rename()` replaces the active checkpoint.
-5. On load, the header CRC32 and payload bounds are validated before memory mapping or allocating index memory.
+5. On load (hostile-input safe, hardened 2026-09-28): magic/version/strict-v1 header validation,
+   checked arithmetic on the declared count, an **exact file-size bound (`fstat`) before any
+   allocation** — truncated, trailing-garbage, and lying-count files are rejected — and the
+   entries array is allocated for `max(count, 16)` capacity slots so append after resume always
+   has the capacity the index claims. CRC32 over header + declared payload is verified before
+   the index is returned.

@@ -156,7 +156,7 @@ Governed by [`CITADEL/docs/architecture/KEYSTONE_FEDERATION_INTELLIGENCE_UPGRADE
 - [x] **Hostile-Input-Safe Wire Serialization (`src/federation/keystone_federation_ingest.c`)**:
   - 124-byte packed binary wire format (`KEYSTONE_FEDERATION_ENVELOPE_MAGIC = 0x4B534645`), CRC32-checked header and payload, bounded allocation safeguards (<64 MiB payload cap), and tested corrupted-byte rejections.
 - [x] **Idempotent Ingestion & Deduplication**:
-  - High-throughput deduplication hash ring rejecting duplicate event UUIDs idempotently. Benchmarked at **9.3+ million events/sec** (107 ns/event).
+  - High-throughput deduplication hash ring rejecting duplicate event UUIDs idempotently. Measured rates in [`benchmarks/FEDERATION_BENCHMARK.md`](benchmarks/FEDERATION_BENCHMARK.md) (5.04M events/sec, 198 ns/event on the 2026-09-20 benchmark host; host- and load-dependent).
 - [x] **Tombstone Registry & Fencing Epoch Protection**:
   - Instant negative lookup masking via `keystone_federation_is_tombstoned()` upon receiving tombstone flags. Rejection of stale fencing epochs (`KEYSTONE_INGEST_STALE_FENCING_EPOCH`).
 - [x] **Atomic Checkpoint Persistence**:
@@ -169,9 +169,10 @@ Governed by [`CITADEL/docs/architecture/KEYSTONE_FEDERATION_INTELLIGENCE_UPGRADE
   - Fast collision-safe $O(1)$ open-addressing mapping from resource/event/node UUID to active index generation, fencing epoch, HLC, flags, and location slot.
   - 128-bit key verification eliminating hash ambiguity, dynamic power-of-two resizing, active vs tombstone count tracking, stale generation/epoch rejection, and CRC32-verified atomic persistence.
 - [x] **Monotonic HLC Temporal Timeline Index (`include/keystone_temporal.h`, `src/temporal/keystone_temporal_index.c`)**:
-  - Monotonic `(HLC, event_id, object_id, event_type)` index with branchless binary lower/upper bound searches.
-  - Range search benchmarked at **3.7+ million queries/sec (269 ns/query)**.
+  - Monotonic `(HLC, event_id, object_id, event_type)` index with branchless binary lower/upper bound searches; entries are 80 bytes (HLC, event/object UUIDs, type/tenant/classification/flags, generation, payload offset).
+  - Range-search throughput is host- and load-dependent — see [`benchmarks/FEDERATION_BENCHMARK.md`](benchmarks/FEDERATION_BENCHMARK.md) (1.39M q/s, p50 574 ns on the 2026-09-20 benchmark host) and the 2026-09-28 audit re-run (0.94M q/s, p50 920 ns on a loaded PVE container).
   - Object-scoped timeline queries, reverse-chronological incident scans, time-bucket histogram aggregations, out-of-order arrival stabilization, and CRC32-verified atomic persistence.
+  - 2026-09-28 fix: `keystone_temporal_index_load` resume-append heap overflow (loader claimed capacity 16 while allocating only the loaded count) repaired, loader hardened against hostile persisted files (exact file-size bound, checked arithmetic, strict header validation); malformed/truncated-input tests added. Before/after benchmarks: no regression. Details: [`docs/plans/KEYSTONE_FEDERATION_ALIGNMENT_AUDIT_2026-09-28.md`](docs/plans/KEYSTONE_FEDERATION_ALIGNMENT_AUDIT_2026-09-28.md).
 
 ### Phase 2: Security-Aware Native Service Mode (`keystoned`) — COMPLETED
 - [x] **Unprivileged Service Daemon (`bin/keystoned`, `src/service/keystoned_main.c`, `src/service/keystoned_server.c`)**:
