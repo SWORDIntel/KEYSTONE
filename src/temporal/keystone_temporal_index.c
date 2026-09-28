@@ -250,6 +250,60 @@ size_t keystone_temporal_index_query_object(
     return matches_found;
 }
 
+bool keystone_temporal_index_object_is_deleted(
+    const keystone_temporal_index_t* index,
+    const keystone_uuid_t* object_id,
+    const keystone_hlc_t* hlc_max
+) {
+    if (!index || !object_id || index->count == 0) return false;
+
+    /* Latest state as-of hlc_max: scan backwards from the window bound for
+     * the object's most recent event and test its TOMBSTONE flag. */
+    size_t end_idx = index->count;
+    if (hlc_max) {
+        end_idx = upper_bound_hlc(index->entries, index->count, hlc_max);
+    }
+    for (size_t i = end_idx; i > 0; i--) {
+        if (keystone_uuid_equal(&index->entries[i - 1].object_id, object_id)) {
+            return (index->entries[i - 1].flags & KEYSTONE_RECORD_FLAG_TOMBSTONE) != 0;
+        }
+    }
+    return false;
+}
+
+size_t keystone_temporal_index_query_object_active(
+    const keystone_temporal_index_t* index,
+    const keystone_uuid_t* object_id,
+    const keystone_hlc_t* hlc_min,
+    const keystone_hlc_t* hlc_max,
+    keystone_temporal_entry_t* out_entries,
+    size_t max_results
+) {
+    if (!index || !object_id) return 0;
+
+    /* A deleted object returns nothing on every query surface (brief §28:
+     * no resurrection); re-creation clears the deleted state because the
+     * object's newest event is then not a tombstone. */
+    if (keystone_temporal_index_object_is_deleted(index, object_id, hlc_max)) {
+        return 0;
+    }
+
+    return keystone_temporal_index_query_object(index, object_id, hlc_min, hlc_max,
+                                                out_entries, max_results);
+}
+
+bool keystone_temporal_index_watermark(
+    const keystone_temporal_index_t* index,
+    keystone_hlc_t* out_max_hlc,
+    size_t* out_count
+) {
+    if (!index || index->count == 0) return false;
+    /* Entries are maintained in ascending HLC order by append(). */
+    if (out_max_hlc) *out_max_hlc = index->entries[index->count - 1].hlc;
+    if (out_count) *out_count = index->count;
+    return true;
+}
+
 size_t keystone_temporal_index_scan_reverse(
     const keystone_temporal_index_t* index,
     const keystone_hlc_t* hlc_max,

@@ -106,6 +106,25 @@ uint32_t keystone_temporal_query_object(
     uint32_t max_results);
 ```
 
+### Tombstone-Aware Active History (§28)
+
+`keystone_temporal_index_query_object_active()` is the resurrection-safe
+variant used by serving paths: it returns entries only when the object's
+most recent event at or before the query's `hlc_max` does **not** carry
+`KEYSTONE_RECORD_FLAG_TOMBSTONE`. Deleted objects return zero entries;
+re-creation (a newer non-tombstone event) clears the deleted state; the raw
+`query_object` keeps serving the full audit history including deletion
+events. `keystone_temporal_index_object_is_deleted()` exposes the as-of
+deletion test directly. Deletion state derives from the timeline itself, so
+it survives persistence with the entries.
+
+### Freshness (§36)
+
+`keystone_temporal_index_watermark()` returns the index high-water mark
+(newest HLC + entry count); `keystone_hlc_staleness_ms()` computes wall-clock
+staleness for any source HLC. Together these are the uniform freshness
+contract shared with the RAG packs and keystoned responses.
+
 ### Query Execution Steps:
 1. Performs range bounding $[idx_{start}, idx_{end})$ on the monotonic timeline.
 2. Evaluates the candidate slice using vectorized 128-bit UUID comparisons (`_mm_cmpeq_epi64` / branchless SIMD).

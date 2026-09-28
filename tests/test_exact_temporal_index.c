@@ -678,6 +678,118 @@ static void test_exact_persistence_rejects_corrupt(void) {
     printf("    [+] Corrupt/truncated/malformed exact-index files all rejected.\n");
 }
 
+/*
+ * Tombstone-aware object history + uniform freshness (CITADEL brief §28/§36,
+ * audit criteria 6/7): deleted objects must not resurrect from queries,
+ * as-of bounds must see pre-deletion state, re-creation must clear deletion,
+ * and every family computes staleness the same way.
+ */
+static void test_tombstone_aware_queries_and_freshness(void) {
+    printf("[*] Testing tombstone-aware object queries and freshness...\n");
+
+    keystone_temporal_index_t* tidx = keystone_temporal_index_create(64);
+    TEST_ASSERT(tidx != NULL);
+
+    keystone_uuid_t obj_a, obj_b;
+    keystone_uuid_from_string("aaaaaaaa-0000-0000-0000-00000000000a", &obj_a);
+    keystone_uuid_from_string("bbbbbbbb-0000-0000-0000-00000000000b", &obj_b);
+
+    /* obj_a: create@T1, update@T2, TOMBSTONE@T3; obj_b: create@T2 */
+    keystone_temporal_entry_t te = {
+        .object_id = obj_a,
+        .event_type = KEYSTONE_OBJ_VM,
+        .source_generation = 1
+    };
+    te.hlc = (keystone_hlc_t){ .physical_ms = 6000100, .logical = 0, .node_id = 1 };
+    TEST_ASSERT(keystone_temporal_index_append(tidx, &te) == 0);
+    te.hlc = (keystone_hlc_t){ .physical_ms = 6000200, .logical = 0, .node_id = 1 };
+    te.source_generation = 2;
+    TEST_ASSERT(keystone_temporal_index_append(tidx, &te) == 0);
+
+    keystone_temporal_entry_t tb = {
+        .object_id = obj_b,
+        .hlc = { .physical_ms = 6000200, .logical = 0, .node_id = 1 },
+        .event_type = KEYSTONE_OBJ_VM,
+        .source_generation = 1
+    };
+    TEST_ASSERT(keystone_temporal_index_append(tidx, &tb) == 0);
+
+    keystone_temporal_entry_t ttomb = {
+        .object_id = obj_a,
+        .hlc = { .physical_ms = 6000300, .logical = 0, .node_id = 1 },
+        .event_type = KEYSTONE_OBJ_VM,
+        .flags = KEYSTONE_RECORD_FLAG_TOMBSTONE,
+        .source_generation = 3
+    };
+    TEST_ASSERT(keystone_temporal_index_append(tidx, &ttomb) == 0);
+    TEST_ASSERT(keystone_temporal_index_count(tidx) == 4);
+
+    keystone_hlc_t all_min = { .physical_ms = 0, .logical = 0, .node_id = 0 };
+    keystone_hlc_t all_max = { .physical_ms = UINT64_MAX / 2, .logical = 0xFFFFFFFFu, .node_id = 0xFFFFFFFFu };
+    keystone_hlc_t t2_max = { .physical_ms = 6000250, .logical = 0xFFFFFFFFu, .node_id = 0xFFFFFFFFu };
+
+    /* 1. Deletion state */
+    TEST_ASSERT(keystone_temporal_index_object_is_deleted(tidx, &obj_a, NULL) == true);
+    TEST_ASSERT(keystone_temporal_index_object_is_deleted(tidx, &obj_a, &t2_max) == false); /* as-of before tombstone */
+    TEST_ASSERT(keystone_temporal_index_object_is_deleted(tidx, &obj_b, NULL) == false);
+    TEST_ASSERT(keystone_temporal_index_object_is_deleted(tidx, &obj_a, NULL) == true); /* stable */
+
+    /* 2. No resurrection: the active query returns nothing for obj_a */
+    keystone_temporal_entry_t out[8];
+    TEST_ASSERT(keystone_temporal_index_query_object_active(tidx, &obj_a, &all_min, &all_max, out, 8) == 0);
+    /* while the raw timeline query still serves the full audit history */
+    TEST_ASSERT(keystone_temporal_index_query_object(tidx, &obj_a, &all_min, &all_max, out, 8) == 3);
+    TEST_ASSERT(out[2].flags & KEYSTONE_RECORD_FLAG_TOMBSTONE);
+    /* as-of window before the deletion: the object was alive */
+    TEST_ASSERT(keystone_temporal_index_query_object_active(tidx, &obj_a, &all_min, &t2_max, out, 8) == 2);
+    /* never-deleted object unaffected */
+    TEST_ASSERT(keystone_temporal_index_query_object_active(tidx, &obj_b, &all_min, &all_max, out, 8) == 1);
+
+    /* 3. Re-creation clears the deleted state */
+    keystone_temporal_entry_t recre = {
+        .object_id = obj_a,
+        .hlc = { .physical_ms = 6000400, .logical = 0, .node_id = 1 },
+        .event_type = KEYSTONE_OBJ_VM,
+        .flags = KEYSTONE_RECORD_FLAG_EVENT,
+        .source_generation = 4
+    };
+    TEST_ASSERT(keystone_temporal_index_append(tidx, &recre) == 0);
+    TEST_ASSERT(keystone_temporal_index_object_is_deleted(tidx, &obj_a, NULL) == false);
+    TEST_ASSERT(keystone_temporal_index_query_object_active(tidx, &obj_a, &all_min, &all_max, out, 8) == 4);
+    /* ...but as-of the tombstone moment it is still deleted */
+    keystone_hlc_t t3_max = { .physical_ms = 6000350, .logical = 0xFFFFFFFFu, .node_id = 0xFFFFFFFFu };
+    TEST_ASSERT(keystone_temporal_index_object_is_deleted(tidx, &obj_a, &t3_max) == true);
+    TEST_ASSERT(keystone_temporal_index_query_object_active(tidx, &obj_a, &all_min, &t3_max, out, 8) == 0);
+
+    /* 4. Watermark + staleness */
+    keystone_hlc_t wm;
+    size_t wm_count = 0;
+    TEST_ASSERT(keystone_temporal_index_watermark(tidx, &wm, &wm_count) == true);
+    TEST_ASSERT(wm_count == 5);
+    TEST_ASSERT(wm.physical_ms == 6000400);
+
+    keystone_hlc_t now_hlc = keystone_hlc_now(1);
+    TEST_ASSERT(keystone_hlc_staleness_ms(&now_hlc) < 1000u);
+    keystone_hlc_t old_hlc = { .physical_ms = now_hlc.physical_ms - 5000, .logical = 0, .node_id = 0 };
+    TEST_ASSERT(keystone_hlc_staleness_ms(&old_hlc) >= 5000u && keystone_hlc_staleness_ms(&old_hlc) < 6000u);
+    keystone_hlc_t future_hlc = { .physical_ms = now_hlc.physical_ms + 999999u, .logical = 0, .node_id = 0 };
+    TEST_ASSERT(keystone_hlc_staleness_ms(&future_hlc) == 0);
+    TEST_ASSERT(keystone_hlc_staleness_ms(NULL) == 0);
+
+    /* 5. Tombstone state survives persistence */
+    const char* path = "/tmp/keystone_temporal_tomb_test.bin";
+    TEST_ASSERT(keystone_temporal_index_save(tidx, path) == 0);
+    keystone_temporal_index_t* loaded = NULL;
+    TEST_ASSERT(keystone_temporal_index_load(&loaded, path) == 0);
+    TEST_ASSERT(keystone_temporal_index_object_is_deleted(loaded, &obj_a, &t3_max) == true);
+    TEST_ASSERT(keystone_temporal_index_query_object_active(loaded, &obj_a, &all_min, &all_max, out, 8) == 4);
+    keystone_temporal_index_destroy(loaded);
+    unlink(path);
+
+    keystone_temporal_index_destroy(tidx);
+    printf("    [+] Tombstone-aware queries and freshness verified (no resurrection; as-of bounds; watermark; staleness).\n");
+}
+
 static void test_high_throughput_query_benchmark(void) {
     printf("[*] Running 100,000 temporal range query benchmark...\n");
 
@@ -760,6 +872,7 @@ int main(void) {
     test_temporal_load_then_append_resume();
     test_temporal_empty_persist_resume();
     test_temporal_persistence_rejects_corrupt();
+    test_tombstone_aware_queries_and_freshness();
     test_high_throughput_query_benchmark();
 
     printf("=================================================================\n");

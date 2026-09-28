@@ -199,6 +199,13 @@ keystone_hlc_t keystone_hlc_now(uint32_t node_id) {
     return hlc;
 }
 
+uint64_t keystone_hlc_staleness_ms(const keystone_hlc_t* source_hlc) {
+    if (!source_hlc) return 0;
+    uint64_t now_ms = keystone_hlc_now(0).physical_ms;
+    if (source_hlc->physical_ms >= now_ms) return 0;
+    return now_ms - source_hlc->physical_ms;
+}
+
 keystone_hlc_t keystone_hlc_update(keystone_hlc_t* local_clock, const keystone_hlc_t* received_hlc) {
     if (!local_clock) {
         keystone_hlc_t empty = {0, 0, 0};

@@ -205,6 +205,13 @@ uint64_t keystone_uuid_hash64(const keystone_uuid_t* uuid);
 
 /* --- HLC Helper Functions --- */
 int keystone_hlc_compare(const keystone_hlc_t* a, const keystone_hlc_t* b);
+
+/*
+ * Milliseconds between the wall clock and a source HLC — the uniform
+ * freshness metric for every query family (CITADEL brief §36). HLCs in the
+ * future yield 0.
+ */
+uint64_t keystone_hlc_staleness_ms(const keystone_hlc_t* source_hlc);
 keystone_hlc_t keystone_hlc_now(uint32_t node_id);
 keystone_hlc_t keystone_hlc_update(keystone_hlc_t* local_clock, const keystone_hlc_t* received_hlc);
 

@@ -87,6 +87,44 @@ size_t keystone_temporal_index_query_object(
     size_t max_results
 );
 
+/*
+ * Tombstone-aware object history (CITADEL brief §28: no deleted object may
+ * resurrect from a query family). Returns entries only when the object's
+ * most recent event at or before hlc_max does NOT carry
+ * KEYSTONE_RECORD_FLAG_TOMBSTONE; a deleted object returns 0 entries. The
+ * raw query_object above still returns the full timeline (deletion events
+ * included) for audit-style scans.
+ */
+size_t keystone_temporal_index_query_object_active(
+    const keystone_temporal_index_t* index,
+    const keystone_uuid_t* object_id,
+    const keystone_hlc_t* hlc_min,
+    const keystone_hlc_t* hlc_max,
+    keystone_temporal_entry_t* out_entries,
+    size_t max_results
+);
+
+/*
+ * True when the object's latest event at or before hlc_max (or the newest
+ * overall when hlc_max is NULL) carries the TOMBSTONE flag.
+ */
+bool keystone_temporal_index_object_is_deleted(
+    const keystone_temporal_index_t* index,
+    const keystone_uuid_t* object_id,
+    const keystone_hlc_t* hlc_max
+);
+
+/*
+ * Index high-water mark: the newest HLC present and the entry count.
+ * Together with keystone_hlc_staleness_ms() this is the uniform freshness
+ * contract for the temporal family (CITADEL brief §36).
+ */
+bool keystone_temporal_index_watermark(
+    const keystone_temporal_index_t* index,
+    keystone_hlc_t* out_max_hlc,
+    size_t* out_count
+);
+
 /* Reverse-chronological scan (from newest backwards up to max_results) */
 size_t keystone_temporal_index_scan_reverse(
     const keystone_temporal_index_t* index,
