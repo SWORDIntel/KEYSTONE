@@ -7,7 +7,7 @@ nothing was modified during the sweep. Remediation status tracked in §3.
 
 Priorities set by this sweep reshape the roadmap order: loader memory-safety first
 (#1–3), then the keystoned trust model (#4–6), then label filtering (#7–8), then parity
-items.
+items. **All five tiers were remediated on 2026-09-28** — see §3.
 
 ---
 
@@ -73,11 +73,18 @@ sidecar, federated merges (hostile counts, cross-label).
 
 | Priority | Items | Status |
 |---|---|---|
-| P0 — trigram loader memory safety (#1,2,3,9,10) | validation pass + save hardening + hostile-file tests | OPEN (next) |
-| P1 — keystoned trust model (#4,5,11,12,15) | SO_PEERCRED auth, live compartment+tenant checks, DoS hardening | OPEN |
-| P2 — label enforcement (#6,7) | SECURITY_SENSITIVE gating everywhere, RAG per-item filtering + mandatory sec ctx | OPEN |
-| P3 — merge hardening (#8) | checked arithmetic + label filtering in federated merges | OPEN |
-| P4 — parity items (#13,14,16,17,18) | checkpoint/tar_zst/envelope strictness, watermark bounds | OPEN |
+| P0 — trigram loader memory safety (#1,2,3,9,10) | validation pass + save hardening + hostile-file tests | **FIXED** — `06e8b95` (fstat bounds, slice+doc-id validation, CRC trailer + atomic save, 8-case test matrix) |
+| P1 — keystoned trust model (#4,5,11,12,15) | SO_PEERCRED auth, tenant checks, DoS hardening | **FIXED** — `c0ead0e` (same-uid peer auth, strict tenant isolation + tenant-bound ingest, SENSITIVE-at-SECRET, fetch-cap OOB, 10s recv timeout, strict frames, /run default socket; negative tests) |
+| P2 — label enforcement (#6,7) | SECURITY_SENSITIVE gating, RAG per-item filtering + mandatory sec ctx | **FIXED** — `646c6a7` (RAG: mandatory authz, per-event classification/tenant/SENSITIVE filter, neighbor exclusion, events OOB fix; tests) |
+| P3 — merge hardening (#8) | checked arithmetic in federated merges | **FIXED** — `322df76` (checked add/mul, fail-closed on hostile counts, test). Merge-level label filtering deferred to the federation-transport API work (merges are in-process calls over caller-owned arrays today) |
+| P4 — parity items (#13,14,16,17,18,19,20) | checkpoint/envelope/tar_zst strictness, watermark bounds, table growth | **FIXED** — `acc5d20` (checkpoint reserved+exact-size+tests, envelope reserved/empty-CRC strictness, watermark caps + unbrick test, next_pow2 guards, tombstone-growth propagation, bloom-hash clamp, aggregation wrap guard, borrow documented) |
+
+Residuals (accepted, tracked): compartments on keystoned queries remain structurally
+absent because neither the exact/temporal entries nor the wire envelope carry a
+compartment field — closing it needs the `sci` field added to the QIHSE envelope
+(a cross-repo wire-version decision, flagged in the alignment audit §3); merge-output
+label filtering lands with the federation transport. Anomalies/incidents carry no
+per-item classification fields (scoped by target resource only).
 
 Fixed during the same session (found by the new sanitizer matrix, not this sweep):
 trigram serial-build merge crash (`83199e3`), uninitialized-UUID wire leak in the
