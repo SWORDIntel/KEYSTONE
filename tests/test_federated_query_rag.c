@@ -331,6 +331,32 @@ static void test_rag_context_retrieval_and_model_governance(void) {
     keystone_topology_destroy(topo);
 }
 
+
+/*
+ * Hostile node counts must fail closed, not overflow the merge pool
+ * (security sweep 2026-09-28 #8).
+ */
+static void test_merge_rejects_hostile_counts(void) {
+    printf("[*] Testing federated merge hostile-count rejection...\n");
+
+    keystone_temporal_entry_t one[2];
+    memset(one, 0, sizeof(one));
+    one[1].hlc.physical_ms = 20;
+    const keystone_temporal_entry_t* recs[2] = { one, one };
+    size_t hostile_counts[2] = { 2, SIZE_MAX };
+
+    keystone_temporal_entry_t out[4];
+    keystone_partial_status_t st;
+    size_t n = keystone_federated_merge_timelines(recs, hostile_counts, 2, out, 4, &st);
+    TEST_ASSERT(n == 0); /* overflow rejected, nothing merged */
+
+    size_t hostile_counts2[2] = { SIZE_MAX / 2, SIZE_MAX / 2 };
+    n = keystone_federated_merge_timelines(recs, hostile_counts2, 2, out, 4, &st);
+    TEST_ASSERT(n == 0);
+
+    printf("    [+] Hostile merge counts rejected without overflow.\n");
+}
+
 int main(void) {
     setbuf(stdout, NULL);
     setbuf(stderr, NULL);
@@ -340,6 +366,7 @@ int main(void) {
 
     test_federated_node_registry_and_conflict_resolution();
     test_federated_timeline_and_topk_merging();
+    test_merge_rejects_hostile_counts();
     test_rag_context_retrieval_and_model_governance();
 
     printf("\nAll Federated Query and AI/RAG Context tests passed!\n");

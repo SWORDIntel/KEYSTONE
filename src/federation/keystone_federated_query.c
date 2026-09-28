@@ -158,7 +158,11 @@ size_t keystone_federated_merge_timelines(
     uint32_t responding = 0;
     for (size_t n = 0; n < num_nodes; n++) {
         if (node_records[n] != NULL && record_counts[n] > 0) {
-            total_incoming += record_counts[n];
+            /* Hostile node counts must not overflow the pool sizing
+             * (sweep 2026-09-28 #8): fail closed on arithmetic overflow. */
+            if (!checked_add_size(total_incoming, record_counts[n], &total_incoming)) {
+                return 0;
+            }
             responding++;
         }
     }
@@ -174,7 +178,9 @@ size_t keystone_federated_merge_timelines(
 
     if (total_incoming == 0) return 0;
 
-    keystone_temporal_entry_t* pool = (keystone_temporal_entry_t*)malloc(total_incoming * sizeof(keystone_temporal_entry_t));
+    size_t pool_bytes = 0;
+    if (!checked_mul_size(total_incoming, sizeof(keystone_temporal_entry_t), &pool_bytes)) return 0;
+    keystone_temporal_entry_t* pool = (keystone_temporal_entry_t*)malloc(pool_bytes);
     if (!pool) return 0;
 
     size_t pool_idx = 0;
@@ -234,7 +240,10 @@ size_t keystone_federated_merge_topk_incidents(
 
     for (size_t n = 0; n < num_nodes; n++) {
         if (node_matches[n] != NULL && match_counts[n] > 0) {
-            total_incoming += match_counts[n];
+            /* Sweep #8: fail closed on pool-sizing overflow. */
+            if (!checked_add_size(total_incoming, match_counts[n], &total_incoming)) {
+                return 0;
+            }
             responding++;
             for (size_t i = 0; i < match_counts[n]; i++) {
                 if (node_matches[n][i].incident.index_generation > max_gen) {
@@ -254,7 +263,9 @@ size_t keystone_federated_merge_topk_incidents(
 
     if (total_incoming == 0) return 0;
 
-    keystone_incident_match_t* pool = (keystone_incident_match_t*)malloc(total_incoming * sizeof(keystone_incident_match_t));
+    size_t pool_bytes = 0;
+    if (!checked_mul_size(total_incoming, sizeof(keystone_incident_match_t), &pool_bytes)) return 0;
+    keystone_incident_match_t* pool = (keystone_incident_match_t*)malloc(pool_bytes);
     if (!pool) return 0;
 
     size_t pool_idx = 0;
