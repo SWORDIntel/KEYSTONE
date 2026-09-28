@@ -205,13 +205,26 @@ All downgrades, no upgrades (files edited in the same change set):
 
 ## 6. Handoff to the operator
 
-1. **Fix rollout retires the feed workaround (operator decision).** The deployed
-   `libkeystone.so` (`/mnt/external-nvme/INFRA/KEYSTONE`, `/opt/keystone`) predates this fix.
-   The production spool's temporal index (4 entries) is in the overflow window: **do not
-   resume it on the old library.** After the fixed library is deployed, `load_all`'s
-   temporal-rebuild workaround in `keystone_journal_feed.py` can be switched to a real
-   `keystone_temporal_index_load` resume (the on-disk format is unchanged, so existing spool
-   files load as-is). parrot-sabot was not modified in this pass, per instructions.
+1. **Fix rollout retires the feed workaround — EXECUTED 2026-09-28 (later the same day).**
+   The fixed `libkeystone.so` (commit `0ae7b83`, SHA-256
+   `e4801b25c7e61756e45140c2a1e5ea763304e69494cea5f1ca36b5ca69e49528`) was deployed
+   atomically to `/mnt/external-nvme/INFRA/KEYSTONE/libkeystone.so` (feed/parrotagent
+   primary) and `/opt/keystone/lib/libkeystone.so` (legacy fallback), each keeping a
+   `.pre-0ae7b83.bak` rollback copy. Both deployments were functionally verified by
+   loading the production 4-entry `temporal.index` spool and appending past the loaded
+   count in-process (the exact pre-fix overflow path) — heap intact. The feed's
+   `load_all` workaround was then retired (parrot-sabot `ce9cba9`): the temporal index
+   now resumes like the exact index, with corrupt-spool fallback to the rebuild path;
+   read-only fleet confirmation shows `temporal: resumed 4 entries (load ok)` and
+   `--verify` matching the pre-rollout baseline (3/4; the `audit_log` drift item
+   unchanged). The original guidance is retained below for the record.
+   The deployed `libkeystone.so` (`/mnt/external-nvme/INFRA/KEYSTONE`, `/opt/keystone`)
+   predates this fix at audit time. The production spool's temporal index (4 entries)
+   is in the overflow window: **do not resume it on the old library.** After the fixed
+   library is deployed, `load_all`'s temporal-rebuild workaround in
+   `keystone_journal_feed.py` can be switched to a real `keystone_temporal_index_load`
+   resume (the on-disk format is unchanged, so existing spool files load as-is).
+   parrot-sabot was not modified during the audit pass, per instructions.
 2. **Same-generation content drift on `audit_log`** (§4): the journal writer appears to have
    rewritten batch content under an unchanged `seq` after the feed captured it. The verifier
    catches it, but generation-only staleness cannot. Consider advancing `seq` (or versioning
