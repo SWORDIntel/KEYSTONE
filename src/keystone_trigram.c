@@ -2637,6 +2637,7 @@ static int ks_merge_local_builders(
 
         for (size_t t = 0u; t < thread_count; t++) {
             ks_local_builder_t* b = &builders[t];
+            if (b->num_buckets == 0u || !b->bucket_keys) continue; /* never initialized */
             size_t mask = b->num_buckets - 1u;
             size_t bidx = (size_t)(((uint64_t)key * 11400714819323198485ULL) >> 32) & mask;
             while (b->bucket_keys[bidx] != TRIGRAM_KEY_EMPTY && b->bucket_keys[bidx] != key) {
@@ -2714,6 +2715,12 @@ int keystone_trigram_index_build_parallel(
         thread_count = 1u;
 #endif
     }
+#if !defined(_OPENMP)
+    /* Serial build: the doc loop below only drives builders[0], so merging
+     * more than one (uninitialized) builder would read through a wrapped
+     * num_buckets mask and a NULL bucket_keys. */
+    thread_count = 1u;
+#endif
     if (thread_count > 64u) thread_count = 64u;
     if (thread_count > doc_count) thread_count = (unsigned)doc_count;
 

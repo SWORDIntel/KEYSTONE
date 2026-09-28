@@ -55,7 +55,9 @@ static void test_service_lifecycle_and_security(void) {
     keystone_uuid_from_string("eeeeeeee-0000-0000-0000-000000000001", &evt1);
     keystone_uuid_from_string("eeeeeeee-0000-0000-0000-000000000002", &evt2);
     keystone_uuid_from_string("eeeeeeee-0000-0000-0000-000000000003", &evt3);
-    keystone_uuid_from_string("nnnnnnnn-0000-0000-0000-000000000001", &node);
+    /* valid hex: from_string fails closed on non-hex input and would leave the
+ * UUID uninitialized (valgrind: uninit bytes serialized onto the wire) */
+    TEST_ASSERT(keystone_uuid_from_string("dddddddd-0000-0000-0000-000000000001", &node) == 0);
 
     keystone_federation_record_t r1 = {
         .source_object_id = id_unclass, .source_event_id = evt1, .source_node_id = node,
