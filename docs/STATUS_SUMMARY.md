@@ -126,8 +126,10 @@ Local test/benchmark success is not production verification. Current evidence ti
   cluster (2026-09-26; re-verified read-only 2026-09-28, 3/4 items consistent, 1 item showing
   source-side same-generation content drift — see the audit).
 - **Implemented + locally tested:** Phases 0–7 engines and their test binaries (above),
-  plus a clean ASan/UBSan and valgrind matrix over the temporal + federation suites (2026-09-28,
-  first recorded run; not yet wired as CI targets).
+  plus a clean ASan/UBSan and valgrind matrix over the C suites — wired as first-class
+  `make asan` / `make valgrind` targets (2026-09-28; the full-suite matrix also surfaced
+  and fixed a latent serial-build crash in the trigram parallel builder and an
+  uninitialized-UUID leak in the keystoned test).
 - **Not verified / partial:** keystoned is not deployed anywhere; the federated query
   coordinator has no network transport; no KEYSTONE-side consumer of QIHSE's
   `KEYSTONE.FEED.NEXT` wire command exists yet; fuzzing and physical security partitioning are

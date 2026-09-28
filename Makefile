@@ -164,7 +164,7 @@ BENCH_SRC := benchmarks/dsmil_benchmark.c benchmarks/performance_proof.c benchma
 BENCH_BIN := benchmarks/dsmil_benchmark benchmarks/performance_proof benchmarks/trigram_benchmark \
              benchmarks/bench_memory_ramp benchmarks/bench_federation
 
-.PHONY: all lib tests test check run-tests benchmarks clean tgrep keystoned
+.PHONY: all lib tests test check run-tests benchmarks clean tgrep keystoned asan valgrind
 
 all: lib tests benchmarks bin/tgrep bin/keystoned
 
@@ -193,6 +193,16 @@ check: tests
 	done
 
 run-tests: check
+
+# --- Sanitizer matrix (isolated build; never touches in-place objects) ---
+# Excluded: Fortran-backed tests (gfortran objects are not instrumented) and
+# the CUDA hardware-in-the-loop test (needs the nvcc-built backend; its
+# fallback contracts are covered by the native check run).
+SAN_TEST_SRC := $(filter-out tests/test_fortran_%.c tests/test_cuda_backend.c,$(TEST_SRC))
+SAN_LDFLAGS := -lm -ldl -lpthread $(TAR_ZST_LDFLAGS)
+
+asan valgrind: | bin
+	@./scripts/run_sanitizers.sh $(@) "$(CC)" "$(TAR_ZST_CFLAGS)" "$(SAN_LDFLAGS)" $(SRC) $(SAN_TEST_SRC)
 
 benchmarks: $(BENCH_BIN)
 

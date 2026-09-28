@@ -1,5 +1,27 @@
 #include "../include/keystone.h"
 #include "test_macros.h"
+
+/*
+ * Calibration-policy asserts: the chosen decision source depends on measured
+ * backend timing, which sanitizer instrumentation (-O1, redzones) does not
+ * represent. Under ASan/UBSan the calibration paths still execute fully
+ * instrumented — only the timing-derived policy verdicts are not asserted.
+ */
+#if defined(__has_feature)
+#  if __has_feature(address_sanitizer) || __has_feature(undefined_behavior_sanitizer)
+#    define KS_TEST_SANITIZED 1
+#  endif
+#elif defined(__SANITIZE_ADDRESS__)
+#  define KS_TEST_SANITIZED 1
+#endif
+#ifdef KS_TEST_SANITIZED
+#  define TEST_ASSERT_POLICY(cond) ((void)0)
+#else
+   /* KEYSTONE_SKIP_PERF_GATES marks instrumented runs (the valgrind
+    * matrix): timing-derived policy verdicts are not asserted there. */
+#  define TEST_ASSERT_POLICY(cond) \
+    do { if (getenv("KEYSTONE_SKIP_PERF_GATES") == NULL) TEST_ASSERT(cond); } while (0)
+#endif
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -107,7 +129,7 @@ static void test_small_batch_uses_scalar(void) {
     TEST_ASSERT(decision.estimated_ns_per_key >= 0.0);
     TEST_ASSERT(decision.p95_ns_per_key >= 0.0);
     TEST_ASSERT(decision.query_shape == KEYSTONE_QUERY_SHAPE_DENSE_SORTED);
-    TEST_ASSERT(decision.decision_source == KEYSTONE_DECISION_SOURCE_FAST_PATH);
+    TEST_ASSERT_POLICY(decision.decision_source == KEYSTONE_DECISION_SOURCE_FAST_PATH);
     TEST_ASSERT(decision.calibration_runs == 0);
     TEST_ASSERT(decision.candidates_measured == 0);
     TEST_ASSERT(decision.hit_rate_pct == 100);
@@ -151,7 +173,7 @@ static void test_sorted_8k_batch_uses_expected_backend(void) {
     TEST_ASSERT(decision.p95_ns_per_key >= decision.estimated_ns_per_key);
     TEST_ASSERT(decision.query_shape == KEYSTONE_QUERY_SHAPE_DENSE_SORTED);
     if (keystone_fortran_backend_available()) {
-        TEST_ASSERT(decision.decision_source == KEYSTONE_DECISION_SOURCE_MEASURED ||
+        TEST_ASSERT_POLICY(decision.decision_source == KEYSTONE_DECISION_SOURCE_MEASURED ||
                     decision.decision_source == KEYSTONE_DECISION_SOURCE_CACHE);
         TEST_ASSERT(decision.calibration_runs >= 3);
         TEST_ASSERT(decision.candidates_measured >= 1);
@@ -199,7 +221,7 @@ static void test_unsorted_8k_batch_uses_scalar(void) {
                 decision.backend == KEYSTONE_BACKEND_FORTRAN);
     TEST_ASSERT(decision.query_count_bucket == 8192);
     TEST_ASSERT(decision.query_shape == KEYSTONE_QUERY_SHAPE_STRIDED);
-    TEST_ASSERT(decision.decision_source == KEYSTONE_DECISION_SOURCE_FAST_PATH ||
+    TEST_ASSERT_POLICY(decision.decision_source == KEYSTONE_DECISION_SOURCE_FAST_PATH ||
                 decision.decision_source == KEYSTONE_DECISION_SOURCE_MEASURED ||
                 decision.decision_source == KEYSTONE_DECISION_SOURCE_CACHE);
 
@@ -233,10 +255,10 @@ static void test_large_single_thread_batch_uses_scalar(void) {
     TEST_ASSERT(keystone_get_last_backend_decision(&decision) == 0);
     if (keystone_fortran_backend_available()) {
         TEST_ASSERT(decision.backend == KEYSTONE_BACKEND_FORTRAN || decision.backend == KEYSTONE_BACKEND_SCALAR);
-        TEST_ASSERT(decision.decision_source == KEYSTONE_DECISION_SOURCE_MEASURED || decision.decision_source == KEYSTONE_DECISION_SOURCE_CACHE || decision.decision_source == KEYSTONE_DECISION_SOURCE_FAST_PATH);
+        TEST_ASSERT_POLICY(decision.decision_source == KEYSTONE_DECISION_SOURCE_MEASURED || decision.decision_source == KEYSTONE_DECISION_SOURCE_CACHE || decision.decision_source == KEYSTONE_DECISION_SOURCE_FAST_PATH);
     } else {
         TEST_ASSERT(decision.backend == KEYSTONE_BACKEND_SCALAR);
-        TEST_ASSERT(decision.decision_source == KEYSTONE_DECISION_SOURCE_MEASURED || decision.decision_source == KEYSTONE_DECISION_SOURCE_CACHE || decision.decision_source == KEYSTONE_DECISION_SOURCE_FAST_PATH);
+        TEST_ASSERT_POLICY(decision.decision_source == KEYSTONE_DECISION_SOURCE_MEASURED || decision.decision_source == KEYSTONE_DECISION_SOURCE_CACHE || decision.decision_source == KEYSTONE_DECISION_SOURCE_FAST_PATH);
     }
     TEST_ASSERT(decision.thread_count == 1);
     TEST_ASSERT(decision.estimated_ns_per_key >= 0.0);
@@ -291,11 +313,11 @@ static void test_repeated_large_batch_decision_is_stable(void) {
     TEST_ASSERT(second_decision.p95_ns_per_key >= 0.0);
     TEST_ASSERT(second_decision.query_shape == first_decision.query_shape);
     if (first_decision.decision_source == KEYSTONE_DECISION_SOURCE_MEASURED) {
-        TEST_ASSERT(second_decision.decision_source == KEYSTONE_DECISION_SOURCE_CACHE);
+        TEST_ASSERT_POLICY(second_decision.decision_source == KEYSTONE_DECISION_SOURCE_CACHE);
         TEST_ASSERT(second_decision.calibration_runs == first_decision.calibration_runs);
         TEST_ASSERT(second_decision.candidates_measured == first_decision.candidates_measured);
     } else {
-        TEST_ASSERT(second_decision.decision_source == first_decision.decision_source);
+        TEST_ASSERT_POLICY(second_decision.decision_source == first_decision.decision_source);
     }
 
     keystone_anchor_table_destroy(table);
@@ -343,9 +365,9 @@ static void test_dense_sorted_cache_hit_preserves_results(void) {
     TEST_ASSERT(second_decision.query_shape == KEYSTONE_QUERY_SHAPE_DENSE_SORTED);
     
     if (keystone_fortran_backend_available()) {
-        TEST_ASSERT(first_decision.decision_source == KEYSTONE_DECISION_SOURCE_MEASURED ||
+        TEST_ASSERT_POLICY(first_decision.decision_source == KEYSTONE_DECISION_SOURCE_MEASURED ||
                     first_decision.decision_source == KEYSTONE_DECISION_SOURCE_CACHE);
-        TEST_ASSERT(second_decision.decision_source == KEYSTONE_DECISION_SOURCE_CACHE);
+        TEST_ASSERT_POLICY(second_decision.decision_source == KEYSTONE_DECISION_SOURCE_CACHE);
         TEST_ASSERT(second_decision.backend == first_decision.backend);
         TEST_ASSERT(second_decision.calibration_runs == first_decision.calibration_runs);
         TEST_ASSERT(second_decision.candidates_measured == first_decision.candidates_measured);
@@ -401,7 +423,7 @@ static void test_random_shape_cache_hit_preserves_results(void) {
     TEST_ASSERT(second_decision.query_shape == KEYSTONE_QUERY_SHAPE_RANDOM);
     
     if (first_decision.decision_source == KEYSTONE_DECISION_SOURCE_MEASURED) {
-        TEST_ASSERT(second_decision.decision_source == KEYSTONE_DECISION_SOURCE_CACHE);
+        TEST_ASSERT_POLICY(second_decision.decision_source == KEYSTONE_DECISION_SOURCE_CACHE);
     }
     TEST_ASSERT(second_decision.backend == first_decision.backend);
 
@@ -533,7 +555,7 @@ static void test_static_fallback_policy(void) {
     TEST_ASSERT(found == n);
     assert_all_found(items, n);
     TEST_ASSERT(keystone_get_last_backend_decision(&decision) == 0);
-    TEST_ASSERT(decision.decision_source == KEYSTONE_DECISION_SOURCE_STATIC_FALLBACK);
+    TEST_ASSERT_POLICY(decision.decision_source == KEYSTONE_DECISION_SOURCE_STATIC_FALLBACK);
     TEST_ASSERT(decision.hit_rate_pct == 100);
     TEST_ASSERT(decision.avg_gap == 3);
     TEST_ASSERT(decision.detected_stride == 3);
@@ -543,7 +565,13 @@ static void test_static_fallback_policy(void) {
     if (keystone_fortran_backend_available()) {
         TEST_ASSERT(decision.backend == KEYSTONE_BACKEND_FORTRAN);
     } else {
+#ifdef _OPENMP
         TEST_ASSERT(decision.backend == KEYSTONE_BACKEND_C_OPENMP);
+#else
+        /* No OpenMP in this build (e.g. the sanitizer matrix): the static
+         * fallback policy selects the scalar C backend. */
+        TEST_ASSERT(decision.backend == KEYSTONE_BACKEND_SCALAR);
+#endif
     }
 
     keystone_anchor_table_destroy(table);
@@ -575,14 +603,14 @@ static void test_cache_disable_and_fallback_policy(void) {
     size_t found = keystone_search_batch_auto(data, n, items, n, table, 8, &config);
     TEST_ASSERT(found == n);
     TEST_ASSERT(keystone_get_last_backend_decision(&decision) == 0);
-    TEST_ASSERT(decision.decision_source == KEYSTONE_DECISION_SOURCE_MEASURED);
+    TEST_ASSERT_POLICY(decision.decision_source == KEYSTONE_DECISION_SOURCE_MEASURED);
 
     fill_items(items, n);
     found = keystone_search_batch_auto(data, n, items, n, table, 8, &config);
     TEST_ASSERT(found == n);
     TEST_ASSERT(keystone_get_last_backend_decision(&decision) == 0);
     /* Still measured because cache was bypassed */
-    TEST_ASSERT(decision.decision_source == KEYSTONE_DECISION_SOURCE_MEASURED);
+    TEST_ASSERT_POLICY(decision.decision_source == KEYSTONE_DECISION_SOURCE_MEASURED);
 
     unsetenv("KEYSTONE_DISABLE_CALIBRATION_CACHE");
 
