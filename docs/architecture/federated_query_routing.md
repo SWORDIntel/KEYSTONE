@@ -145,3 +145,28 @@ If Site Gamma is unreachable:
 - Returns the merged records with `partial_status = KEYSTONE_PARTIAL_INCOMPLETE`.
 - Logs the unreachable nodes in the response header.
 - The CITADEL control plane consumes the available evidence while remaining aware that regional data from Site Gamma is missing.
+
+
+---
+
+## Transport (implemented 2026-09-29)
+
+[`include/keystone_fed_transport.h`](../../include/keystone_fed_transport.h) adds the
+wire transport that feeds the merge core from real nodes:
+
+- **Wire protocol v1** (`'KSQ1'`): CRC32-checked packed request/response frames —
+  magic, version, strict reserved word, explicit lengths, one request per connection.
+  Host byte order (same-endian fleet), matching every other KEYSTONE wire format.
+- **Responder** (`keystone_fed_server_*`): a bounded TCP loop (ephemeral port by
+  default, per-connection receive timeout, connection cap) serving timeline-range and
+  exact-lookup queries from a registered index set. Server-side label enforcement:
+  entries above the caller's classification/tenant, or `SECURITY_SENSITIVE` below
+  SECRET, never leave the node. Hostile frames (bad magic/version/reserved/CRC,
+  oversized results) drop the connection without reply.
+- **Coordinator** (`keystone_fed_query_*_fanout`): sequential fan-out with a
+  per-node timeout (non-blocking connect + poll), per-node outcome statuses
+  (OK / UNREACHABLE / TIMEOUT / PROTOCOL), timeline merge via the existing
+  k-way HLC-ordered event-id-dedup core, exact resolution via
+  Epoch > Generation > HLC, and defense-in-depth label filtering before anything
+  reaches the caller. Partial failure degrades: healthy nodes' merged results are
+  returned with the failure statuses recorded.
