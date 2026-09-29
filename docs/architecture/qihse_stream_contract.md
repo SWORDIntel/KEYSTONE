@@ -118,3 +118,19 @@ When an entity (e.g. VM `d3c1...`) is deleted in QIHSE:
 KEYSTONE periodically persists double-buffered state checkpoints (`.tmp` $\to$ `fsync` $\to$ `rename`):
 - Persists `last_applied_hlc`, `fencing_epoch`, and `generation_id`.
 - On restart, KEYSTONE presents this watermark to QIHSE, requesting only delta events that occurred after `last_applied_hlc`, avoiding unnecessary full snapshot transfers.
+
+
+---
+
+## SCI compartments on the wire (2026-09-29)
+
+The KEYSTONE v1 wire envelope's spare word now carries `sci` (SCI compartment
+bits) — the same v1 spare-word extension QIHSE used for `object_type`, so no
+format version bump is required. `keystone_federation_record_t` carries the
+field end-to-end (appended after `payload_len` so struct mirrors only grow),
+serialization preserves it, and keystoned ingest denies records whose
+compartments exceed the principal's `compartment_mask`. Records with `sci ==
+0` (every legacy envelope and the journal feed's) behave exactly as before.
+Pending: QIHSE publishers emitting real compartment bits, a persisted-entry
+format v2 for query-time enforcement, and the fed-transport request frame
+mirroring the field.

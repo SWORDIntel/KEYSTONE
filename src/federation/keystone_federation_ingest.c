@@ -40,7 +40,7 @@ typedef struct {
     uint32_t tenant_id;
     uint32_t classification;
     uint32_t object_type;
-    uint32_t reserved;
+    uint32_t sci;         /* SCI compartments (v1 spare-word extension, QIHSE precedent) */
     uint64_t source_generation;
     uint64_t fencing_epoch;
     uint64_t hlc_physical_ms;
@@ -266,7 +266,7 @@ int keystone_record_serialize(
     hdr->tenant_id = rec->tenant_id;
     hdr->classification = rec->classification;
     hdr->object_type = rec->object_type;
-    hdr->reserved = 0;
+    hdr->sci = rec->sci;
     hdr->source_generation = rec->source_generation;
     hdr->fencing_epoch = rec->fencing_epoch;
     hdr->hlc_physical_ms = rec->source_hlc.physical_ms;
@@ -308,9 +308,9 @@ int keystone_record_deserialize(
     if (hdr->magic != KEYSTONE_FEDERATION_ENVELOPE_MAGIC) return -1;
     if (hdr->version != KEYSTONE_FEDERATION_ENVELOPE_VERSION) return -1;
     if (hdr->payload_len > KEYSTONE_MAX_PAYLOAD_LEN) return -1;
-    /* Strict v1 wire format (sweep #17): spare word must be zero, and an
-     * empty payload must carry a zero CRC. */
-    if (hdr->reserved != 0) return -1;
+    /* Strict v1 wire format (sweep #17): the former spare word now carries
+     * sci compartments (QIHSE spare-word precedent, same as object_type);
+     * any value is valid data. An empty payload must carry a zero CRC. */
     if (hdr->payload_len == 0 && hdr->payload_crc32 != 0) return -1;
 
     size_t total_size = 0;
@@ -333,6 +333,7 @@ int keystone_record_deserialize(
 
     memset(out_rec, 0, sizeof(*out_rec));
     out_rec->flags = hdr->flags;
+    out_rec->sci = hdr->sci;
     out_rec->tenant_id = hdr->tenant_id;
     out_rec->classification = hdr->classification;
     out_rec->object_type = hdr->object_type;

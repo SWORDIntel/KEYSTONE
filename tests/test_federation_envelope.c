@@ -450,6 +450,44 @@ static void test_high_throughput_ingest_benchmark(void) {
  * dedup authority. Exact-index application stays idempotent under replay
  * because upsert rejects non-increasing generations.
  */
+/*
+ * SCI compartments ride the v1 spare word (QIHSE spare-word precedent,
+ * same as object_type): serialize -> deserialize roundtrip preserves them,
+ * and zero remains zero for legacy envelopes.
+ */
+static void test_wire_sci_roundtrip(void) {
+    printf("[*] Testing SCI compartment roundtrip on the wire envelope...\n");
+
+    keystone_federation_record_t rec;
+    memset(&rec, 0, sizeof(rec));
+    rec.source_object_id.bytes[0] = 0x51;
+    rec.source_event_id.bytes[0] = 0x52;
+    rec.source_generation = 7;
+    rec.fencing_epoch = 1;
+    rec.classification = KEYSTONE_CLASSIFICATION_SECRET;
+    rec.tenant_id = 3;
+    rec.sci = 0x0000A5A5u;
+
+    uint8_t buf[256];
+    size_t written = 0;
+    TEST_ASSERT(keystone_record_serialize(&rec, buf, sizeof(buf), &written) == 0);
+
+    keystone_federation_record_t out;
+    memset(&out, 0xAA, sizeof(out)); /* garbage canaries: every field must be set */
+    TEST_ASSERT(keystone_record_deserialize(buf, written, &out) == 0);
+    TEST_ASSERT(out.sci == 0x0000A5A5u);
+    TEST_ASSERT(out.tenant_id == 3);
+    TEST_ASSERT(out.classification == KEYSTONE_CLASSIFICATION_SECRET);
+
+    /* legacy envelope: sci == 0 survives */
+    rec.sci = 0;
+    TEST_ASSERT(keystone_record_serialize(&rec, buf, sizeof(buf), &written) == 0);
+    TEST_ASSERT(keystone_record_deserialize(buf, written, &out) == 0);
+    TEST_ASSERT(out.sci == 0);
+
+    printf("    [+] SCI compartments carried end-to-end on the wire.\n");
+}
+
 static void test_stream_edge_cases(void) {
     printf("[*] Testing stream edge cases (replay, rollback, tombstones, ordering)...\n");
 
@@ -729,6 +767,7 @@ int main(void) {
     test_hlc_primitives();
     test_wire_serialization();
     test_ingestion_pipeline();
+    test_wire_sci_roundtrip();
     test_stream_edge_cases();
     test_offline_rebuild_from_envelopes();
     test_explainable_recommendations();
