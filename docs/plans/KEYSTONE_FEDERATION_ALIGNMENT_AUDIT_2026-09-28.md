@@ -5,6 +5,21 @@
 [`../CITADEL/docs/architecture/KEYSTONE_FEDERATION_INTELLIGENCE_UPGRADE_BRIEF.md`](../../../CITADEL/docs/architecture/KEYSTONE_FEDERATION_INTELLIGENCE_UPGRADE_BRIEF.md) §51,
 plus the temporal-index overflow fix (Task 1) and a read-only live-fleet verification run.
 
+**Headline verdict (re-scored 2026-09-29): substantially aligned; "fully aligned" remains premature.**
+Phases 0–7 were implemented and locally tested on 2026-09-20 (`fd928de` → `8858574`); the original
+scoring below was **5 of 16 fully met, 10 partial, 1 structural** with one live-verified consumer.
+The 2026-09-28/29 remediation program (security sweep fixes, then the roadmap lanes) moved the
+score to **9 of 16 fully met** (2, 4, 5, 10, 11, 12, 13, 14, 15) and **substantially improved 4
+more** (1, 6, 7, 16 — see the per-row updates). The remaining gaps are precisely: criterion 3
+(controller operability evidence, CITADEL-side), **criterion 8** (compartment enforcement —
+blocked on the QIHSE `sci` envelope field, a cross-repo wire decision), and **criterion 9**
+(exact/trigram filters not yet in the hybrid planner). The fleet library is deployed current
+through the remediation. The original verdict is retained below unchanged for the record.
+
+---
+
+## Original verdict (2026-09-28, pre-remediation)
+
 **Headline verdict: NOT "fully aligned".** Phases 0–7 are **implemented and locally tested**
 (commits `fd928de` → `8858574`, 2026-09-20), but the honest status is:
 **5 of 16 criteria fully met, 10 partial, 1 not applicable to KEYSTONE alone** — and exactly
