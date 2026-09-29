@@ -261,11 +261,15 @@ int keystoned_server_ingest(
     if (!server || !sec_ctx || !rec) return -1;
 
     /* Ingestion principal must have at least OPS or equivalent clearance,
-     * and may only ingest records for its own tenant (sweep #5). */
+     * may only ingest records for its own tenant (sweep #5), and must hold
+     * every SCI compartment the record requires (criterion 8). */
     if (sec_ctx->classification < KEYSTONE_CLASSIFICATION_OPS) {
         return KEYSTONED_STATUS_DENIED;
     }
     if (rec->tenant_id != sec_ctx->tenant_id) {
+        return KEYSTONED_STATUS_DENIED;
+    }
+    if (rec->sci != 0u && (rec->sci & ~sec_ctx->compartment_mask) != 0u) {
         return KEYSTONED_STATUS_DENIED;
     }
 

@@ -205,6 +205,28 @@ static void test_trust_model_hardening(void) {
     };
     TEST_ASSERT(keystoned_client_ingest(client, &ctx_t1_ops, &rec_t2) == KEYSTONED_STATUS_DENIED);
 
+    /* 1b. SCI compartments (criterion 8): a record requiring compartments
+     * the principal lacks is denied at ingest; a principal holding them
+     * ingests it. */
+    {
+        keystone_uuid_t id_sci, evt_sci;
+        TEST_ASSERT(keystone_uuid_from_string("44444444-0000-0000-0000-000000000004", &id_sci) == 0);
+        TEST_ASSERT(keystone_uuid_from_string("eeeeeeee-0000-0000-0000-000000000011", &evt_sci) == 0);
+        keystone_federation_record_t rec_sci = {
+            .source_object_id = id_sci, .source_event_id = evt_sci, .source_node_id = node,
+            .source_generation = 60, .fencing_epoch = 1,
+            .source_hlc = { .physical_ms = 6000100, .logical = 0, .node_id = 1 },
+            .tenant_id = 1, .classification = KEYSTONE_CLASSIFICATION_OPS,
+            .object_type = KEYSTONE_OBJ_VM, .flags = KEYSTONE_RECORD_FLAG_EVENT,
+            .sci = 0x000000F0u
+        };
+        TEST_ASSERT(keystoned_client_ingest(client, &ctx_t1_ops, &rec_sci) == KEYSTONED_STATUS_DENIED);
+        keystone_security_context_t ctx_sci_holder = {
+            .tenant_id = 1, .classification = KEYSTONE_CLASSIFICATION_OPS, .compartment_mask = 0x000000FFu
+        };
+        TEST_ASSERT(keystoned_client_ingest(client, &ctx_sci_holder, &rec_sci) == KEYSTONED_STATUS_OK);
+    }
+
     /* 2. SECURITY_SENSITIVE records are denied below SECRET, allowed at SECRET */
     keystone_uuid_t id_sens, evt_sens;
     TEST_ASSERT(keystone_uuid_from_string("33333333-0000-0000-0000-000000000003", &id_sens) == 0);

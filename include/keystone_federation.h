@@ -113,6 +113,9 @@ typedef struct {
 
     const void *payload;
     size_t payload_len;
+    uint32_t sci;         /* SCI compartment bits required (QIHSE feed contract; 0 = none).
+                           * Appended after payload_len so every pre-existing field keeps
+                           * its offset — out-of-tree struct mirrors only grow. */
 } keystone_federation_record_t;
 
 /* --- Persistent Checkpoint Structure --- */
