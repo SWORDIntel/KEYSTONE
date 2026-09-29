@@ -198,6 +198,7 @@ Governed by [`CITADEL/docs/architecture/KEYSTONE_FEDERATION_INTELLIGENCE_UPGRADE
   - Tier 1: Hard constraint evaluation with boolean pruning (security clearance, required CPU ISA flags, minimum RAM/cores, failure domain anti-affinity).
   - Tier 2: Soft objective ranking (weighted normalized free RAM, thermal headroom, CPU load, NUMA locality).
   - Emits explainable recommendation bundles (`keystone_recommendation_t`, `keystone_explain_t`) with full pass/fail constraint rationales and generation/HLC decision provenance.
+  - Combined retrieval filters (2026-09-29, brief §13): one placement query combines the planner constraints with `exact_filter` (active in the exact index), `temporal_filter` (tombstone-aware window presence), and `content_filter` (trigram document match) — Tier-1 constraints with their own explain entries, individually isolatable.
 
 ### Phase 4 & 5: Streaming Telemetry & Hardware Silicon Acceleration — COMPLETED
 - [x] **Streaming Telemetry Windows (`include/keystone_telemetry.h`, `src/telemetry/keystone_telemetry_engine.c`)**:
