@@ -184,6 +184,123 @@ static void test_hybrid_query_planner(void) {
     printf("    [+] Two-tier planner, constraint pruning, and evidence provenance verified.\n");
 }
 
+/*
+ * Combined retrieval filters (CITADEL brief §13, audit criterion 9): one
+ * placement query combining topology + exact + temporal + trigram
+ * constraints as Tier-1 filters with explain entries.
+ */
+static void test_combined_retrieval_filters(void) {
+    printf("[*] Testing combined exact+temporal+trigram placement filters...\n");
+
+    keystone_topology_graph_t* topo = keystone_topology_create(8, 8);
+    keystone_exact_index_t* exact = keystone_exact_index_create(8);
+    keystone_temporal_index_t* temporal = keystone_temporal_index_create(16);
+    keystone_trigram_index_t* tri = keystone_trigram_index_create_options(4, KEYSTONE_TRIGRAM_OPT_CASE_INSENSITIVE);
+    TEST_ASSERT(topo && exact && temporal && tri);
+
+    /* Four nodes. Expectations with all filters on:
+     *   A: exact-active yes, window event yes, doc matches pattern yes -> PASSES
+     *   B: tombstoned in exact -> pruned by exact-active
+     *   C: no event in window -> pruned by temporal-window
+     *   D: document without the pattern -> pruned by content-match
+     */
+    keystone_uuid_t na, nb, nc, nd;
+    keystone_uuid_from_string("aaaaaaaa-0000-0000-0000-000000000001", &na);
+    keystone_uuid_from_string("bbbbbbbb-0000-0000-0000-000000000002", &nb);
+    keystone_uuid_from_string("cccccccc-0000-0000-0000-000000000003", &nc);
+    keystone_uuid_from_string("dddddddd-0000-0000-0000-000000000004", &nd);
+
+    keystone_node_metrics_t m;
+    memset(&m, 0, sizeof(m));
+    m.cpu_cores = 8;
+    m.ram_total_mb = 65536;
+    m.ram_available_mb = 32768;
+    m.isa_features = 0;
+    m.classification = KEYSTONE_CLASSIFICATION_OPS;
+
+    m.node_id = na; TEST_ASSERT(keystone_topology_upsert_node(topo, &m) == 0);
+    m.node_id = nb; TEST_ASSERT(keystone_topology_upsert_node(topo, &m) == 0);
+    m.node_id = nc; TEST_ASSERT(keystone_topology_upsert_node(topo, &m) == 0);
+    m.node_id = nd; TEST_ASSERT(keystone_topology_upsert_node(topo, &m) == 0);
+
+    /* Exact: A and B present (B tombstoned); C and D absent. */
+    keystone_exact_entry_t e;
+    memset(&e, 0, sizeof(e));
+    e.resource_id = na; e.latest_generation = 10; e.fencing_epoch = 1;
+    TEST_ASSERT(keystone_exact_index_upsert(exact, &e) == 0);
+    e.resource_id = nb; e.latest_generation = 11; e.fencing_epoch = 1;
+    e.flags = KEYSTONE_RECORD_FLAG_TOMBSTONE;
+    TEST_ASSERT(keystone_exact_index_upsert(exact, &e) == 0);
+
+    /* Temporal: A and B have events in the window; C and D do not. */
+    for (int obj = 0; obj < 2; obj++) {
+        keystone_temporal_entry_t te;
+        memset(&te, 0, sizeof(te));
+        te.object_id = obj == 0 ? na : nb;
+        te.hlc = (keystone_hlc_t){ .physical_ms = 5000100, .logical = 0, .node_id = 1 };
+        te.event_type = KEYSTONE_OBJ_NODE;
+        te.flags = KEYSTONE_RECORD_FLAG_EVENT;
+        te.source_generation = 10 + obj;
+        TEST_ASSERT(keystone_temporal_index_append(temporal, &te) == 0);
+    }
+
+    /* Trigram: documents NAMED by node uuid strings; content carries the
+     * pattern for A, B, C but not D. */
+    const keystone_uuid_t* ids[4] = { &na, &nb, &nc, &nd };
+    char names[4][37];
+    for (int i = 0; i < 4; i++) {
+        keystone_uuid_to_string(ids[i], names[i]);
+        const char* content = (i < 3) ? "nvme-fabric backend node" : "sata archive node";
+        TEST_ASSERT(keystone_trigram_index_add_document(tri, names[i], content, strlen(content), NULL) == KEYSTONE_TRIGRAM_OK);
+    }
+    TEST_ASSERT(keystone_trigram_index_finalize(tri) == KEYSTONE_TRIGRAM_OK);
+
+    keystone_placement_query_t q = keystone_placement_query_default();
+    q.min_classification = KEYSTONE_CLASSIFICATION_OPS;
+    q.exact_filter = exact;
+    q.temporal_filter = temporal;
+    q.temporal_window_min = (keystone_hlc_t){ .physical_ms = 5000000, .logical = 0, .node_id = 0 };
+    q.content_filter = tri;
+    q.content_pattern = "nvme-fabric";
+
+    keystone_recommendation_t recs[8];
+    size_t n = keystone_hybrid_plan_placement(topo, &q, 1, NULL, recs, 8);
+    TEST_ASSERT(n == 1);
+    TEST_ASSERT(keystone_uuid_equal(&recs[0].recommended_target_id, &na));
+
+    /* Explain carries one entry per combined filter on the passing candidate */
+    int seen_exact = 0, seen_temporal = 0, seen_content = 0;
+    for (uint32_t i = 0; i < recs[0].evidence.hard_constraint_count; i++) {
+        const char* cn = recs[0].evidence.hard_constraints[i].constraint_name;
+        if (strcmp(cn, "exact-active") == 0) seen_exact = 1;
+        if (strcmp(cn, "temporal-window") == 0) seen_temporal = 1;
+        if (strcmp(cn, "content-match") == 0) seen_content = 1;
+    }
+    TEST_ASSERT(seen_exact && seen_temporal && seen_content);
+
+    /* Filters are individually isolatable: only-exact keeps C and D out but
+     * B stays tombstone-pruned; only-content keeps B, C in. */
+    keystone_placement_query_t q2 = keystone_placement_query_default();
+    q2.min_classification = KEYSTONE_CLASSIFICATION_OPS;
+    q2.exact_filter = exact;
+    n = keystone_hybrid_plan_placement(topo, &q2, 1, NULL, recs, 8);
+    TEST_ASSERT(n == 1); /* only A (B tombstoned, C/D absent) */
+    TEST_ASSERT(keystone_uuid_equal(&recs[0].recommended_target_id, &na));
+
+    keystone_placement_query_t q3 = keystone_placement_query_default();
+    q3.min_classification = KEYSTONE_CLASSIFICATION_OPS;
+    q3.content_filter = tri;
+    q3.content_pattern = "nvme-fabric";
+    n = keystone_hybrid_plan_placement(topo, &q3, 1, NULL, recs, 8);
+    TEST_ASSERT(n == 3); /* A, B, C all have pattern-matching documents */
+
+    keystone_topology_destroy(topo);
+    keystone_exact_index_destroy(exact);
+    keystone_temporal_index_destroy(temporal);
+    keystone_trigram_index_destroy(tri);
+    printf("    [+] Combined retrieval filters verified (exact+temporal+trigram as Tier-1 with explain).\n");
+}
+
 int main(void) {
     printf("=================================================================\n");
     printf("  KEYSTONE Phase 3: Topology Graph & Hybrid Planner Tests\n");
@@ -191,6 +308,7 @@ int main(void) {
 
     test_topology_graph_operations();
     test_hybrid_query_planner();
+    test_combined_retrieval_filters();
 
     printf("=================================================================\n");
     printf("  ALL PHASE 3 TOPOLOGY & HYBRID PLANNER TESTS PASSED (100%% GREEN)\n");

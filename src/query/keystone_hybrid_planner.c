@@ -167,6 +167,74 @@ static int compare_candidate_scores(const void* a, const void* b) {
     return 0;
 }
 
+/*
+ * Combined retrieval filters (brief §13): exact-active, temporal-window,
+ * and content-match, each a Tier-1 constraint with its own explain entry.
+ */
+static int hybrid_combined_filters_pass(const keystone_node_metrics_t* node,
+                                        const keystone_placement_query_t* query,
+                                        keystone_explain_t* explain) {
+    char rationale[160];
+
+    if (query->exact_filter) {
+        keystone_exact_entry_t e;
+        int rc = keystone_exact_index_lookup(query->exact_filter, &node->node_id, &e);
+        int ok = (rc == 0) && !(e.flags & KEYSTONE_RECORD_FLAG_TOMBSTONE);
+        if (rc != 0) {
+            snprintf(rationale, sizeof(rationale), "absent from exact index");
+        } else if (e.flags & KEYSTONE_RECORD_FLAG_TOMBSTONE) {
+            snprintf(rationale, sizeof(rationale), "tombstoned in exact index");
+        } else {
+            snprintf(rationale, sizeof(rationale), "active in exact index (gen %llu)",
+                     (unsigned long long)e.latest_generation);
+        }
+        keystone_explain_add_constraint(explain, "exact-active", ok, rationale);
+        if (!ok) return 0;
+    }
+
+    if (query->temporal_filter) {
+        keystone_hlc_t lo = query->temporal_window_min;
+        keystone_hlc_t hi = query->temporal_window_max;
+        if (hi.physical_ms == 0 && hi.logical == 0 && hi.node_id == 0) {
+            hi.physical_ms = UINT64_MAX / 2;
+            hi.logical = 0xFFFFFFFFu;
+            hi.node_id = 0xFFFFFFFFu;
+        }
+        keystone_temporal_entry_t probe;
+        size_t n = keystone_temporal_index_query_object_active(query->temporal_filter,
+                                                               &node->node_id, &lo, &hi, &probe, 1);
+        int ok = n > 0;
+        keystone_explain_add_constraint(explain, "temporal-window", ok,
+                                        ok ? "active timeline event present in window"
+                                           : "no active timeline event in window");
+        if (!ok) return 0;
+    }
+
+    if (query->content_filter && query->content_pattern && query->content_pattern[0] != '\0') {
+        char name[37];
+        keystone_uuid_to_string(&node->node_id, name);
+        size_t plen = strlen(query->content_pattern);
+        uint32_t hits[64];
+        size_t n = keystone_trigram_index_search(query->content_filter, query->content_pattern,
+                                                 plen, hits, 64);
+        int ok = 0;
+        for (size_t h = 0; h < n && !ok; h++) {
+            const char* dname = NULL;
+            if (keystone_trigram_index_get_document(query->content_filter, hits[h],
+                                                    &dname, NULL, NULL) == KEYSTONE_TRIGRAM_OK &&
+                dname && strcmp(dname, name) == 0) {
+                ok = 1;
+            }
+        }
+        keystone_explain_add_constraint(explain, "content-match", ok,
+                                        ok ? "node document matches content pattern"
+                                           : "no document matches content pattern");
+        if (!ok) return 0;
+    }
+
+    return 1;
+}
+
 size_t keystone_hybrid_plan_placement(
     const keystone_topology_graph_t* topo,
     const keystone_placement_query_t* query,
@@ -196,6 +264,9 @@ size_t keystone_hybrid_plan_placement(
         keystone_explain_t explain;
         double score = 0.0;
         int pass = keystone_hybrid_evaluate_candidate(&all_nodes[i], query, topo, &explain, &score);
+        if (pass) {
+            pass = hybrid_combined_filters_pass(&all_nodes[i], query, &explain);
+        }
         if (pass && score > 0.0) {
             candidates[qualified_count].rec.recommended_target_id = all_nodes[i].node_id;
             candidates[qualified_count].rec.target_type = KEYSTONE_OBJ_NODE;

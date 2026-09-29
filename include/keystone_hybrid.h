@@ -18,6 +18,9 @@ extern "C" {
 #endif
 
 #include "keystone_topology.h"
+#include "keystone_exact_index.h"
+#include "keystone_temporal.h"
+#include "keystone_trigram.h"
 
 /* --- Placement Query Specification --- */
 typedef struct {
@@ -34,6 +37,19 @@ typedef struct {
     float weight_thermal_headroom;    /* Prefer cooler hosts */
     float weight_cpu_headroom;        /* Prefer hosts with lower CPU load */
     float weight_numa_locality;       /* Prefer compact NUMA topologies */
+
+    /*
+     * Combined retrieval filters (CITADEL brief §13, added 2026-09-29) —
+     * one query layer combining exact + topology + temporal + content
+     * constraints. All optional: NULL / zero disables the filter. Each is
+     * enforced as a Tier-1 (hard) constraint with its own explain entry.
+     */
+    const keystone_exact_index_t* exact_filter;   /* candidate must exist in the exact index and not be tombstoned */
+    const keystone_temporal_index_t* temporal_filter; /* candidate must have >=1 timeline event in the window */
+    keystone_hlc_t temporal_window_min;           /* window start (zero HLC = from the beginning) */
+    keystone_hlc_t temporal_window_max;           /* window end (zero HLC = up to the newest) */
+    keystone_trigram_index_t* content_filter; /* candidate's node-id string must appear among matching document names (non-const: search updates index stats) */
+    const char* content_pattern;                  /* trigram pattern (short patterns match everything) */
 } keystone_placement_query_t;
 
 /* Default balanced placement query helper */
