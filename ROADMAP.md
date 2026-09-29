@@ -159,6 +159,8 @@ Governed by [`CITADEL/docs/architecture/KEYSTONE_FEDERATION_INTELLIGENCE_UPGRADE
   - High-throughput deduplication hash ring rejecting duplicate event UUIDs idempotently. Measured rates in [`benchmarks/FEDERATION_BENCHMARK.md`](benchmarks/FEDERATION_BENCHMARK.md) (5.04M events/sec, 198 ns/event on the 2026-09-20 benchmark host; host- and load-dependent).
 - [x] **Tombstone Registry & Fencing Epoch Protection**:
   - Instant negative lookup masking via `keystone_federation_is_tombstoned()` upon receiving tombstone flags. Rejection of stale fencing epochs (`KEYSTONE_INGEST_STALE_FENCING_EPOCH`).
+- [x] **Snapshot Bootstrap & Live Handoff (2026-09-29)**:
+  - `keystone_bootstrap.h`: snapshot format (exact+temporal state + generation/cursor/HLC watermark) at the full hostile-input bar; `keystone_bootstrap_begin/apply_live/snapshot_now` implement the exact-cursor handoff — snapshot-covered events are detected (`INGEST_DUPLICATE`) and never double-applied to the timeline, live-era events flow the normal ingest path. Equivalence-tested (snapshot+replay == all-live) and included in the persistence fuzz corpus.
 - [x] **Atomic Checkpoint Persistence**:
   - Double-buffered atomic persistence (`.tmp` + `fsync()` + `rename()`) with CRC32 verification restoring engine watermark, epoch, and generation states.
 - [x] **Explainable Recommendation Bundles**:

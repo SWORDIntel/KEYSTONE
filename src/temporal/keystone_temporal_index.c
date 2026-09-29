@@ -383,6 +383,11 @@ size_t keystone_temporal_index_count(const keystone_temporal_index_t* index) {
     return index ? index->count : 0;
 }
 
+const keystone_temporal_entry_t* keystone_temporal_index_entries(const keystone_temporal_index_t* index) {
+    if (!index || index->count == 0) return NULL;
+    return index->entries;
+}
+
 /* Binary Persistence */
 
 int keystone_temporal_index_save(

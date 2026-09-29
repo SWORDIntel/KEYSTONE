@@ -267,6 +267,18 @@ size_t keystone_exact_index_count(const keystone_exact_index_t* index) {
     return index ? index->count : 0;
 }
 
+size_t keystone_exact_index_capacity(const keystone_exact_index_t* index) {
+    return index ? index->capacity : 0;
+}
+
+bool keystone_exact_index_slot_at(const keystone_exact_index_t* index, size_t slot,
+                                  keystone_exact_entry_t* out_entry) {
+    if (!index || !out_entry || slot >= index->capacity) return false;
+    if (!index->slots[slot].occupied) return false;
+    *out_entry = index->slots[slot].entry;
+    return true;
+}
+
 size_t keystone_exact_index_active_count(const keystone_exact_index_t* index) {
     return index ? index->active_count : 0;
 }

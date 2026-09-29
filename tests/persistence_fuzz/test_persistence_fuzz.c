@@ -19,6 +19,7 @@
 #include "../../include/keystone_exact_index.h"
 #include "../../include/keystone_temporal.h"
 #include "../../include/keystone_trigram.h"
+#include "../../include/keystone_bootstrap.h"
 #include "../test_macros.h"
 
 #include <stdio.h>
@@ -91,6 +92,19 @@ static int load_checkpoint(const char* path) {
     return 0;
 }
 
+static int load_snapshot(const char* path) {
+    keystone_exact_index_t* ex = NULL;
+    keystone_temporal_index_t* tp = NULL;
+    keystone_snapshot_meta_t meta;
+    if (keystone_snapshot_load(path, &ex, &tp, &meta) != 0) return -1;
+    /* accepted snapshots must be usable */
+    keystone_exact_index_count(ex);
+    keystone_temporal_index_count(tp);
+    keystone_exact_index_destroy(ex);
+    keystone_temporal_index_destroy(tp);
+    return 0;
+}
+
 static int load_trigram(const char* path) {
     keystone_trigram_index_t* idx = keystone_trigram_index_load(path);
     if (!idx) return -1;
@@ -151,7 +165,7 @@ static void fuzz_file(const char* label, const char* valid_path, const char* wor
 }
 
 static void build_valid_files(char* temporal_path, char* exact_path, char* cp_path, char* trigram_path,
-                              size_t buf_len) {
+                              char* snap_path, size_t buf_len) {
     /* temporal: 6 entries (inside the <=16 danger window) */
     keystone_temporal_index_t* t = keystone_temporal_index_create(8);
     TEST_ASSERT(t != NULL);
@@ -205,6 +219,35 @@ static void build_valid_files(char* temporal_path, char* exact_path, char* cp_pa
     TEST_ASSERT(keystone_trigram_index_finalize(g) == KEYSTONE_TRIGRAM_OK);
     TEST_ASSERT(keystone_trigram_index_save(g, trigram_path) == KEYSTONE_TRIGRAM_OK);
     keystone_trigram_index_destroy(g);
+
+    /* snapshot built from small fresh indexes (uses the two loaders above
+     * only via the same public APIs; independent for clarity) */
+    {
+        keystone_exact_index_t* se = keystone_exact_index_create(8);
+        keystone_temporal_index_t* stp = keystone_temporal_index_create(8);
+        TEST_ASSERT(se != NULL && stp != NULL);
+        for (size_t i = 1; i <= 3; i++) {
+            keystone_uuid_t id;
+            memset(&id, 0, sizeof(id));
+            id.bytes[0] = (uint8_t)i;
+            keystone_exact_entry_t ent = {
+                .resource_id = id, .latest_generation = i, .fencing_epoch = 1,
+                .tenant_id = 1, .classification = KEYSTONE_CLASSIFICATION_OPS
+            };
+            TEST_ASSERT(keystone_exact_index_upsert(se, &ent) == 0);
+            keystone_temporal_entry_t te = {
+                .object_id = id,
+                .hlc = { .physical_ms = 9400000 + i * 10, .logical = 0, .node_id = 1 },
+                .event_type = KEYSTONE_OBJ_VM, .tenant_id = 1,
+                .classification = KEYSTONE_CLASSIFICATION_OPS,
+                .flags = KEYSTONE_RECORD_FLAG_EVENT, .source_generation = i
+            };
+            TEST_ASSERT(keystone_temporal_index_append(stp, &te) == 0);
+        }
+        TEST_ASSERT(keystone_snapshot_save(se, stp, 3, 77, snap_path) == 0);
+        keystone_exact_index_destroy(se);
+        keystone_temporal_index_destroy(stp);
+    }
     (void)buf_len;
 }
 
@@ -216,21 +259,23 @@ int main(void) {
 
     const char* dir = "/tmp/keystone_fuzz";
     mkdir(dir, 0755);
-    char tp[256], ep[256], cpp[256], gp[256], wp[256];
+    char tp[256], ep[256], cpp[256], gp[256], sp[256], wp[256];
     snprintf(tp, sizeof(tp), "%s/temporal.index", dir);
     snprintf(ep, sizeof(ep), "%s/exact.index", dir);
     snprintf(cpp, sizeof(cpp), "%s/engine.checkpoint", dir);
     snprintf(gp, sizeof(gp), "%s/trigram.index", dir);
+    snprintf(sp, sizeof(sp), "%s/boot.snapshot", dir);
     snprintf(wp, sizeof(wp), "%s/mutated.bin", dir);
 
-    build_valid_files(tp, ep, cpp, gp, sizeof(tp));
+    build_valid_files(tp, ep, cpp, gp, sp, sizeof(tp));
 
     fuzz_file("temporal", tp, wp, load_temporal);
     fuzz_file("exact   ", ep, wp, load_exact);
     fuzz_file("checkpoint", cpp, wp, load_checkpoint);
     fuzz_file("trigram ", gp, wp, load_trigram);
+    fuzz_file("snapshot", sp, wp, load_snapshot);
 
-    unlink(tp); unlink(ep); unlink(cpp); unlink(gp); unlink(wp); rmdir(dir);
+    unlink(tp); unlink(ep); unlink(cpp); unlink(gp); unlink(sp); unlink(wp); rmdir(dir);
 
     printf("=================================================================\n");
     printf("  PERSISTENCE FUZZ COMPLETE — NO CRASHES, NO MEMORY ERRORS\n");

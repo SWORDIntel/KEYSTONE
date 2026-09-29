@@ -145,6 +145,13 @@ size_t keystone_temporal_index_aggregate_buckets(
 
 size_t keystone_temporal_index_count(const keystone_temporal_index_t* index);
 
+/*
+ * Read-only borrow of the sorted entries array (NULL when empty). Valid
+ * until the next append or destroy; persistence layers use it to snapshot
+ * the timeline without copying twice.
+ */
+const keystone_temporal_entry_t* keystone_temporal_index_entries(const keystone_temporal_index_t* index);
+
 /* Binary Persistence */
 int keystone_temporal_index_save(
     const keystone_temporal_index_t* index,

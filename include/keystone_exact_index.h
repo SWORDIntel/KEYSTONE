@@ -75,6 +75,13 @@ bool keystone_exact_index_contains(
 );
 
 size_t keystone_exact_index_count(const keystone_exact_index_t* index);
+
+/* Introspection for snapshot/persistence layers: table capacity and
+ * slot-by-slot read access (copies the entry; returns false for empty
+ * slots or out-of-range indices). */
+size_t keystone_exact_index_capacity(const keystone_exact_index_t* index);
+bool keystone_exact_index_slot_at(const keystone_exact_index_t* index, size_t slot,
+                                  keystone_exact_entry_t* out_entry);
 size_t keystone_exact_index_active_count(const keystone_exact_index_t* index);
 size_t keystone_exact_index_tombstone_count(const keystone_exact_index_t* index);
 
