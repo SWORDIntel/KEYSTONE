@@ -388,6 +388,23 @@ const keystone_temporal_entry_t* keystone_temporal_index_entries(const keystone_
     return index->entries;
 }
 
+bool keystone_temporal_index_hlc_bounds(const keystone_temporal_index_t* index,
+                                        keystone_hlc_t* out_min, keystone_hlc_t* out_max) {
+    if (!index || index->count == 0) return false;
+    if (out_min) *out_min = index->entries[0].hlc;
+    if (out_max) *out_max = index->entries[index->count - 1].hlc;
+    return true;
+}
+
+size_t keystone_temporal_index_tombstone_count(const keystone_temporal_index_t* index) {
+    if (!index) return 0;
+    size_t n = 0;
+    for (size_t i = 0; i < index->count; i++) {
+        if (index->entries[i].flags & KEYSTONE_RECORD_FLAG_TOMBSTONE) n++;
+    }
+    return n;
+}
+
 /* Binary Persistence */
 
 int keystone_temporal_index_save(

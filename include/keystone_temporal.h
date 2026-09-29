@@ -152,6 +152,13 @@ size_t keystone_temporal_index_count(const keystone_temporal_index_t* index);
  */
 const keystone_temporal_entry_t* keystone_temporal_index_entries(const keystone_temporal_index_t* index);
 
+/* HLC bounds of the timeline (false when empty) — for index manifests. */
+bool keystone_temporal_index_hlc_bounds(const keystone_temporal_index_t* index,
+                                        keystone_hlc_t* out_min, keystone_hlc_t* out_max);
+
+/* Count of TOMBSTONE-flagged entries — for index manifests. */
+size_t keystone_temporal_index_tombstone_count(const keystone_temporal_index_t* index);
+
 /* Binary Persistence */
 int keystone_temporal_index_save(
     const keystone_temporal_index_t* index,
