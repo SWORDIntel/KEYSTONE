@@ -149,10 +149,11 @@ SRC     += src/dsmil_hash_indexer.c src/dsmil_dirty_parser.c src/dsmil_model_bri
            src/federation/keystone_federated_query.c src/query/keystone_rag_engine.c
 
 TEST_SRC += tests/test_keystone_fabric.c tests/test_cuda_backend.c tests/test_federation_envelope.c \
+            tests/persistence_fuzz/test_persistence_fuzz.c \
             tests/test_exact_temporal_index.c tests/test_keystoned_service.c \
             tests/test_topology_hybrid_planner.c tests/test_telemetry_incident_engine.c \
             tests/test_federated_query_rag.c
-TEST_BIN += bin/test_keystone_fabric bin/test_cuda_backend bin/test_federation_envelope \
+TEST_BIN += bin/test_keystone_fabric bin/test_cuda_backend bin/test_federation_envelope bin/test_persistence_fuzz \
             bin/test_exact_temporal_index bin/test_keystoned_service \
             bin/test_topology_hybrid_planner bin/test_telemetry_incident_engine \
             bin/test_federated_query_rag
@@ -226,6 +227,9 @@ src/%.o: src/%.c
 tests/%.o: tests/%.c
 	$(CC) $(CFLAGS) -c $< -o $@
 
+tests/persistence_fuzz/%.o: tests/persistence_fuzz/%.c
+	$(CC) $(CFLAGS) -c $< -o $@
+
 benchmarks/%.o: benchmarks/%.c
 	$(CC) $(CFLAGS) -c $< -o $@
 
@@ -282,6 +286,9 @@ bin/test_telemetry_incident_engine: $(OBJS) $(FORTRAN_OBJ) tests/test_telemetry_
 	$(CC) -o $@ $^ $(LDFLAGS)
 
 bin/test_federated_query_rag: $(OBJS) $(FORTRAN_OBJ) tests/test_federated_query_rag.o | bin
+	$(CC) -o $@ $^ $(LDFLAGS)
+
+bin/test_persistence_fuzz: $(OBJS) $(FORTRAN_OBJ) tests/persistence_fuzz/test_persistence_fuzz.o | bin
 	$(CC) -o $@ $^ $(LDFLAGS)
 
 # Benchmark binaries
