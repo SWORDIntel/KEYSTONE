@@ -2,7 +2,7 @@
 
 **Date**: September 2026  
 **Suite**: `benchmarks/bench_federation`  
-**License**: GNU Affero General Public License v3.0 (AGPL-3.0)  
+**License**: SWORD Restricted Source Licence v1.0 (SRSL-1.0)
 **Standard**: C11 (`-std=c11 -Wall -Wextra -Werror=implicit-function-declaration`)
 
 ---

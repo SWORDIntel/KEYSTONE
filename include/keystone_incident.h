@@ -7,7 +7,7 @@
  * Emits explainable recommendation bundles (never authoritative commands).
  *
  * Copyright (c) 2025-2026 SWORDIntel Systems. All rights reserved.
- * AGPL-3.0 License.
+ * SRSL-1.0 License.
  */
 
 #ifndef KEYSTONE_INCIDENT_H

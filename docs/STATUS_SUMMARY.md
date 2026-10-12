@@ -1,11 +1,15 @@
 <!--
-  SPDX-License-Identifier: AGPL-3.0-or-later
+  SPDX-License-Identifier: LicenseRef-SRSL-1.0
   Copyright (C) 2026 SWORDIntel. All rights reserved.
 -->
 
 # KEYSTONE Status Summary
 
 Current engineering status across core search, memory optimization, vectorized trigram indexing, vector similarity, downstream fabric integration, and the **CITADEL Federation Intelligence Upgrade (Phases 0–7)**.
+
+## KP14-SUITE analysis-output boundary (2026-10-11)
+
+The rebuilt suite's delivery order is in `../../METHRA/docs/VM9211_CORE_ROADMAP.md`. A strict Python staging boundary parses raw 16-field QIHSE feed records with explicit authentication configuration, tenant/classification/SCI checks, per-object fencing, replay/tombstone handling, and a 32 MiB aggregate memory cap. A separate non-serving SQLite boundary now commits staged state and cursor atomically and ACKs only after commit; 18 combined focused tests pass, including process-death replay. These boundaries do not publish a native index or provide analyst search. The broader Python suite has pre-existing import/native-library failures. The existing C exact/temporal/trigram engines and QIHSE fabric integration do not close those gaps. See `../ROADMAP.md` Phase 8.
 
 ---
 
@@ -131,8 +135,8 @@ Local test/benchmark success is not production verification. Current evidence ti
   and fixed a latent serial-build crash in the trigram parallel builder and an
   uninitialized-UUID leak in the keystoned test).
 - **Not verified / partial:** keystoned is not deployed anywhere; the federated query
-  coordinator has no network transport; no KEYSTONE-side consumer of QIHSE's
-  `KEYSTONE.FEED.NEXT` wire command exists yet; fuzzing and physical security partitioning are
+  coordinator has no network transport; the 2026-10-11 non-serving feed staging and
+  durable local cursor state are not a published index or classified analyst-search service; fuzzing and physical security partitioning are
   unbuilt. Full per-criterion verdicts:
   [`docs/plans/KEYSTONE_FEDERATION_ALIGNMENT_AUDIT_2026-09-28.md`](plans/KEYSTONE_FEDERATION_ALIGNMENT_AUDIT_2026-09-28.md).
 

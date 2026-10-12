@@ -1,1 +1,1 @@
-keystone
+keystone_vectorsdk_disabled

@@ -3,8 +3,10 @@ from setuptools import setup, find_packages
 setup(
     name="keystone-sdk",
     version="1.0.0",
+    license="SWORD Restricted Source Licence (SRSL-1.0)",
     description="High-Performance Target-Silicon-Tuned Search & Telemetry Engine",
     author="John Reese",
+    license="SWORD Restricted Source Licence (SRSL-1.0)",
     packages=find_packages(),
     install_requires=[
         "numpy>=1.20.0",

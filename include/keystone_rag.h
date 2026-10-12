@@ -6,7 +6,7 @@
  * metadata, security classification boundaries, and formal model governance.
  *
  * Copyright (c) 2025-2026 SWORDIntel Systems. All rights reserved.
- * AGPL-3.0 License.
+ * SRSL-1.0 License.
  */
 
 #ifndef KEYSTONE_RAG_H

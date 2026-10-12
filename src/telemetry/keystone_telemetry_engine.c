@@ -6,7 +6,7 @@
  * calculation, and multi-stage anomaly detection with structured evidence bundles.
  *
  * Copyright (c) 2025-2026 SWORDIntel Systems. All rights reserved.
- * AGPL-3.0 License.
+ * SRSL-1.0 License.
  */
 
 #include "keystone_telemetry.h"

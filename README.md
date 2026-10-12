@@ -10,7 +10,7 @@
 [![SIMD](https://img.shields.io/badge/SIMD-SSE4.2%20%7C%20AVX%20%7C%20AVX2%20%7C%20AVX--512%20%7C%20AMX-black.svg)](https://en.wikipedia.org/wiki/Advanced_Vector_Extensions)
 [![Parallel](https://img.shields.io/badge/Parallel-OpenMP-green.svg)](https://www.openmp.org/)
 [![Platform](https://img.shields.io/badge/Platform-Linux-success.svg)](https://www.kernel.org/)
-[![License](https://img.shields.io/badge/License-AGPL--3.0-red.svg)](LICENSE)
+[![License](https://img.shields.io/badge/License-SRSL--1.0-lightgrey.svg)](LICENSE)
 [![CITADEL Federation](https://img.shields.io/badge/CITADEL%20Federation-Phases%200--7%20Implemented-brightgreen.svg)](docs/architecture/federation_ingest.md)
 
 **KEYSTONE is a high-performance indexing, ingestion, search, and intelligence acceleration engine for large-scale distributed systems.** It runs as a standalone acceleration layer, powers the [CITADEL OS](https://github.com/SWORDIntel/CITADEL) federation intelligence fabric, and feeds structured data directly into [QIHSE](https://github.com/SWORDIntel/QIHSE).
@@ -218,9 +218,7 @@ It supplies fast, bounded, explainable evidence and intelligence to components t
 
 ## License
 
-**AGPL-3.0-or-later.** See [LICENSE](LICENSE) before use, modification, redistribution, hosting, or derivative work.
-
-Commercial, proprietary, or hosted use that is incompatible with AGPL obligations requires separate permission or licensing from the repository owner.
+**SWORD Restricted Source Licence (SRSL-1.0).** See [LICENSE](LICENSE). Third-party components retain their own applicable licenses; see their individual notices.
 
 ---
 

@@ -4,6 +4,8 @@ A high-performance C11/SIMD algorithmic search and indexing library featuring ru
 
 Independent repository (`SWORDIntel/KEYSTONE`), tracked as a core dependency in `SWORDIntel/INFRA` and utilized by `SWORDIntel/parrot-sabot` and `SWORDIntel/QIHSE`.
 
+**Status refresh: 2026-10-12.** First-party source and package metadata use SRSL-1.0; third-party components retain their separate notices and licenses. License application does not change KEYSTONE's role as a derived search/index layer rather than an authority for QIHSE artifacts.
+
 ---
 
 ## 1. Completed Capabilities (Status: Implemented)
@@ -233,3 +235,14 @@ Governed by [`CITADEL/docs/architecture/KEYSTONE_FEDERATION_INTELLIGENCE_UPGRADE
   - Prevents unversioned, untracked, or tampered models from influencing infrastructure recommendations.
 - [x] **Comprehensive Federated Query & RAG Test Suite (`tests/test_federated_query_rag.c`)**:
   - Validates coordinator registry, conflict resolution, multi-way timeline merging, top-K incident aggregation, security denial, context pack extraction, and model governance validation.
+
+### Phase 8: KP14-SUITE analysis-output search projection — PLANNED
+
+The unified delivery contract is in `../METHRA/docs/VM9211_CORE_ROADMAP.md`. QIHSE owns authoritative disassembly, CFG, trace, solver, finding, and report artifacts; KEYSTONE owns a derived, rebuildable index with immutable QIHSE artifact-ID backreferences. Existing exact/temporal ingest and candidate-only trigram primitives are not a live `KEYSTONE.FEED.NEXT` consumer or a secure cross-tool analyst-search endpoint.
+
+- [x] Add a strict, bounded, non-serving Python staging boundary for raw 16-field QIHSE feed records: explicit authentication configuration, local tenant/classification/SCI checks, replay/replacement/tombstone and per-object fencing checks, and a 32 MiB aggregate staged-payload cap. It never ACKs or serves search; 12 focused tests pass. This does not satisfy durable feed consumption or classified query gates.
+- [x] Add a reviewed, crash-tested SQLite local cursor/staged-state transaction after staging, preserving replay/tombstone/fencing decisions and ACK only after commit. Eighteen combined focused feed tests pass, including process-death replay. This non-serving boundary is not native index publication or analyst search; the broader Python suite has pre-existing import/native-library failures.
+- [ ] Consume QIHSE's authenticated `KEYSTONE.FEED.*` stream for bounded suite artifact manifests and tombstones; handle at-least-once delivery, replay gaps, duplicate/replacement events, and ACK only after durable index-generation publication. Rebuild equivalent indexes from QIHSE authority.
+- [ ] Index permitted disassembly text and analysis metadata as candidate-only projections without treating KEYSTONE as the payload store; expose source artifact ID, generation/cursor, and freshness or stale/incomplete status.
+- [ ] Fix daemon security before untrusted or classified search: persist and enforce SCI on exact/temporal queries, bind the principal to authenticated transport rather than a client-asserted context, and enforce tenant/classification/SCI with no metadata leak. Require QIHSE reauthorization and exact content verification before returning payload bytes.
+- [ ] Add low-clearance/high-data, cross-tenant, tamper, tombstone, replay/rebuild, stale-index, and QIHSE-outage tests. Index unavailability must not alter QIHSE artifact or verdict truth.
