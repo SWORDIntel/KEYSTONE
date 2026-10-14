@@ -167,6 +167,17 @@ int keystoned_client_ping(keystoned_client_t* client) {
     return (resp.msg_type == KEYSTONED_MSG_PONG && resp.status == KEYSTONED_STATUS_OK) ? 0 : -1;
 }
 
+int keystoned_client_bind_principal(
+    keystoned_client_t* client,
+    const keystone_security_context_t* sec_ctx
+) {
+    if (!client || !sec_ctx) return -1;
+    keystoned_msg_header_t resp;
+    int rc = client_send_recv(client, KEYSTONED_MSG_BIND_PRINCIPAL_REQ, sec_ctx, NULL, 0, &resp, NULL, NULL);
+    if (rc != 0) return -1;
+    return (resp.status == KEYSTONED_STATUS_OK) ? 0 : -1;
+}
+
 int keystoned_client_exact_lookup(
     keystoned_client_t* client,
     const keystone_security_context_t* sec_ctx,
@@ -253,6 +264,238 @@ int keystoned_client_ingest(
     int rc = client_send_recv(client, KEYSTONED_MSG_INGEST_REQ, sec_ctx,
                               ser_buf, written, &resp, NULL, NULL);
     if (rc != 0) return -1;
+    return (int)resp.status;
+}
+
+int keystoned_client_workflow_bind_history(
+    keystoned_client_t* client, const keystone_security_context_t* sec_ctx,
+    const uint8_t identity[KEYSTONE_WORKFLOW_HISTORY_ID_SIZE],
+    uint64_t* out_watermark
+) {
+    if (!client || !sec_ctx || !identity || !out_watermark) return -1;
+    keystoned_msg_header_t resp;
+    void* payload = NULL;
+    size_t payload_len = 0;
+    int rc = client_send_recv(client, KEYSTONED_MSG_WORKFLOW_BIND_HISTORY_REQ,
+                              sec_ctx, identity, KEYSTONE_WORKFLOW_HISTORY_ID_SIZE,
+                              &resp, &payload, &payload_len);
+    if (rc != 0) return -1;
+    if (resp.msg_type != KEYSTONED_MSG_WORKFLOW_BIND_HISTORY_RESP ||
+        (resp.status == KEYSTONED_STATUS_OK &&
+         payload_len != sizeof(uint64_t))) {
+        free(payload);
+        return -1;
+    }
+    if (resp.status == KEYSTONED_STATUS_OK)
+        memcpy(out_watermark, payload, sizeof(uint64_t));
+    free(payload);
+    return (int)resp.status;
+}
+
+int keystoned_client_workflow_apply(
+    keystoned_client_t* client, const keystone_security_context_t* sec_ctx,
+    uint64_t from_exclusive, uint64_t through_inclusive,
+    const keystone_workflow_event_t* events, size_t count,
+    uint64_t* out_watermark
+) {
+    if (!client || !sec_ctx || !out_watermark || (count && !events) ||
+        count > KEYSTONE_WORKFLOW_BATCH_MAX ||
+        count > (KEYSTONED_MAX_MSG_LEN - sizeof(keystoned_workflow_apply_req_t)) /
+                sizeof(keystone_workflow_event_t)) return -1;
+    size_t request_len = sizeof(keystoned_workflow_apply_req_t) +
+                         count * sizeof(keystone_workflow_event_t);
+    uint8_t* request = calloc(1, request_len);
+    if (!request) return -1;
+    keystoned_workflow_apply_req_t header = {
+        .from_exclusive = from_exclusive,
+        .through_inclusive = through_inclusive,
+        .count = (uint32_t)count,
+        .reserved = 0
+    };
+    memcpy(request, &header, sizeof(header));
+    if (count) memcpy(request + sizeof(header), events,
+                      count * sizeof(keystone_workflow_event_t));
+
+    keystoned_msg_header_t resp;
+    void* payload = NULL;
+    size_t payload_len = 0;
+    int rc = client_send_recv(client, KEYSTONED_MSG_WORKFLOW_APPLY_REQ,
+                              sec_ctx, request, request_len,
+                              &resp, &payload, &payload_len);
+    free(request);
+    if (rc != 0) return -1;
+    if (resp.msg_type != KEYSTONED_MSG_WORKFLOW_APPLY_RESP ||
+        (resp.status == KEYSTONED_STATUS_OK &&
+         payload_len != sizeof(uint64_t))) {
+        free(payload);
+        return -1;
+    }
+    if (resp.status == KEYSTONED_STATUS_OK)
+        memcpy(out_watermark, payload, sizeof(uint64_t));
+    free(payload);
+    return (int)resp.status;
+}
+
+int keystoned_client_workflow_stage(
+    keystoned_client_t* client, const keystone_security_context_t* sec_ctx,
+    uint64_t from_exclusive, uint64_t through_inclusive,
+    const keystone_workflow_event_t* events, size_t count,
+    uint64_t* out_stage_watermark
+) {
+    if (!client || !sec_ctx || !out_stage_watermark || (count && !events) ||
+        count > KEYSTONE_WORKFLOW_BATCH_MAX ||
+        count > (KEYSTONED_MAX_MSG_LEN - sizeof(keystoned_workflow_apply_req_t)) /
+                sizeof(keystone_workflow_event_t)) return -1;
+    size_t request_len = sizeof(keystoned_workflow_apply_req_t) +
+                         count * sizeof(keystone_workflow_event_t);
+    uint8_t* request = calloc(1, request_len);
+    if (!request) return -1;
+    keystoned_workflow_apply_req_t header = {
+        .from_exclusive = from_exclusive,
+        .through_inclusive = through_inclusive,
+        .count = (uint32_t)count,
+        .reserved = 0
+    };
+    memcpy(request, &header, sizeof(header));
+    if (count) memcpy(request + sizeof(header), events,
+                      count * sizeof(keystone_workflow_event_t));
+    keystoned_msg_header_t resp;
+    void* payload = NULL;
+    size_t payload_len = 0;
+    int rc = client_send_recv(client, KEYSTONED_MSG_WORKFLOW_STAGE_REQ,
+                              sec_ctx, request, request_len,
+                              &resp, &payload, &payload_len);
+    free(request);
+    if (rc != 0) return -1;
+    if (resp.msg_type != KEYSTONED_MSG_WORKFLOW_STAGE_RESP ||
+        (resp.status == KEYSTONED_STATUS_OK && payload_len != sizeof(uint64_t))) {
+        free(payload);
+        return -1;
+    }
+    if (resp.status == KEYSTONED_STATUS_OK)
+        memcpy(out_stage_watermark, payload, sizeof(uint64_t));
+    free(payload);
+    return (int)resp.status;
+}
+
+static int client_workflow_watermark_operation(
+    keystoned_client_t* client, const keystone_security_context_t* sec_ctx,
+    uint32_t request_type, uint32_t response_type,
+    const void* request, size_t request_len, uint64_t* out_watermark
+) {
+    if (!client || !sec_ctx || !out_watermark) return -1;
+    keystoned_msg_header_t resp;
+    void* payload = NULL;
+    size_t payload_len = 0;
+    int rc = client_send_recv(client, request_type, sec_ctx,
+                              request, request_len, &resp, &payload, &payload_len);
+    if (rc != 0) return -1;
+    if (resp.msg_type != response_type ||
+        (resp.status == KEYSTONED_STATUS_OK && payload_len != sizeof(uint64_t))) {
+        free(payload);
+        return -1;
+    }
+    if (resp.status == KEYSTONED_STATUS_OK)
+        memcpy(out_watermark, payload, sizeof(uint64_t));
+    free(payload);
+    return (int)resp.status;
+}
+
+int keystoned_client_workflow_publish(
+    keystoned_client_t* client, const keystone_security_context_t* sec_ctx,
+    uint64_t expected_target, uint64_t* out_watermark
+) {
+    return client_workflow_watermark_operation(
+        client, sec_ctx, KEYSTONED_MSG_WORKFLOW_PUBLISH_REQ,
+        KEYSTONED_MSG_WORKFLOW_PUBLISH_RESP,
+        &expected_target, sizeof(expected_target), out_watermark);
+}
+
+int keystoned_client_workflow_abort_stage(
+    keystoned_client_t* client, const keystone_security_context_t* sec_ctx,
+    uint64_t* out_watermark
+) {
+    return client_workflow_watermark_operation(
+        client, sec_ctx, KEYSTONED_MSG_WORKFLOW_ABORT_STAGE_REQ,
+        KEYSTONED_MSG_WORKFLOW_ABORT_STAGE_RESP,
+        NULL, 0, out_watermark);
+}
+
+int keystoned_client_workflow_stage_watermark(
+    keystoned_client_t* client, const keystone_security_context_t* sec_ctx,
+    uint64_t* out_watermark
+) {
+    return client_workflow_watermark_operation(
+        client, sec_ctx, KEYSTONED_MSG_WORKFLOW_STAGE_WATERMARK_REQ,
+        KEYSTONED_MSG_WORKFLOW_STAGE_WATERMARK_RESP,
+        NULL, 0, out_watermark);
+}
+
+int keystoned_client_workflow_page(
+    keystoned_client_t* client, const keystone_security_context_t* sec_ctx,
+    const keystone_workflow_query_t* query,
+    keystone_workflow_entry_t* out_entries, size_t capacity,
+    keystone_workflow_page_t* out_page
+) {
+    if (!client || !sec_ctx || !query || !out_entries || !out_page ||
+        query->limit == 0 || query->limit > KEYSTONE_WORKFLOW_PAGE_MAX ||
+        query->cursor_valid > 1 || query->descending > 1 ||
+        query->workflow_type == 0 ||
+        capacity < query->limit) return -1;
+    keystoned_msg_header_t resp;
+    void* payload = NULL;
+    size_t payload_len = 0;
+    int rc = client_send_recv(client, KEYSTONED_MSG_WORKFLOW_PAGE_REQ,
+                              sec_ctx, query, sizeof(*query),
+                              &resp, &payload, &payload_len);
+    if (rc != 0) return -1;
+    if (resp.msg_type != KEYSTONED_MSG_WORKFLOW_PAGE_RESP) {
+        free(payload);
+        return -1;
+    }
+    if (resp.status != KEYSTONED_STATUS_OK) {
+        free(payload);
+        return (int)resp.status;
+    }
+    if (payload_len < sizeof(keystone_workflow_page_t)) {
+        free(payload);
+        return -1;
+    }
+    keystone_workflow_page_t page;
+    memcpy(&page, payload, sizeof(page));
+    if (page.count > query->limit || page.count > capacity ||
+        payload_len != sizeof(page) +
+                       page.count * sizeof(keystone_workflow_entry_t)) {
+        free(payload);
+        return -1;
+    }
+    if (page.count) memcpy(out_entries, (uint8_t*)payload + sizeof(page),
+                           page.count * sizeof(keystone_workflow_entry_t));
+    *out_page = page;
+    free(payload);
+    return KEYSTONED_STATUS_OK;
+}
+
+int keystoned_client_workflow_watermark(
+    keystoned_client_t* client, const keystone_security_context_t* sec_ctx,
+    uint64_t* out_watermark
+) {
+    if (!client || !sec_ctx || !out_watermark) return -1;
+    keystoned_msg_header_t resp;
+    void* payload = NULL;
+    size_t payload_len = 0;
+    int rc = client_send_recv(client, KEYSTONED_MSG_WORKFLOW_WATERMARK_REQ,
+                              sec_ctx, NULL, 0, &resp, &payload, &payload_len);
+    if (rc != 0) return -1;
+    if (resp.msg_type != KEYSTONED_MSG_WORKFLOW_WATERMARK_RESP ||
+        (resp.status == KEYSTONED_STATUS_OK &&
+         payload_len != sizeof(uint64_t))) {
+        free(payload);
+        return -1;
+    }
+    if (resp.status == KEYSTONED_STATUS_OK)
+        memcpy(out_watermark, payload, sizeof(uint64_t));
+    free(payload);
     return (int)resp.status;
 }
 

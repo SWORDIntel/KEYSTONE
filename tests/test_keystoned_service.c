@@ -225,6 +225,28 @@ static void test_trust_model_hardening(void) {
             .tenant_id = 1, .classification = KEYSTONE_CLASSIFICATION_OPS, .compartment_mask = 0x000000FFu
         };
         TEST_ASSERT(keystoned_client_ingest(client, &ctx_sci_holder, &rec_sci) == KEYSTONED_STATUS_OK);
+
+        /* Query enforcement: caller lacking SCI compartments is denied */
+        keystone_exact_entry_t ent_sci;
+        TEST_ASSERT(keystoned_client_exact_lookup(client, &ctx_t1_ops, &id_sci, &ent_sci) == KEYSTONED_STATUS_DENIED);
+
+        /* Caller possessing required SCI compartments succeeds */
+        TEST_ASSERT(keystoned_client_exact_lookup(client, &ctx_sci_holder, &id_sci, &ent_sci) == KEYSTONED_STATUS_OK);
+        TEST_ASSERT(ent_sci.sci == 0x000000F0u);
+
+        /* Temporal query enforcement: record is filtered out for caller lacking SCI */
+        keystone_hlc_t hmin_sci = { .physical_ms = 6000000, .logical = 0, .node_id = 0 };
+        keystone_hlc_t hmax_sci = { .physical_ms = 6000200, .logical = 0xFFFFFFFFu, .node_id = 0xFFFFFFFFu };
+        keystone_temporal_entry_t t_sci_buf[4];
+        size_t t_sci_cnt = 0;
+        TEST_ASSERT(keystoned_client_temporal_range(client, &ctx_t1_ops, &hmin_sci, &hmax_sci, t_sci_buf, 4, &t_sci_cnt) == KEYSTONED_STATUS_OK);
+        TEST_ASSERT(t_sci_cnt == 0);
+
+        /* Caller possessing required SCI sees the temporal entry */
+        TEST_ASSERT(keystoned_client_temporal_range(client, &ctx_sci_holder, &hmin_sci, &hmax_sci, t_sci_buf, 4, &t_sci_cnt) == KEYSTONED_STATUS_OK);
+        TEST_ASSERT(t_sci_cnt == 1);
+        TEST_ASSERT(t_sci_buf[0].sci == 0x000000F0u);
+        TEST_ASSERT(keystone_uuid_equal(&t_sci_buf[0].object_id, &id_sci));
     }
 
     /* 2. SECURITY_SENSITIVE records are denied below SECRET, allowed at SECRET */
@@ -276,6 +298,107 @@ static void test_trust_model_hardening(void) {
     printf("    [+] Trust-model hardening verified (tenant-bound ingest, SENSITIVE at SECRET, tenant isolation, malformed frames dropped).\n");
 }
 
+/*
+ * Authenticated transport binding tests (Phase 8 Section 5a daemon security):
+ * client-asserted security contexts are rejected if they violate transport-bound
+ * principal limits (tenant, clearance, or SCI compartments).
+ */
+static void test_transport_bound_security(void) {
+    printf("[*] Testing transport-bound principal enforcement (anti-tamper / clearance escalation)...\n");
+
+    const char* sock_path = "/tmp/keystone_test_transport_bound.sock";
+    unlink(sock_path);
+
+    keystoned_config_t cfg = {
+        .socket_path = sock_path,
+        .cache_capacity = 64,
+        .initial_fencing_epoch = 1,
+        .enable_security_audit = 1
+    };
+    keystoned_server_t* server = keystoned_server_create(&cfg);
+    TEST_ASSERT(server != NULL);
+    TEST_ASSERT(keystoned_server_start(server) == 0);
+    usleep(20000);
+
+    /* Connect client */
+    keystoned_client_t* client = keystoned_client_connect(sock_path);
+    TEST_ASSERT(client != NULL);
+
+    /* Ingest a SECRET record and an OPS record for Tenant 1 */
+    keystone_security_context_t ctx_ingest = {
+        .tenant_id = 1, .classification = KEYSTONE_CLASSIFICATION_SECRET, .compartment_mask = 0xFFFFFFFFu
+    };
+
+    keystone_uuid_t id_sec, id_ops, evt1, evt2, node;
+    TEST_ASSERT(keystone_uuid_from_string("11111111-1111-1111-1111-111111111111", &id_sec) == 0);
+    TEST_ASSERT(keystone_uuid_from_string("22222222-2222-2222-2222-222222222222", &id_ops) == 0);
+    TEST_ASSERT(keystone_uuid_from_string("eeeeeeee-1111-1111-1111-111111111111", &evt1) == 0);
+    TEST_ASSERT(keystone_uuid_from_string("eeeeeeee-1111-1111-1111-111111111112", &evt2) == 0);
+    TEST_ASSERT(keystone_uuid_from_string("dddddddd-1111-1111-1111-111111111111", &node) == 0);
+
+    keystone_federation_record_t r_sec = {
+        .source_object_id = id_sec, .source_event_id = evt1, .source_node_id = node,
+        .source_generation = 1, .fencing_epoch = 1,
+        .source_hlc = { .physical_ms = 1000100, .logical = 0, .node_id = 1 },
+        .tenant_id = 1, .classification = KEYSTONE_CLASSIFICATION_SECRET,
+        .object_type = KEYSTONE_OBJ_VM, .flags = KEYSTONE_RECORD_FLAG_EVENT,
+        .sci = 0x02u
+    };
+    keystone_federation_record_t r_ops = {
+        .source_object_id = id_ops, .source_event_id = evt2, .source_node_id = node,
+        .source_generation = 2, .fencing_epoch = 1,
+        .source_hlc = { .physical_ms = 1000200, .logical = 0, .node_id = 1 },
+        .tenant_id = 1, .classification = KEYSTONE_CLASSIFICATION_OPS,
+        .object_type = KEYSTONE_OBJ_VM, .flags = KEYSTONE_RECORD_FLAG_EVENT,
+        .sci = 0x01u
+    };
+    TEST_ASSERT(keystoned_client_ingest(client, &ctx_ingest, &r_sec) == KEYSTONED_STATUS_OK);
+    TEST_ASSERT(keystoned_client_ingest(client, &ctx_ingest, &r_ops) == KEYSTONED_STATUS_OK);
+
+    /* Now bind transport to Tenant 1, OPS clearance, SCI compartment 0x01 */
+    keystone_security_context_t bound_ctx = {
+        .tenant_id = 1, .classification = KEYSTONE_CLASSIFICATION_OPS, .compartment_mask = 0x01u
+    };
+    TEST_ASSERT(keystoned_client_bind_principal(client, &bound_ctx) == 0);
+
+    /* 1. Normal lookup within bound principal limits succeeds */
+    keystone_exact_entry_t ent;
+    TEST_ASSERT(keystoned_client_exact_lookup(client, &bound_ctx, &id_ops, &ent) == KEYSTONED_STATUS_OK);
+    TEST_ASSERT(ent.classification == KEYSTONE_CLASSIFICATION_OPS);
+
+    /* 2. Client-asserted clearance escalation: client asserts SECRET on OPS-bound transport -> DENIED */
+    keystone_security_context_t forged_secret = {
+        .tenant_id = 1, .classification = KEYSTONE_CLASSIFICATION_SECRET, .compartment_mask = 0xFFu
+    };
+    TEST_ASSERT(keystoned_client_exact_lookup(client, &forged_secret, &id_sec, &ent) == KEYSTONED_STATUS_DENIED);
+
+    /* 3. Client-asserted cross-tenant query: client asserts Tenant 2 -> DENIED */
+    keystone_security_context_t forged_tenant = {
+        .tenant_id = 2, .classification = KEYSTONE_CLASSIFICATION_OPS, .compartment_mask = 0x01u
+    };
+    TEST_ASSERT(keystoned_client_exact_lookup(client, &forged_tenant, &id_ops, &ent) == KEYSTONED_STATUS_DENIED);
+
+    /* 4. Client-asserted SCI compartment expansion: client asserts compartment 0x02 not held by bound transport -> DENIED */
+    keystone_security_context_t forged_sci = {
+        .tenant_id = 1, .classification = KEYSTONE_CLASSIFICATION_OPS, .compartment_mask = 0x03u
+    };
+    TEST_ASSERT(keystoned_client_exact_lookup(client, &forged_sci, &id_ops, &ent) == KEYSTONED_STATUS_DENIED);
+
+    /* 5. Ingest over bound transport cannot exceed bound clearance or inject for another tenant */
+    keystone_uuid_t id_bad;
+    TEST_ASSERT(keystone_uuid_from_string("33333333-3333-3333-3333-333333333333", &id_bad) == 0);
+    keystone_federation_record_t r_bad_tenant = r_ops;
+    r_bad_tenant.source_object_id = id_bad;
+    r_bad_tenant.tenant_id = 2;
+    TEST_ASSERT(keystoned_client_ingest(client, &bound_ctx, &r_bad_tenant) == KEYSTONED_STATUS_DENIED);
+
+    keystoned_client_disconnect(client);
+    keystoned_server_destroy(server);
+    unlink(sock_path);
+
+    printf("    [+] Transport-bound principal enforcement verified (anti-tamper / clearance escalation blocked).\n");
+}
+
 int main(void) {
     printf("=================================================================\n");
     printf("  KEYSTONE Phase 2: Security-Aware Service Mode Tests (keystoned)\n");
@@ -283,6 +406,7 @@ int main(void) {
 
     test_service_lifecycle_and_security();
     test_trust_model_hardening();
+    test_transport_bound_security();
 
     printf("=================================================================\n");
     printf("  ALL PHASE 2 KEYSTONED SERVICE TESTS PASSED (100%% GREEN)\n");

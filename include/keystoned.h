@@ -16,9 +16,11 @@
 extern "C" {
 #endif
 
+#include <sys/types.h>
 #include "keystone_federation.h"
 #include "keystone_exact_index.h"
 #include "keystone_temporal.h"
+#include "keystone_workflow_index.h"
 
 #define KEYSTONED_DEFAULT_SOCKET "/run/keystone/keystoned.sock"
 #define KEYSTONED_MAGIC 0x4B535356u /* 'KSSV' */
@@ -31,6 +33,8 @@ extern "C" {
 typedef enum {
     KEYSTONED_MSG_PING                = 1,
     KEYSTONED_MSG_PONG                = 2,
+    KEYSTONED_MSG_BIND_PRINCIPAL_REQ  = 6,
+    KEYSTONED_MSG_BIND_PRINCIPAL_RESP = 7,
     KEYSTONED_MSG_EXACT_LOOKUP_REQ    = 10,
     KEYSTONED_MSG_EXACT_LOOKUP_RESP   = 11,
     KEYSTONED_MSG_TEMPORAL_RANGE_REQ  = 20,
@@ -41,6 +45,22 @@ typedef enum {
     KEYSTONED_MSG_PUBLISH_GEN_RESP    = 41,
     KEYSTONED_MSG_STATUS_REQ          = 50,
     KEYSTONED_MSG_STATUS_RESP         = 51,
+    KEYSTONED_MSG_WORKFLOW_APPLY_REQ  = 60,
+    KEYSTONED_MSG_WORKFLOW_APPLY_RESP = 61,
+    KEYSTONED_MSG_WORKFLOW_PAGE_REQ   = 62,
+    KEYSTONED_MSG_WORKFLOW_PAGE_RESP  = 63,
+    KEYSTONED_MSG_WORKFLOW_WATERMARK_REQ = 64,
+    KEYSTONED_MSG_WORKFLOW_WATERMARK_RESP = 65,
+    KEYSTONED_MSG_WORKFLOW_BIND_HISTORY_REQ = 66,
+    KEYSTONED_MSG_WORKFLOW_BIND_HISTORY_RESP = 67,
+    KEYSTONED_MSG_WORKFLOW_STAGE_REQ = 68,
+    KEYSTONED_MSG_WORKFLOW_STAGE_RESP = 69,
+    KEYSTONED_MSG_WORKFLOW_PUBLISH_REQ = 70,
+    KEYSTONED_MSG_WORKFLOW_PUBLISH_RESP = 71,
+    KEYSTONED_MSG_WORKFLOW_ABORT_STAGE_REQ = 72,
+    KEYSTONED_MSG_WORKFLOW_ABORT_STAGE_RESP = 73,
+    KEYSTONED_MSG_WORKFLOW_STAGE_WATERMARK_REQ = 74,
+    KEYSTONED_MSG_WORKFLOW_STAGE_WATERMARK_RESP = 75,
     KEYSTONED_MSG_ERROR               = 99
 } keystoned_msg_type_t;
 
@@ -51,8 +71,26 @@ typedef enum {
     KEYSTONED_STATUS_DENIED           = 2,
     KEYSTONED_STATUS_STALE_GEN        = 3,
     KEYSTONED_STATUS_INVALID_ARG      = 4,
-    KEYSTONED_STATUS_SERVER_ERROR     = 5
+    KEYSTONED_STATUS_SERVER_ERROR     = 5,
+    KEYSTONED_STATUS_CONFLICT         = 6,
+    KEYSTONED_STATUS_GAP              = 7
 } keystoned_status_t;
+
+/* Local Unix-socket payloads. Source sequence intervals must be complete
+ * QIHSE committed intervals, supplied by a trusted projector. The daemon
+ * never receives QIHSE row contents or field keys. */
+typedef struct {
+    uint64_t from_exclusive;
+    uint64_t through_inclusive;
+    uint32_t count;
+    uint32_t reserved;
+    /* keystone_workflow_event_t events[count] follows */
+} keystoned_workflow_apply_req_t;
+
+typedef struct {
+    keystone_workflow_page_t page;
+    /* keystone_workflow_entry_t entries[page.count] follows */
+} keystoned_workflow_page_resp_t;
 
 /* --- Packed Wire IPC Message Header --- */
 #pragma pack(push, 1)
@@ -101,6 +139,13 @@ typedef struct {
     int enable_security_audit;
 } keystoned_config_t;
 
+int keystoned_server_workflow_bind_history(
+    keystoned_server_t* server,
+    const keystone_security_context_t* sec_ctx,
+    const uint8_t identity[KEYSTONE_WORKFLOW_HISTORY_ID_SIZE],
+    uint64_t* out_watermark
+);
+
 keystoned_server_t* keystoned_server_create(const keystoned_config_t* config);
 void keystoned_server_destroy(keystoned_server_t* server);
 
@@ -138,6 +183,67 @@ int keystoned_server_ingest(
     const keystone_federation_record_t* rec
 );
 
+int keystoned_server_workflow_apply(
+    keystoned_server_t* server,
+    const keystone_security_context_t* sec_ctx,
+    uint64_t from_exclusive,
+    uint64_t through_inclusive,
+    const keystone_workflow_event_t* events,
+    size_t count,
+    uint64_t* out_watermark
+);
+
+/* Stage bounded committed intervals without exposing them to readers.
+ * Publish only at the exact final source sequence; staged state is volatile. */
+int keystoned_server_workflow_stage(
+    keystoned_server_t* server,
+    const keystone_security_context_t* sec_ctx,
+    uint64_t from_exclusive,
+    uint64_t through_inclusive,
+    const keystone_workflow_event_t* events,
+    size_t count,
+    uint64_t* out_stage_watermark
+);
+
+int keystoned_server_workflow_publish(
+    keystoned_server_t* server,
+    const keystone_security_context_t* sec_ctx,
+    uint64_t expected_target,
+    uint64_t* out_watermark
+);
+
+int keystoned_server_workflow_abort_stage(
+    keystoned_server_t* server,
+    const keystone_security_context_t* sec_ctx,
+    uint64_t* out_watermark
+);
+
+int keystoned_server_workflow_stage_watermark(
+    keystoned_server_t* server,
+    const keystone_security_context_t* sec_ctx,
+    uint64_t* out_watermark
+);
+
+int keystoned_server_workflow_page(
+    keystoned_server_t* server,
+    const keystone_security_context_t* sec_ctx,
+    const keystone_workflow_query_t* query,
+    keystone_workflow_entry_t* out_entries,
+    size_t capacity,
+    keystone_workflow_page_t* out_page
+);
+
+int keystoned_server_workflow_watermark(
+    keystoned_server_t* server,
+    uint64_t* out_watermark
+);
+
+int keystoned_server_bind_peer_principal(
+    keystoned_server_t* server,
+    uid_t uid,
+    const keystone_security_context_t* sec_ctx
+);
+
 /* --- Client Handle & Methods --- */
 typedef struct keystoned_client keystoned_client_t;
 
@@ -145,6 +251,11 @@ keystoned_client_t* keystoned_client_connect(const char* socket_path);
 void keystoned_client_disconnect(keystoned_client_t* client);
 
 int keystoned_client_ping(keystoned_client_t* client);
+
+int keystoned_client_bind_principal(
+    keystoned_client_t* client,
+    const keystone_security_context_t* sec_ctx
+);
 
 int keystoned_client_exact_lookup(
     keystoned_client_t* client,
@@ -167,6 +278,67 @@ int keystoned_client_ingest(
     keystoned_client_t* client,
     const keystone_security_context_t* sec_ctx,
     const keystone_federation_record_t* rec
+);
+
+int keystoned_client_workflow_apply(
+    keystoned_client_t* client,
+    const keystone_security_context_t* sec_ctx,
+    uint64_t from_exclusive,
+    uint64_t through_inclusive,
+    const keystone_workflow_event_t* events,
+    size_t count,
+    uint64_t* out_watermark
+);
+
+int keystoned_client_workflow_stage(
+    keystoned_client_t* client,
+    const keystone_security_context_t* sec_ctx,
+    uint64_t from_exclusive,
+    uint64_t through_inclusive,
+    const keystone_workflow_event_t* events,
+    size_t count,
+    uint64_t* out_stage_watermark
+);
+
+int keystoned_client_workflow_publish(
+    keystoned_client_t* client,
+    const keystone_security_context_t* sec_ctx,
+    uint64_t expected_target,
+    uint64_t* out_watermark
+);
+
+int keystoned_client_workflow_abort_stage(
+    keystoned_client_t* client,
+    const keystone_security_context_t* sec_ctx,
+    uint64_t* out_watermark
+);
+
+int keystoned_client_workflow_stage_watermark(
+    keystoned_client_t* client,
+    const keystone_security_context_t* sec_ctx,
+    uint64_t* out_watermark
+);
+
+int keystoned_client_workflow_bind_history(
+    keystoned_client_t* client,
+    const keystone_security_context_t* sec_ctx,
+    const uint8_t identity[KEYSTONE_WORKFLOW_HISTORY_ID_SIZE],
+    uint64_t* out_watermark
+);
+
+int keystoned_client_workflow_page(
+    keystoned_client_t* client,
+    const keystone_security_context_t* sec_ctx,
+    const keystone_workflow_query_t* query,
+    keystone_workflow_entry_t* out_entries,
+    size_t capacity,
+    keystone_workflow_page_t* out_page
+);
+
+int keystoned_client_workflow_watermark(
+    keystoned_client_t* client,
+    const keystone_security_context_t* sec_ctx,
+    uint64_t* out_watermark
 );
 
 int keystoned_client_get_status(
