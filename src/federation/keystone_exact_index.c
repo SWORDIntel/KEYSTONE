@@ -217,6 +217,7 @@ int keystone_exact_index_ingest_record(
     entry.object_type = rec->object_type;
     entry.flags = rec->flags;
     entry.location_slot = location_slot;
+    entry.sci = rec->sci;
 
     return keystone_exact_index_upsert(index, &entry);
 }

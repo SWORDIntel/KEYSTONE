@@ -38,7 +38,8 @@ static void test_exact_identity_lifecycle(void) {
         .classification = KEYSTONE_CLASSIFICATION_OPS,
         .object_type = KEYSTONE_OBJ_VM,
         .flags = 0,
-        .location_slot = 1024
+        .location_slot = 1024,
+        .sci = 0x000000A5u
     };
 
     /* 1. Insert */
@@ -55,6 +56,7 @@ static void test_exact_identity_lifecycle(void) {
     TEST_ASSERT(found.latest_generation == 100);
     TEST_ASSERT(found.fencing_epoch == 5);
     TEST_ASSERT(found.location_slot == 1024);
+    TEST_ASSERT(found.sci == 0x000000A5u);
 
     /* 3. Non-existent lookup */
     keystone_uuid_t missing_id;
@@ -141,6 +143,7 @@ static void test_exact_identity_lifecycle(void) {
     TEST_ASSERT(keystone_exact_index_lookup(loaded_idx, &vm_id, &found) == 0);
     TEST_ASSERT(found.latest_generation == 102);
     TEST_ASSERT((found.flags & KEYSTONE_RECORD_FLAG_TOMBSTONE) != 0);
+    TEST_ASSERT(found.sci == 0x000000A5u);
 
     unlink(exact_path);
     keystone_exact_index_destroy(idx);
@@ -169,7 +172,8 @@ static void test_temporal_index_lifecycle(void) {
             .classification = KEYSTONE_CLASSIFICATION_OPS,
             .flags = (i % 50 == 0) ? KEYSTONE_RECORD_FLAG_TOMBSTONE : 0,
             .source_generation = i + 1,
-            .payload_offset = i * 64
+            .payload_offset = i * 64,
+            .sci = (i % 2 == 0) ? 0x000000F0u : 0x0000000Fu
         };
         TEST_ASSERT(keystone_temporal_index_append(tidx, &te) == 0);
     }
@@ -245,6 +249,8 @@ static void test_temporal_index_lifecycle(void) {
     /* Query loaded index */
     size_t loaded_matches = keystone_temporal_index_query_range(loaded_tidx, &hlc_min, &hlc_max, results, 64);
     TEST_ASSERT(loaded_matches == 42); /* 41 + 1 OOO entry */
+    TEST_ASSERT(results[0].sci == 0x000000F0u);
+    TEST_ASSERT(results[1].sci == 0x0000000Fu);
 
     unlink(temporal_path);
     keystone_temporal_index_destroy(tidx);
@@ -386,7 +392,7 @@ static void test_temporal_empty_persist_resume(void) {
  *   off 16 hlc min/max (32 B)
  */
 #define T_HDR_SIZE 56u
-#define T_ENTRY_SIZE 80u
+#define T_ENTRY_SIZE ((uint32_t)sizeof(keystone_temporal_entry_t))
 
 static uint32_t temporal_test_crc32(const void* data, size_t len) {
     uint32_t crc = 0xFFFFFFFFu;

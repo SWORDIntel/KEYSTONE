@@ -182,6 +182,7 @@ int keystone_temporal_index_ingest_record(
     entry.flags = rec->flags;
     entry.source_generation = rec->source_generation;
     entry.payload_offset = payload_offset;
+    entry.sci = rec->sci;
 
     return keystone_temporal_index_append(index, &entry);
 }

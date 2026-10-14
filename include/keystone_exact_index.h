@@ -34,6 +34,8 @@ typedef struct {
     uint32_t object_type;
     uint32_t flags;
     uint64_t location_slot;
+    uint32_t sci;         /* SCI compartment bitmask (0 = none) */
+    uint32_t reserved;    /* Alignment padding, must be 0 */
 } keystone_exact_entry_t;
 
 typedef struct keystone_exact_index keystone_exact_index_t;

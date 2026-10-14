@@ -31,6 +31,8 @@ typedef struct {
     uint32_t flags;
     uint64_t source_generation;
     uint64_t payload_offset;
+    uint32_t sci;         /* SCI compartment bitmask (0 = none) */
+    uint32_t reserved;    /* Alignment padding, must be 0 */
 } keystone_temporal_entry_t;
 
 typedef struct {
