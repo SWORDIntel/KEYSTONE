@@ -31,11 +31,34 @@ from .core import KeystoneSearch, AnchorTable, KeystoneBackend, WorkloadType, Ba
 from .telemetry import TelemetryProcessor, TelemetryEvent
 from .cluster import ClusterRouter, crc16_keystone
 from .neural import NeuralClassifier, SemanticClass
+from .trigram import (
+    TrigramIndex,
+    TrigramStream,
+    TrigramStats,
+    extract_trigrams,
+    KEYSTONE_TRIGRAM_OPT_NONE,
+    KEYSTONE_TRIGRAM_OPT_CASE_INSENSITIVE,
+    KEYSTONE_TRIGRAM_OPT_DIRECT_DIRECTORY,
+)
+from .fabric import (
+    NodeCapability,
+    probe_node_capability,
+    export_node_cap_frame,
+    build_node_cap_datagram,
+    broadcast_node_cap,
+)
+from .hash_index import HashIndex
 
 __all__ = [
     "KeystoneSearch", "AnchorTable", "KeystoneBackend", "WorkloadType", "BackendDecision",
     "TelemetryProcessor", "TelemetryEvent",
     "ClusterRouter", "crc16_keystone",
     "NeuralClassifier", "SemanticClass",
+    "TrigramIndex", "TrigramStream", "TrigramStats", "extract_trigrams",
+    "KEYSTONE_TRIGRAM_OPT_NONE", "KEYSTONE_TRIGRAM_OPT_CASE_INSENSITIVE",
+    "KEYSTONE_TRIGRAM_OPT_DIRECT_DIRECTORY",
+    "NodeCapability", "probe_node_capability", "export_node_cap_frame",
+    "build_node_cap_datagram", "broadcast_node_cap",
+    "HashIndex",
 ]
-__version__ = "1.0.0"
+__version__ = "1.1.0"
