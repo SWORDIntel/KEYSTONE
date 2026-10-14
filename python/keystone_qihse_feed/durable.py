@@ -113,6 +113,7 @@ class DurableFeed:
             raise
         self.feed_id: int | None = None
         self.failed = False
+        self._precommit_hook = None
 
     def _initialize_or_load(self) -> None:
         db = self.db
@@ -211,6 +212,8 @@ class DurableFeed:
             digest = _digest(db, self.scope, next_generation, record.offset)
             db.execute("UPDATE meta SET generation=?, cursor=?, digest=? WHERE singleton=1",
                        (next_generation, str(record.offset), digest))
+            if self._precommit_hook:
+                self._precommit_hook(db, record, proposed.objects[record.object_id], next_generation, record.offset)
             db.execute("COMMIT")
         except Exception:
             if db.in_transaction:

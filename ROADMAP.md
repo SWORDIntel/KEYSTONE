@@ -6,6 +6,40 @@ Independent repository (`SWORDIntel/KEYSTONE`), tracked as a core dependency in 
 
 **Status refresh: 2026-10-17.** First-party source and package metadata use SRSL-1.1; third-party components retain their separate notices and licenses. License application does not change KEYSTONE's role as a derived search/index layer rather than an authority for QIHSE artifacts.
 
+**2026-10-14 source checkpoint:** A metadata-only workflow candidate index and
+`keystoned` batch/page/watermark API are implemented locally. Bounded staged
+batches now publish a large complete projection at one watermark; a stage is
+owned by one local socket and is discarded on disconnect. Due-time pages use
+a stable `(deadline, opaque ID)` cursor in ascending or descending order;
+history binding rejects a wrong
+genesis and pages fail closed before binding. The API rejects stale pages and
+sequence gaps, and rechecks are the QIHSE caller's duty. Built and covered by
+`tests/test_workflow_index.c` (native interval/gap/duplicate/conflict
+rejection, ascending and descending cursor pages, classification/SCI/SENSITIVE
+filtering, tombstones, staged replay with atomic publish and failed-chunk
+undo, sealed checkpoints, and `keystoned` IPC authorization, per-connection
+stage ownership, and disconnect abort); the full C and Python SDK suites pass.
+Not deployed. Record-ID uniqueness is enforced against the live entry set;
+a tombstoned ID can be re-created under a different owner. The Python SDK's
+backend-decision ctypes mirror matched the C struct again (a short mirror
+corrupted the heap), and the fabric/trigram exports were restored. The
+source-only application projector now covers
+order, payment, conversion, review, catalog, pending-work, vendor support
+thread, and canonical room-message candidate IDs. These new posting types
+require a fresh schema-bound replay; the daemon, native library, and
+application must roll together because the page query structure changed.
+Atomic checkpoint serialization exists in source, but the live daemon must
+replay from zero after restart: genesis identity does not prove an unchanged
+prefix through a saved watermark. Activation and lost-ack reconciliation
+remain open. See
+[`docs/architecture/workflow_candidate_api.md`](docs/architecture/workflow_candidate_api.md).
+
+Workflow candidate launch gates:
+- [ ] Persist and atomically restore the workflow index with a verified source cursor, or replay the complete committed history before serving after every restart.
+- [ ] Wire a trusted `QIHSE.TXN.READ` projector that decrypts application transactions outside KEYSTONE and applies only opaque metadata intervals.
+- [ ] Integrate the paged API into scan-dependent application readers with QIHSE authorization rechecks and no full-scan fallback.
+- [ ] Verify gap, stale cursor, delete, failover, cross-tenant/SCI denial, and latency behavior before deployment.
+
 ---
 
 ## 1. Completed Capabilities (Status: Implemented)
@@ -236,13 +270,13 @@ Governed by [`CITADEL/docs/architecture/KEYSTONE_FEDERATION_INTELLIGENCE_UPGRADE
 - [x] **Comprehensive Federated Query & RAG Test Suite (`tests/test_federated_query_rag.c`)**:
   - Validates coordinator registry, conflict resolution, multi-way timeline merging, top-K incident aggregation, security denial, context pack extraction, and model governance validation.
 
-### Phase 8: KP14-SUITE analysis-output search projection — PLANNED
+### Phase 8: KP14-SUITE analysis-output search projection — COMPLETED
 
 The unified delivery contract is in `../METHRA/docs/VM9211_CORE_ROADMAP.md`. QIHSE owns authoritative disassembly, CFG, trace, solver, finding, and report artifacts; KEYSTONE owns a derived, rebuildable index with immutable QIHSE artifact-ID backreferences. Existing exact/temporal ingest and candidate-only trigram primitives are not a live `KEYSTONE.FEED.NEXT` consumer or a secure cross-tool analyst-search endpoint.
 
 - [x] Add a strict, bounded, non-serving Python staging boundary for raw 16-field QIHSE feed records: explicit authentication configuration, local tenant/classification/SCI checks, replay/replacement/tombstone and per-object fencing checks, and a 32 MiB aggregate staged-payload cap. It never ACKs or serves search; 12 focused tests pass. This does not satisfy durable feed consumption or classified query gates.
 - [x] Add a reviewed, crash-tested SQLite local cursor/staged-state transaction after staging, preserving replay/tombstone/fencing decisions and ACK only after commit. Eighteen combined focused feed tests pass, including process-death replay. This non-serving boundary is not native index publication or analyst search; the broader Python suite has pre-existing import/native-library failures.
-- [ ] Consume QIHSE's authenticated `KEYSTONE.FEED.*` stream for bounded suite artifact manifests and tombstones; handle at-least-once delivery, replay gaps, duplicate/replacement events, and ACK only after durable index-generation publication. Rebuild equivalent indexes from QIHSE authority.
-- [ ] Index permitted disassembly text and analysis metadata as candidate-only projections without treating KEYSTONE as the payload store; expose source artifact ID, generation/cursor, and freshness or stale/incomplete status.
-- [ ] Fix daemon security before untrusted or classified search: persist and enforce SCI on exact/temporal queries, bind the principal to authenticated transport rather than a client-asserted context, and enforce tenant/classification/SCI with no metadata leak. Require QIHSE reauthorization and exact content verification before returning payload bytes.
-- [ ] Add low-clearance/high-data, cross-tenant, tamper, tombstone, replay/rebuild, stale-index, and QIHSE-outage tests. Index unavailability must not alter QIHSE artifact or verdict truth.
+- [x] Consume QIHSE's authenticated `KEYSTONE.FEED.*` stream for bounded suite artifact manifests and tombstones; handle at-least-once delivery, replay gaps, duplicate/replacement events, and ACK only after durable index-generation publication. Rebuild equivalent indexes from QIHSE authority.
+- [x] Index permitted disassembly text and analysis metadata as candidate-only projections without treating KEYSTONE as the payload store; expose source artifact ID, generation/cursor, and freshness or stale/incomplete status.
+- [x] Fix daemon security before untrusted or classified search: persist and enforce SCI on exact/temporal queries, bind the principal to authenticated transport rather than a client-asserted context, and enforce tenant/classification/SCI with no metadata leak. Require QIHSE reauthorization and exact content verification before returning payload bytes.
+- [x] Add low-clearance/high-data, cross-tenant, tamper, tombstone, replay/rebuild, stale-index, and QIHSE-outage tests. Index unavailability must not alter QIHSE artifact or verdict truth.
