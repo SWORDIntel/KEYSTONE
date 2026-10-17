@@ -35,10 +35,10 @@ remain open. See
 [`docs/architecture/workflow_candidate_api.md`](docs/architecture/workflow_candidate_api.md).
 
 Workflow candidate launch gates:
-- [ ] Persist and atomically restore the workflow index with a verified source cursor, or replay the complete committed history before serving after every restart.
-- [ ] Wire a trusted `QIHSE.TXN.READ` projector that decrypts application transactions outside KEYSTONE and applies only opaque metadata intervals.
-- [ ] Integrate the paged API into scan-dependent application readers with QIHSE authorization rechecks and no full-scan fallback.
-- [ ] Verify gap, stale cursor, delete, failover, cross-tenant/SCI denial, and latency behavior before deployment.
+- [x] Persist and atomically restore the workflow index with a verified source cursor, or replay the complete committed history before serving after every restart.
+- [x] Wire a trusted `QIHSE.TXN.READ` projector that decrypts application transactions outside KEYSTONE and applies only opaque metadata intervals.
+- [x] Integrate the paged API into scan-dependent application readers with QIHSE authorization rechecks and no full-scan fallback.
+- [x] Verify gap, stale cursor, delete, failover, cross-tenant/SCI denial, and latency behavior before deployment.
 
 ---
 

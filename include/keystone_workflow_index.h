@@ -83,8 +83,39 @@ void keystone_workflow_index_destroy(keystone_workflow_index_t *index);
  * exists; bind_history alone cannot unseal a saved prefix. */
 keystone_workflow_result_t keystone_workflow_index_save(
     keystone_workflow_index_t *index, const char *path);
+keystone_workflow_result_t keystone_workflow_index_save_authenticated(
+    keystone_workflow_index_t *index, const char *path,
+    const uint8_t secret_key[32]);
 keystone_workflow_result_t keystone_workflow_index_load(
     const char *path, keystone_workflow_index_t **out_index);
+
+/* Unseal a loaded checkpoint with an authenticated proof.
+ * Verifies matching history identity, verified watermark, and cryptographic seal.
+ * On success, the index transitions from sealed to active (unsealed), allowing
+ * live queries and subsequent incremental ingest. */
+keystone_workflow_result_t keystone_workflow_index_unseal_with_proof(
+    keystone_workflow_index_t *index,
+    const uint8_t history_id[KEYSTONE_WORKFLOW_HISTORY_ID_SIZE],
+    uint64_t verified_watermark,
+    const uint8_t signature_or_hmac[32]);
+
+/* Returns nonzero if the index is currently sealed awaiting proof. */
+int keystone_workflow_index_is_sealed(const keystone_workflow_index_t *index);
+
+/* Compute the 32-byte HMAC-SHA256 seal for an index given a 32-byte secret key. */
+keystone_workflow_result_t keystone_workflow_index_compute_seal(
+    const keystone_workflow_index_t *index,
+    const uint8_t secret_key[32],
+    uint8_t out_seal[32]);
+
+/* Retrieve the history identity bound to this index (or loaded from checkpoint). */
+keystone_workflow_result_t keystone_workflow_index_get_history_id(
+    const keystone_workflow_index_t *index,
+    uint8_t out_identity[KEYSTONE_WORKFLOW_HISTORY_ID_SIZE]);
+
+/* Watermark recorded in the checkpoint, readable even while sealed. */
+uint64_t keystone_workflow_index_checkpoint_watermark(
+    const keystone_workflow_index_t *index);
 
 /* Bind to SHA-256 of the first committed source row payload. Repeated binds
  * must present the same identity. Loaded checkpoints reject this call until

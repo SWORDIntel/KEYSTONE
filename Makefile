@@ -147,29 +147,38 @@ SRC     += src/dsmil_hash_indexer.c src/dsmil_dirty_parser.c src/dsmil_model_bri
            src/topology/keystone_topology_index.c src/query/keystone_hybrid_planner.c \
            src/telemetry/keystone_telemetry_engine.c src/incident/keystone_incident_engine.c \
            src/federation/keystone_federated_query.c src/federation/keystone_fed_transport.c src/federation/keystone_bootstrap.c src/federation/keystone_manifest.c \
-           src/query/keystone_rag_engine.c
+           src/query/keystone_rag_engine.c \
+           src/projector/keystone_workflow_projector.c src/projector/keystone_workflow_reader.c
 
 TEST_SRC += tests/test_keystone_fabric.c tests/test_cuda_backend.c tests/test_federation_envelope.c \
             tests/persistence_fuzz/test_persistence_fuzz.c tests/test_federation_transport.c \
             tests/test_bootstrap.c tests/test_manifest.c \
             tests/test_exact_temporal_index.c tests/test_keystoned_service.c \
             tests/test_topology_hybrid_planner.c tests/test_telemetry_incident_engine.c \
-            tests/test_federated_query_rag.c tests/test_workflow_index.c
+            tests/test_federated_query_rag.c tests/test_workflow_index.c \
+            tests/test_workflow_projector_reader.c \
+            tests/test_workflow_adversarial_gates.c \
+            tests/test_workflow_checkpoint_recovery.c
 TEST_BIN += bin/test_keystone_fabric bin/test_cuda_backend bin/test_federation_envelope bin/test_persistence_fuzz bin/test_federation_transport bin/test_bootstrap bin/test_manifest \
             bin/test_exact_temporal_index bin/test_keystoned_service \
             bin/test_topology_hybrid_planner bin/test_telemetry_incident_engine \
-            bin/test_federated_query_rag bin/test_workflow_index
+            bin/test_federated_query_rag bin/test_workflow_index \
+            bin/test_workflow_projector_reader \
+            bin/test_workflow_adversarial_gates \
+            bin/test_workflow_checkpoint_recovery
 
 OBJS    := $(SRC:.c=.o)
 
 BENCH_SRC := benchmarks/dsmil_benchmark.c benchmarks/performance_proof.c benchmarks/trigram_benchmark.c \
-             benchmarks/bench_memory_ramp.c benchmarks/bench_federation.c
+             benchmarks/bench_memory_ramp.c benchmarks/bench_federation.c \
+             benchmarks/bench_workflow_latency.c
 BENCH_BIN := benchmarks/dsmil_benchmark benchmarks/performance_proof benchmarks/trigram_benchmark \
-             benchmarks/bench_memory_ramp benchmarks/bench_federation
+             benchmarks/bench_memory_ramp benchmarks/bench_federation \
+             benchmarks/bench_workflow_latency
 
-.PHONY: all lib tests test check run-tests benchmarks clean tgrep keystoned asan valgrind install install-host
+.PHONY: all lib tests test check run-tests benchmarks clean tgrep keystoned projector-daemon asan valgrind install install-host
 
-all: lib tests benchmarks bin/tgrep bin/keystoned
+all: lib tests benchmarks bin/tgrep bin/keystoned bin/keystone_projector_daemon
 
 install: install-host
 
@@ -179,6 +188,8 @@ install-host:
 tgrep: bin/tgrep
 
 keystoned: bin/keystoned
+
+projector-daemon: bin/keystone_projector_daemon
 
 lib: libkeystone.so
 
@@ -238,6 +249,9 @@ tests/persistence_fuzz/%.o: tests/persistence_fuzz/%.c
 	$(CC) $(CFLAGS) -c $< -o $@
 
 benchmarks/%.o: benchmarks/%.c
+	$(CC) $(CFLAGS) -c $< -o $@
+
+tools/%.o: tools/%.c
 	$(CC) $(CFLAGS) -c $< -o $@
 
 # Test binaries
@@ -310,6 +324,15 @@ bin/test_bootstrap: $(OBJS) $(FORTRAN_OBJ) tests/test_bootstrap.o | bin
 bin/test_manifest: $(OBJS) $(FORTRAN_OBJ) tests/test_manifest.o | bin
 	$(CC) -o $@ $^ $(LDFLAGS)
 
+bin/test_workflow_projector_reader: $(OBJS) $(FORTRAN_OBJ) tests/test_workflow_projector_reader.o | bin
+	$(CC) -o $@ $^ $(LDFLAGS)
+
+bin/test_workflow_adversarial_gates: $(OBJS) $(FORTRAN_OBJ) tests/test_workflow_adversarial_gates.o | bin
+	$(CC) -o $@ $^ $(LDFLAGS)
+
+bin/test_workflow_checkpoint_recovery: $(OBJS) $(FORTRAN_OBJ) tests/test_workflow_checkpoint_recovery.o | bin
+	$(CC) -o $@ $^ $(LDFLAGS)
+
 # Benchmark binaries
 benchmarks/dsmil_benchmark: $(OBJS) $(FORTRAN_OBJ) benchmarks/dsmil_benchmark.o benchmarks/benchmark_writer.o
 	$(CC) -o $@ $^ $(LDFLAGS)
@@ -326,11 +349,17 @@ benchmarks/bench_memory_ramp: $(OBJS) $(FORTRAN_OBJ) benchmarks/bench_memory_ram
 benchmarks/bench_federation: $(OBJS) $(FORTRAN_OBJ) benchmarks/bench_federation.o benchmarks/benchmark_writer.o
 	$(CC) -o $@ $^ $(LDFLAGS)
 
+benchmarks/bench_workflow_latency: $(OBJS) $(FORTRAN_OBJ) benchmarks/bench_workflow_latency.o benchmarks/benchmark_writer.o
+	$(CC) -o $@ $^ $(LDFLAGS)
+
 # Standalone CLI tools
 bin/tgrep: $(OBJS) $(FORTRAN_OBJ) src/tgrep.o | bin
 	$(CC) -o $@ $^ $(LDFLAGS)
 
 bin/keystoned: $(OBJS) $(FORTRAN_OBJ) src/service/keystoned_main.o | bin
+	$(CC) -o $@ $^ $(LDFLAGS)
+
+bin/keystone_projector_daemon: $(OBJS) $(FORTRAN_OBJ) tools/keystone_projector_daemon.o | bin
 	$(CC) -o $@ $^ $(LDFLAGS)
 
 scripts/compare_search_auto: $(OBJS) $(FORTRAN_OBJ) scripts/compare_search.c
@@ -365,11 +394,11 @@ endif
 
 ifeq ($(CUDA_ENABLED),yes)
 all: cuda/libkeystone_cuda.so
-libkeystone.so $(TEST_BIN) $(BENCH_BIN) bin/tgrep: cuda/libkeystone_cuda.so | bin
+libkeystone.so $(TEST_BIN) $(BENCH_BIN) bin/tgrep bin/keystone_projector_daemon: cuda/libkeystone_cuda.so | bin
 endif
 
 clean:
-	rm -f $(OBJS) tests/*.o benchmarks/*.o libkeystone.so $(BENCH_BIN)
+	rm -f $(OBJS) tests/*.o benchmarks/*.o tools/*.o src/projector/*.o libkeystone.so $(BENCH_BIN)
 	rm -rf bin
 	rm -f scripts/compare_search_auto
 	rm -f fortran/keystone_batch.o fortran/*.mod fortran/libkeystone_batch.so

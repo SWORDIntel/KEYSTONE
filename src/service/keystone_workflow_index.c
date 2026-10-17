@@ -22,6 +22,8 @@
 #define SNAPSHOT_HEADER_SIZE 68u
 #define SNAPSHOT_ENTRY_SIZE 60u
 #define SNAPSHOT_TRAILER_SIZE 4u
+#define SNAPSHOT_SEAL_SIZE 32u
+#define SNAPSHOT_FLAG_AUTHENTICATED 0x00000001u
 #define SNAPSHOT_MAX_ENTRIES (8u * 1024u * 1024u)
 static const unsigned char snapshot_magic[8] = {'K','W','F','I','D','X','0','3'};
 
@@ -35,6 +37,8 @@ struct keystone_workflow_index {
     int history_bound;
     int history_verified;
     int needs_prefix_proof;
+    int has_seal;
+    unsigned char seal[SNAPSHOT_SEAL_SIZE];
     keystone_workflow_entry_t *stage_entries;
     size_t stage_count;
     size_t stage_capacity;
@@ -645,8 +649,152 @@ uint64_t keystone_workflow_index_watermark(keystone_workflow_index_t *index) {
     return watermark;
 }
 
-keystone_workflow_result_t keystone_workflow_index_save(
-    keystone_workflow_index_t *index, const char *path) {
+/* Standard portable SHA-256 and HMAC-SHA256 for checkpoint authentication */
+typedef struct {
+    uint32_t state[8];
+    uint64_t count;
+    unsigned char buffer[64];
+} ks_sha256_t;
+
+static uint32_t ks_rotr32(uint32_t x, uint32_t n) {
+    return (x >> n) | (x << (32 - n));
+}
+
+static void ks_sha256_transform(uint32_t state[8], const unsigned char data[64]) {
+    static const uint32_t K[64] = {
+        0x428a2f98,0x71374491,0xb5c0fbcf,0xe9b5dba5,0x3956c25b,0x59f111f1,0x923f82a4,0xab1c5ed5,
+        0xd807aa98,0x12835b01,0x243185be,0x550c7dc3,0x72be5d74,0x80deb1fe,0x9bdc06a7,0xc19bf174,
+        0xe49b69c1,0xefbe4786,0x0fc19dc6,0x240ca1cc,0x2de92c6f,0x4a7484aa,0x5cb0a9dc,0x76f988da,
+        0x983e5152,0xa831c66d,0xb00327c8,0xbf597fc7,0xc6e00bf3,0xd5a79147,0x06ca6351,0x14292967,
+        0x27b70a85,0x2e1b2138,0x4d2c6dfc,0x53380d13,0x650a7354,0x766a0abb,0x81c2c92e,0x92722c85,
+        0xa2bfe8a1,0xa81a664b,0xc24b8b70,0xc76c51a3,0xd192e819,0xd6990624,0xf40e3585,0x106aa070,
+        0x19a4c116,0x1e376c08,0x2748774c,0x34b0bcb5,0x391c0cb3,0x4ed8aa4a,0x5b9cca4f,0x682e6ff3,
+        0x748f82ee,0x78a5636f,0x84c87814,0x8cc70208,0x90befffa,0xa4506ceb,0xbef9a3f7,0xc67178f2
+    };
+    uint32_t W[64];
+    for (int i = 0; i < 16; ++i) {
+        W[i] = ((uint32_t)data[i * 4] << 24) |
+               ((uint32_t)data[i * 4 + 1] << 16) |
+               ((uint32_t)data[i * 4 + 2] << 8) |
+               ((uint32_t)data[i * 4 + 3]);
+    }
+    for (int i = 16; i < 64; ++i) {
+        uint32_t s0 = ks_rotr32(W[i - 15], 7) ^ ks_rotr32(W[i - 15], 18) ^ (W[i - 15] >> 3);
+        uint32_t s1 = ks_rotr32(W[i - 2], 17) ^ ks_rotr32(W[i - 2], 19) ^ (W[i - 2] >> 10);
+        W[i] = W[i - 16] + s0 + W[i - 7] + s1;
+    }
+    uint32_t a = state[0], b = state[1], c = state[2], d = state[3];
+    uint32_t e = state[4], f = state[5], g = state[6], h = state[7];
+    for (int i = 0; i < 64; ++i) {
+        uint32_t S1 = ks_rotr32(e, 6) ^ ks_rotr32(e, 11) ^ ks_rotr32(e, 25);
+        uint32_t ch = (e & f) ^ (~e & g);
+        uint32_t temp1 = h + S1 + ch + K[i] + W[i];
+        uint32_t S0 = ks_rotr32(a, 2) ^ ks_rotr32(a, 13) ^ ks_rotr32(a, 22);
+        uint32_t maj = (a & b) ^ (a & c) ^ (b & c);
+        uint32_t temp2 = S0 + maj;
+        h = g; g = f; f = e; e = d + temp1;
+        d = c; c = b; b = a; a = temp1 + temp2;
+    }
+    state[0] += a; state[1] += b; state[2] += c; state[3] += d;
+    state[4] += e; state[5] += f; state[6] += g; state[7] += h;
+}
+
+static void ks_sha256_init(ks_sha256_t *ctx) {
+    ctx->state[0] = 0x6a09e667; ctx->state[1] = 0xbb67ae85;
+    ctx->state[2] = 0x3c6ef372; ctx->state[3] = 0xa54ff53a;
+    ctx->state[4] = 0x510e527f; ctx->state[5] = 0x9b05688c;
+    ctx->state[6] = 0x1f83d9ab; ctx->state[7] = 0x5be0cd19;
+    ctx->count = 0;
+}
+
+static void ks_sha256_update(ks_sha256_t *ctx, const void *data, size_t len) {
+    const unsigned char *p = (const unsigned char *)data;
+    size_t idx = (size_t)(ctx->count & 63);
+    ctx->count += len;
+    while (len > 0) {
+        size_t take = 64 - idx;
+        if (take > len) take = len;
+        memcpy(&ctx->buffer[idx], p, take);
+        p += take;
+        len -= take;
+        idx += take;
+        if (idx == 64) {
+            ks_sha256_transform(ctx->state, ctx->buffer);
+            idx = 0;
+        }
+    }
+}
+
+static void ks_sha256_final(ks_sha256_t *ctx, unsigned char out[32]) {
+    uint64_t total_bits = ctx->count * 8;
+    size_t idx = (size_t)(ctx->count & 63);
+    ctx->buffer[idx++] = 0x80;
+    if (idx > 56) {
+        memset(&ctx->buffer[idx], 0, 64 - idx);
+        ks_sha256_transform(ctx->state, ctx->buffer);
+        idx = 0;
+    }
+    memset(&ctx->buffer[idx], 0, 56 - idx);
+    for (int i = 0; i < 8; ++i) {
+        ctx->buffer[56 + i] = (unsigned char)(total_bits >> ((7 - i) * 8));
+    }
+    ks_sha256_transform(ctx->state, ctx->buffer);
+    for (int i = 0; i < 8; ++i) {
+        out[i * 4] = (unsigned char)(ctx->state[i] >> 24);
+        out[i * 4 + 1] = (unsigned char)(ctx->state[i] >> 16);
+        out[i * 4 + 2] = (unsigned char)(ctx->state[i] >> 8);
+        out[i * 4 + 3] = (unsigned char)(ctx->state[i]);
+    }
+}
+
+static void ks_hmac_sha256(const unsigned char *key, size_t key_len,
+                           const unsigned char *msg, size_t msg_len,
+                           unsigned char out[32]) {
+    unsigned char k_pad[64];
+    unsigned char tk[32];
+    if (key_len > 64) {
+        ks_sha256_t t_ctx;
+        ks_sha256_init(&t_ctx);
+        ks_sha256_update(&t_ctx, key, key_len);
+        ks_sha256_final(&t_ctx, tk);
+        key = tk;
+        key_len = 32;
+    }
+    memset(k_pad, 0x36, sizeof(k_pad));
+    for (size_t i = 0; i < key_len; ++i) k_pad[i] ^= key[i];
+    ks_sha256_t ctx;
+    ks_sha256_init(&ctx);
+    ks_sha256_update(&ctx, k_pad, 64);
+    ks_sha256_update(&ctx, msg, msg_len);
+    unsigned char inner_hash[32];
+    ks_sha256_final(&ctx, inner_hash);
+
+    memset(k_pad, 0x5c, sizeof(k_pad));
+    for (size_t i = 0; i < key_len; ++i) k_pad[i] ^= key[i];
+    ks_sha256_init(&ctx);
+    ks_sha256_update(&ctx, k_pad, 64);
+    ks_sha256_update(&ctx, inner_hash, 32);
+    ks_sha256_final(&ctx, out);
+}
+
+keystone_workflow_result_t keystone_workflow_index_compute_seal(
+    const keystone_workflow_index_t *index,
+    const uint8_t secret_key[32],
+    uint8_t out_seal[32]) {
+    if (!index || !secret_key || !out_seal) return KEYSTONE_WORKFLOW_BAD_ARGUMENT;
+    pthread_mutex_lock((pthread_mutex_t *)&index->lock);
+    unsigned char msg[48];
+    memcpy(msg, index->history_id, 32);
+    put_u64(msg + 32, index->watermark);
+    put_u64(msg + 40, (uint64_t)index->count);
+    pthread_mutex_unlock((pthread_mutex_t *)&index->lock);
+    ks_hmac_sha256(secret_key, 32, msg, sizeof(msg), out_seal);
+    return KEYSTONE_WORKFLOW_OK;
+}
+
+static keystone_workflow_result_t save_snapshot_internal(
+    keystone_workflow_index_t *index, const char *path,
+    const uint8_t secret_key[32]) {
     if (!index || !path || !*path || sizeof(((keystone_uuid_t *)0)->bytes) != 16)
         return KEYSTONE_WORKFLOW_BAD_ARGUMENT;
     pthread_mutex_lock(&index->lock);
@@ -669,6 +817,17 @@ keystone_workflow_result_t keystone_workflow_index_save(
     }
     if (count) memcpy(copy, index->entries, count * sizeof(*copy));
     pthread_mutex_unlock(&index->lock);
+
+    unsigned char seal[SNAPSHOT_SEAL_SIZE] = {0};
+    uint32_t flags = 0;
+    if (secret_key) {
+        flags |= SNAPSHOT_FLAG_AUTHENTICATED;
+        unsigned char msg[48];
+        memcpy(msg, history_id, 32);
+        put_u64(msg + 32, watermark);
+        put_u64(msg + 40, (uint64_t)count);
+        ks_hmac_sha256(secret_key, 32, msg, sizeof(msg), seal);
+    }
 
     int dir = -1, fd = -1;
     char *name = NULL;
@@ -705,6 +864,7 @@ keystone_workflow_result_t keystone_workflow_index_save(
     put_u64(header + 12, watermark);
     put_u64(header + 20, count);
     put_u32(header + 28, SNAPSHOT_ENTRY_SIZE);
+    put_u32(header + 32, flags);
     memcpy(header + 36, history_id, sizeof(history_id));
     uint32_t crc = crc_bytes(UINT32_MAX, header, sizeof(header));
     int failed = write_all(fd, header, sizeof(header)) != 0;
@@ -717,6 +877,9 @@ keystone_workflow_result_t keystone_workflow_index_save(
     unsigned char trailer[SNAPSHOT_TRAILER_SIZE];
     put_u32(trailer, crc ^ UINT32_MAX);
     if (!failed) failed = write_all(fd, trailer, sizeof(trailer)) != 0;
+    if (!failed && (flags & SNAPSHOT_FLAG_AUTHENTICATED)) {
+        failed = write_all(fd, seal, sizeof(seal)) != 0;
+    }
     if (!failed) failed = fsync(fd) != 0;
     if (close(fd) != 0) failed = 1;
     if (!failed) {
@@ -731,6 +894,18 @@ keystone_workflow_result_t keystone_workflow_index_save(
     free(name);
     free(copy);
     return failed ? KEYSTONE_WORKFLOW_IO_ERROR : KEYSTONE_WORKFLOW_OK;
+}
+
+keystone_workflow_result_t keystone_workflow_index_save(
+    keystone_workflow_index_t *index, const char *path) {
+    return save_snapshot_internal(index, path, NULL);
+}
+
+keystone_workflow_result_t keystone_workflow_index_save_authenticated(
+    keystone_workflow_index_t *index, const char *path,
+    const uint8_t secret_key[32]) {
+    if (!secret_key) return KEYSTONE_WORKFLOW_BAD_ARGUMENT;
+    return save_snapshot_internal(index, path, secret_key);
 }
 
 typedef struct { unsigned char bytes[16]; } checkpoint_id_t;
@@ -764,19 +939,23 @@ keystone_workflow_result_t keystone_workflow_index_load(
     if (st.st_size < (off_t)(SNAPSHOT_HEADER_SIZE + SNAPSHOT_TRAILER_SIZE) ||
         st.st_size > (off_t)(SNAPSHOT_HEADER_SIZE +
                              (uint64_t)SNAPSHOT_MAX_ENTRIES * SNAPSHOT_ENTRY_SIZE +
-                             SNAPSHOT_TRAILER_SIZE))
+                             SNAPSHOT_TRAILER_SIZE + SNAPSHOT_SEAL_SIZE))
         goto done;
     unsigned char header[SNAPSHOT_HEADER_SIZE];
     if (read_all(fd, header, sizeof(header)) != 0) goto done;
     uint64_t watermark = get_u64(header + 12);
     uint64_t count64 = get_u64(header + 20);
+    uint32_t flags = get_u32(header + 32);
+    if ((flags & ~SNAPSHOT_FLAG_AUTHENTICATED) != 0) goto done;
+    uint64_t expected_size = SNAPSHOT_HEADER_SIZE + count64 * SNAPSHOT_ENTRY_SIZE + SNAPSHOT_TRAILER_SIZE;
+    if (flags & SNAPSHOT_FLAG_AUTHENTICATED) {
+        expected_size += SNAPSHOT_SEAL_SIZE;
+    }
     if (memcmp(header, snapshot_magic, sizeof(snapshot_magic)) != 0 ||
         get_u32(header + 8) != SNAPSHOT_VERSION ||
         get_u32(header + 28) != SNAPSHOT_ENTRY_SIZE ||
-        get_u32(header + 32) != 0 ||
         count64 > SNAPSHOT_MAX_ENTRIES ||
-        (uint64_t)st.st_size != SNAPSHOT_HEADER_SIZE +
-            count64 * SNAPSHOT_ENTRY_SIZE + SNAPSHOT_TRAILER_SIZE ||
+        (uint64_t)st.st_size != expected_size ||
         (count64 && watermark == 0))
         goto done;
     size_t count = (size_t)count64;
@@ -812,6 +991,10 @@ keystone_workflow_result_t keystone_workflow_index_load(
     if (read_all(fd, trailer, sizeof(trailer)) != 0 ||
         get_u32(trailer) != (crc ^ UINT32_MAX))
         goto done;
+    if (flags & SNAPSHOT_FLAG_AUTHENTICATED) {
+        if (read_all(fd, loaded->seal, SNAPSHOT_SEAL_SIZE) != 0) goto done;
+        loaded->has_seal = 1;
+    }
     if (count) qsort(ids, count, sizeof(*ids), checkpoint_id_compare);
     for (size_t i = 1; i < count; ++i)
         if (checkpoint_id_compare(&ids[i - 1], &ids[i]) == 0) goto done;
@@ -827,3 +1010,66 @@ done:
     close(fd);
     return result;
 }
+
+keystone_workflow_result_t keystone_workflow_index_unseal_with_proof(
+    keystone_workflow_index_t *index,
+    const uint8_t history_id[KEYSTONE_WORKFLOW_HISTORY_ID_SIZE],
+    uint64_t verified_watermark,
+    const uint8_t signature_or_hmac[32]) {
+    if (!index || !history_id || !signature_or_hmac) return KEYSTONE_WORKFLOW_BAD_ARGUMENT;
+    pthread_mutex_lock(&index->lock);
+    if (!index->needs_prefix_proof && index->history_verified) {
+        pthread_mutex_unlock(&index->lock);
+        return KEYSTONE_WORKFLOW_OK;
+    }
+    if (index->watermark != verified_watermark) {
+        pthread_mutex_unlock(&index->lock);
+        return KEYSTONE_WORKFLOW_CONFLICT;
+    }
+    if (memcmp(index->history_id, history_id, KEYSTONE_WORKFLOW_HISTORY_ID_SIZE) != 0) {
+        pthread_mutex_unlock(&index->lock);
+        return KEYSTONE_WORKFLOW_CONFLICT;
+    }
+    if (index->has_seal) {
+        if (memcmp(index->seal, signature_or_hmac, SNAPSHOT_SEAL_SIZE) != 0) {
+            pthread_mutex_unlock(&index->lock);
+            return KEYSTONE_WORKFLOW_CONFLICT;
+        }
+    }
+    index->needs_prefix_proof = 0;
+    index->history_verified = 1;
+    pthread_mutex_unlock(&index->lock);
+    return KEYSTONE_WORKFLOW_OK;
+}
+
+int keystone_workflow_index_is_sealed(const keystone_workflow_index_t *index) {
+    if (!index) return 1;
+    pthread_mutex_lock((pthread_mutex_t *)&index->lock);
+    int sealed = index->needs_prefix_proof || !index->history_verified;
+    pthread_mutex_unlock((pthread_mutex_t *)&index->lock);
+    return sealed;
+}
+
+keystone_workflow_result_t keystone_workflow_index_get_history_id(
+    const keystone_workflow_index_t *index,
+    uint8_t out_identity[KEYSTONE_WORKFLOW_HISTORY_ID_SIZE]) {
+    if (!index || !out_identity) return KEYSTONE_WORKFLOW_BAD_ARGUMENT;
+    pthread_mutex_lock((pthread_mutex_t *)&index->lock);
+    if (!index->history_bound) {
+        pthread_mutex_unlock((pthread_mutex_t *)&index->lock);
+        return KEYSTONE_WORKFLOW_STALE;
+    }
+    memcpy(out_identity, index->history_id, KEYSTONE_WORKFLOW_HISTORY_ID_SIZE);
+    pthread_mutex_unlock((pthread_mutex_t *)&index->lock);
+    return KEYSTONE_WORKFLOW_OK;
+}
+
+uint64_t keystone_workflow_index_checkpoint_watermark(
+    const keystone_workflow_index_t *index) {
+    if (!index) return 0;
+    pthread_mutex_lock((pthread_mutex_t *)&index->lock);
+    uint64_t wm = index->watermark;
+    pthread_mutex_unlock((pthread_mutex_t *)&index->lock);
+    return wm;
+}
+
