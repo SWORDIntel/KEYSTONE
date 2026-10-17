@@ -49,5 +49,8 @@ __pycache__/
 *.core
 core
 
+# Self-referential repo symlink
+/KEYSTONE
+
 # Transcripts and temporary context
 Context.md

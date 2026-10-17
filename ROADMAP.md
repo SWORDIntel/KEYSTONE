@@ -280,3 +280,23 @@ The unified delivery contract is in `../METHRA/docs/VM9211_CORE_ROADMAP.md`. QIH
 - [x] Index permitted disassembly text and analysis metadata as candidate-only projections without treating KEYSTONE as the payload store; expose source artifact ID, generation/cursor, and freshness or stale/incomplete status.
 - [x] Fix daemon security before untrusted or classified search: persist and enforce SCI on exact/temporal queries, bind the principal to authenticated transport rather than a client-asserted context, and enforce tenant/classification/SCI with no metadata leak. Require QIHSE reauthorization and exact content verification before returning payload bytes.
 - [x] Add low-clearance/high-data, cross-tenant, tamper, tombstone, replay/rebuild, stale-index, and QIHSE-outage tests. Index unavailability must not alter QIHSE artifact or verdict truth.
+
+### Phase 9: Automated Hardware ISA Detection & Host Provisioning (`scripts/install_keystone.sh`, `make install-host`) — COMPLETED
+
+Paralleling the QIHSE hardware installer design, KEYSTONE now provides a unified host detection, automated compilation, multi-tier installation, and systemd service orchestration workflow.
+
+- [x] **Host CPU ISA & Architecture Detection (`scripts/install_keystone.sh`)**:
+  - Automated detection of host CPU extensions: AVX2, AVX-512 (F/DQ/BW/VL), OpenMP, Fortran (`gfortran`), NVIDIA CUDA GPU (`nvcc`), and streaming archive triage (`libarchive`/`libzstd`).
+  - Thread concurrency auto-tuned to 1/2 host logical cores to maintain host responsiveness.
+- [x] **Automated QIHSE Wire Protocol Bridge Integration**:
+  - Auto-probes local filesystem for QIHSE installations (`/opt/QIHSE`, `../QIHSE`), configuring `KEYSTONE_ENABLE_QIHSE_BRIDGE=1` and `QIHSE_ROOT` when detected.
+- [x] **Clean-by-Default Compilation & Multi-Tier Installation**:
+  - Always runs `make clean` before compiling by default, followed by multi-threaded build of native shared library (`libkeystone.so`), standalone CLI search tool (`bin/tgrep`), daemon (`bin/keystoned`), and CUDA accelerator.
+  - Multi-tier installation into `/opt/KEYSTONE`: binaries in `/opt/KEYSTONE/bin`, libraries in `/opt/KEYSTONE/lib`, CUDA library in `/opt/KEYSTONE/cuda`, and C headers in `/opt/KEYSTONE/include/keystone` with timestamped backups of existing files.
+- [x] **Systemd Service Automation & Boot Enablement**:
+  - Generates `/etc/systemd/system/keystoned.service` running `/opt/KEYSTONE/bin/keystoned -s /run/keystone/keystoned.sock` with `RuntimeDirectory=keystone`, `Environment=LD_LIBRARY_PATH=...`, and restart policies.
+  - Enables service on boot via `systemctl enable keystoned.service`, starts/restarts service, and actively verifies daemon socket readiness and health.
+- [x] **Comprehensive CLI Control & Makefile Host Target**:
+  - CLI flags: `--dry-run`, `--no-service`, `--no-launch`, `--jobs/-j`, `--prefix`, `--clean`, `--verbose`, `--socket`, `--qihse-root`.
+  - Added `install-host` and `install` targets to `Makefile` passing `$(INSTALL_ARGS)` to installer script.
+

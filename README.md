@@ -146,7 +146,20 @@ See [`docs/STATUS_SUMMARY.md`](docs/STATUS_SUMMARY.md) and [`ROADMAP.md`](ROADMA
 
 ## Quick Start
 
-### Build & Run Test Suite
+### Automated Hardware Installation & Provisioning (Recommended)
+KEYSTONE includes an automated host installer that detects CPU ISA extensions (AVX2, AVX-512 F/DQ/BW/VL, OpenMP, Fortran, CUDA, libarchive/libzstd), auto-probes local QIHSE installations for cluster bridge integration, compiles the engine with clean-by-default flags, installs binaries and libraries into `/opt/KEYSTONE`, configures user ownership when run via `sudo`, and sets up the `keystoned.service` systemd daemon to launch automatically on boot:
+
+```bash
+# Automated hardware detection, build, and systemd service installation
+sudo make install-host
+# or directly:
+sudo ./scripts/install_keystone.sh
+
+# Non-destructive dry-run preview:
+./scripts/install_keystone.sh --dry-run
+```
+
+### Manual Build & Run Test Suite
 ```bash
 git clone https://github.com/SWORDIntel/KEYSTONE.git
 cd KEYSTONE

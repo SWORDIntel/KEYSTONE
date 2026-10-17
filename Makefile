@@ -54,9 +54,9 @@ else ifneq ($(KEYSTONE_ENABLE_FORTRAN),0)
 endif
 
 # Optional CUDA backend
-CUDA_HOME ?= $(firstword $(wildcard /usr/local/cuda /usr/local/cuda-13.3 /usr/local/cuda-12.8 /usr/local/cuda-12.4 /opt/cuda))
+CUDA_HOME ?= $(firstword $(wildcard /usr/local/cuda /usr/local/cuda-13.3 /usr/local/cuda-12.8 /usr/local/cuda-12.4 /opt/cuda /usr))
 CUDA_INCLUDE ?= $(firstword $(wildcard $(CUDA_HOME)/targets/x86_64-linux/include $(CUDA_HOME)/include))
-CUDA_LIB ?= $(firstword $(wildcard $(CUDA_HOME)/targets/x86_64-linux/lib $(CUDA_HOME)/lib64 $(CUDA_HOME)/lib))
+CUDA_LIB ?= $(firstword $(wildcard $(CUDA_HOME)/targets/x86_64-linux/lib $(CUDA_HOME)/lib64 $(CUDA_HOME)/lib/x86_64-linux-gnu $(CUDA_HOME)/lib))
 
 ifeq ($(KEYSTONE_ENABLE_CUDA),1)
     ifeq ($(shell command -v nvcc >/dev/null 2>&1 && echo yes),yes)
@@ -90,7 +90,7 @@ ifeq ($(KEYSTONE_ENABLE_QIHSE_BRIDGE),1)
         $(error KEYSTONE_ENABLE_QIHSE_BRIDGE=1 requires QIHSE_ROOT to be set (e.g. QIHSE_ROOT=/path/to/QIHSE))
     endif
     QIHSE_CFLAGS := -DKEYSTONE_ENABLE_QIHSE_BRIDGE -I"$(QIHSE_ROOT)/include"
-    QIHSE_LDFLAGS := -L"$(QIHSE_ROOT)" -lqihse -Wl,-rpath,"$(QIHSE_ROOT)"
+    QIHSE_LDFLAGS := -L"$(QIHSE_ROOT)" -L"$(QIHSE_ROOT)/lib" -lqihse -Wl,-rpath,"$(QIHSE_ROOT)" -Wl,-rpath,"$(QIHSE_ROOT)/lib"
     CFLAGS += $(QIHSE_CFLAGS)
     LDFLAGS += $(QIHSE_LDFLAGS)
 endif
@@ -167,9 +167,14 @@ BENCH_SRC := benchmarks/dsmil_benchmark.c benchmarks/performance_proof.c benchma
 BENCH_BIN := benchmarks/dsmil_benchmark benchmarks/performance_proof benchmarks/trigram_benchmark \
              benchmarks/bench_memory_ramp benchmarks/bench_federation
 
-.PHONY: all lib tests test check run-tests benchmarks clean tgrep keystoned asan valgrind
+.PHONY: all lib tests test check run-tests benchmarks clean tgrep keystoned asan valgrind install install-host
 
 all: lib tests benchmarks bin/tgrep bin/keystoned
+
+install: install-host
+
+install-host:
+	@./scripts/install_keystone.sh $(INSTALL_ARGS)
 
 tgrep: bin/tgrep
 
@@ -343,7 +348,7 @@ endif
 endif
 
 # CUDA backend (optional)
-CUDA_HOME ?= $(firstword $(wildcard /usr/local/cuda /usr/local/cuda-13.3 /opt/cuda))
+CUDA_HOME ?= $(firstword $(wildcard /usr/local/cuda /usr/local/cuda-13.3 /usr/local/cuda-12.8 /usr/local/cuda-12.4 /opt/cuda /usr))
 CUDA_INCLUDE ?= $(firstword $(wildcard $(CUDA_HOME)/targets/x86_64-linux/include $(CUDA_HOME)/include))
 cuda/libkeystone_cuda.so: cuda/keystone_cuda.cu
 	mkdir -p cuda
