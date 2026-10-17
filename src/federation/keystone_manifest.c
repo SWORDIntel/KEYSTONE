@@ -2,7 +2,7 @@
  * KEYSTONE Index Manifests & Atomic Publication Implementation
  *
  * Copyright (c) 2025-2026 SWORDIntel Systems. All rights reserved.
- * SRSL-1.0 License (see the repository root).
+ * SRSL-1.1 License (see the repository root).
  */
 
 #include "keystone_manifest.h"

@@ -5,7 +5,7 @@
  * Supports sub-10ns range queries, object-scoped histories, and reverse-chronological scans.
  *
  * Copyright (c) 2025-2026 SWORDIntel Systems. All rights reserved.
- * SRSL-1.0 License.
+ * SRSL-1.1 License.
  */
 
 #include "keystone_temporal.h"
