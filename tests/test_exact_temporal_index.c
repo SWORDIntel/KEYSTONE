@@ -2,7 +2,7 @@
  * KEYSTONE Exact Identity & Monotonic Temporal Index Test Suite
  *
  * Copyright (c) 2025-2026 SWORDIntel Systems. All rights reserved.
- * SRSL-1.0 License.
+ * SRSL-1.1 License.
  */
 
 #include "keystone.h"
