@@ -4,7 +4,7 @@
  * Compact IPC client communicating over Unix domain sockets (AF_UNIX).
  *
  * Copyright (c) 2025-2026 SWORDIntel Systems. All rights reserved.
- * SRSL-1.0 License.
+ * SRSL-1.1 License.
  */
 
 #include "keystoned.h"

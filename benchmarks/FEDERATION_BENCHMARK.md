@@ -2,7 +2,7 @@
 
 **Date**: September 2026  
 **Suite**: `benchmarks/bench_federation`  
-**License**: SWORD Restricted Source Licence v1.0 (SRSL-1.0)
+**License**: SWORD Restricted Source Licence v1.0 (SRSL-1.1)
 **Standard**: C11 (`-std=c11 -Wall -Wextra -Werror=implicit-function-declaration`)
 
 ---

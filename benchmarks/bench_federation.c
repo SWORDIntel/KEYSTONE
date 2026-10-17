@@ -1,5 +1,5 @@
 /**
- * SPDX-License-Identifier: LicenseRef-SRSL-1.0
+ * SPDX-License-Identifier: LicenseRef-SRSL-1.1
  * Copyright (C) 2026 SWORDIntel. All rights reserved.
  *
  * bench_federation.c

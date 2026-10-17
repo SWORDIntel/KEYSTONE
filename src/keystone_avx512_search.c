@@ -9,7 +9,7 @@
  *
  * Version: 2.0.0
  * Author: DSMIL System
- * License: SWORD Restricted Source Licence v3.0 (SRSL-1.0)
+ * License: SWORD Restricted Source Licence v1.1 (SRSL-1.1)
  */
 
 #include "keystone_avx512.h"
