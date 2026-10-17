@@ -7,7 +7,7 @@
  * and resilient partial-result semantics under network partition.
  *
  * Copyright (c) 2025-2026 SWORDIntel Systems. All rights reserved.
- * SRSL-1.0 License.
+ * SRSL-1.1 License.
  */
 
 #ifndef KEYSTONE_FEDERATED_QUERY_H

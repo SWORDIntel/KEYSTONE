@@ -3,7 +3,7 @@
  *
  * Copyright (c) 2025-2026 SWORDIntel Systems. All rights reserved.
  *
- * Licensed under the SWORD Restricted Source Licence (SRSL-1.0); see the repository LICENSE.
+ * Licensed under the SWORD Restricted Source Licence (SRSL-1.1); see the repository LICENSE.
  */
 
 #ifndef KEYSTONE_FEDERATION_H
