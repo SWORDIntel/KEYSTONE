@@ -218,7 +218,7 @@ It supplies fast, bounded, explainable evidence and intelligence to components t
 
 ## License
 
-**SWORD Restricted Source Licence (SRSL-1.0).** See [LICENSE](LICENSE). Third-party components retain their own applicable licenses; see their individual notices.
+**SWORD Restricted Source Licence (SRSL-1.1).** Non-commercial uses are expressly listed; internal business use and other non-permitted uses require a separate executed Commercial Agreement. See [LICENSE](LICENSE) and [licensing notes](docs/LICENSING.md). SRSL-1.0 copies retain previous terms. Third-party licences remain applicable.
 
 ---
 

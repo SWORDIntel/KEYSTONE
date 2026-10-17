@@ -4,7 +4,7 @@ A high-performance C11/SIMD algorithmic search and indexing library featuring ru
 
 Independent repository (`SWORDIntel/KEYSTONE`), tracked as a core dependency in `SWORDIntel/INFRA` and utilized by `SWORDIntel/parrot-sabot` and `SWORDIntel/QIHSE`.
 
-**Status refresh: 2026-10-12.** First-party source and package metadata use SRSL-1.0; third-party components retain their separate notices and licenses. License application does not change KEYSTONE's role as a derived search/index layer rather than an authority for QIHSE artifacts.
+**Status refresh: 2026-10-17.** First-party source and package metadata use SRSL-1.1; third-party components retain their separate notices and licenses. License application does not change KEYSTONE's role as a derived search/index layer rather than an authority for QIHSE artifacts.
 
 ---
 
