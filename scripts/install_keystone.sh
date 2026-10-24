@@ -281,35 +281,91 @@ else
     echo "    [ ] Fortran         (gfortran not found)"
 fi
 
-if command -v nvcc >/dev/null 2>&1; then
-    # Some installations expose nvcc through a symlink but omit its companion
-    # frontend from PATH. Run make with the resolved toolkit bin directory.
-    NVCC_BIN="$(dirname "$(readlink -f "$(command -v nvcc)")")"
-    if [ -x "${NVCC_BIN}/cudafe++" ]; then
-        PATH="${NVCC_BIN}:${PATH}"
+CUDA_CAPS=()
+if command -v nvidia-smi >/dev/null 2>&1; then
+    while IFS= read -r cap; do
+        cap="${cap//[[:space:]]/}"
+        if [[ "$cap" =~ ^([0-9]+)\.([0-9]+)$ ]]; then
+            arch="${BASH_REMATCH[1]}${BASH_REMATCH[2]}"
+            case " ${CUDA_CAPS[*]} " in
+                *" ${arch} "*) ;;
+                *) CUDA_CAPS+=("${arch}") ;;
+            esac
+        fi
+    done < <(nvidia-smi --query-gpu=compute_cap --format=csv,noheader 2>/dev/null || true)
+fi
+
+NVCC_SELECTED=""
+CUDA_HOME_SELECTED=""
+CUDA_ARCH_FLAGS=""
+if [ "${#CUDA_CAPS[@]}" -eq 0 ]; then
+    echo "    [ ] CUDA / GPU      (no GPU compute capability reported by nvidia-smi)"
+elif ! command -v nvcc >/dev/null 2>&1; then
+    echo "    [ ] CUDA / GPU      (GPU compute ${CUDA_CAPS[*]}, nvcc not found)"
+else
+    # Consider the default compiler and other toolkits installed alongside it.
+    # A newer toolkit may have dropped support for an older installed GPU.
+    NVCC_DEFAULT="$(readlink -f "$(command -v nvcc)")"
+    NVCC_SEARCH_BASE="$(dirname "$(dirname "$(dirname "${NVCC_DEFAULT}")")")"
+    NVCC_CANDIDATES=("${NVCC_DEFAULT}")
+    for candidate in "${NVCC_SEARCH_BASE}"/cuda*/bin/nvcc; do
+        [ -x "$candidate" ] || continue
+        candidate="$(readlink -f "$candidate")"
+        case " ${NVCC_CANDIDATES[*]} " in
+            *" ${candidate} "*) ;;
+            *) NVCC_CANDIDATES+=("${candidate}") ;;
+        esac
+    done
+
+    for candidate in "${NVCC_CANDIDATES[@]}"; do
+        candidate_bin="$(dirname "$candidate")"
+        supported_arches="$(PATH="${candidate_bin}:${PATH}" "$candidate" --list-gpu-arch 2>/dev/null || true)"
+        compatible=1
+        flags=""
+        for arch in "${CUDA_CAPS[@]}"; do
+            case $'\n'"${supported_arches}"$'\n' in
+                *$'\n'"compute_${arch}"$'\n'*) ;;
+                *) compatible=0; break ;;
+            esac
+            flags="${flags:+${flags} }-gencode=arch=compute_${arch},code=sm_${arch}"
+        done
+        [ "$compatible" -eq 1 ] || continue
+
+        if [ "$DRY_RUN" -eq 0 ]; then
+            CUDA_PROBE_DIR="$(mktemp -d)"
+            printf '%s\n' '__global__ void keystone_probe(void) {}' > "${CUDA_PROBE_DIR}/probe.cu"
+            read -r -a probe_flags <<< "$flags"
+            if ! PATH="${candidate_bin}:${PATH}" "$candidate" -U_GNU_SOURCE "${probe_flags[@]}" -c \
+                    "${CUDA_PROBE_DIR}/probe.cu" -o "${CUDA_PROBE_DIR}/probe.o" \
+                    > "${CUDA_PROBE_DIR}/probe.log" 2>&1; then
+                echo "    [ ] CUDA compiler ${candidate} failed its GPU-targeted probe" >&2
+                sed -n '1,4p' "${CUDA_PROBE_DIR}/probe.log" >&2
+                rm -r -- "${CUDA_PROBE_DIR}"
+                continue
+            fi
+            rm -r -- "${CUDA_PROBE_DIR}"
+        fi
+
+        NVCC_SELECTED="$candidate"
+        CUDA_HOME_SELECTED="$(dirname "$candidate_bin")"
+        CUDA_ARCH_FLAGS="$flags"
+        PATH="${candidate_bin}:${PATH}"
         export PATH
-    fi
-    CUDA_VER="$(nvcc --version 2>/dev/null | grep -o 'release [0-9.]*' || echo "nvcc present")"
-    if [ "$DRY_RUN" -eq 1 ]; then
         HAS_CUDA=1
         KEYSTONE_ENABLE_CUDA=1
-        echo "    [?] CUDA / GPU      (${CUDA_VER}; compile probe runs during installation)"
-    else
-        CUDA_PROBE_DIR="$(mktemp -d)"
-        printf '%s\n' '__global__ void keystone_probe(void) {}' > "${CUDA_PROBE_DIR}/probe.cu"
-        if nvcc -c "${CUDA_PROBE_DIR}/probe.cu" -o "${CUDA_PROBE_DIR}/probe.o" \
-                > "${CUDA_PROBE_DIR}/probe.log" 2>&1; then
-            HAS_CUDA=1
-            KEYSTONE_ENABLE_CUDA=1
-            echo "    [✓] CUDA / GPU      (${CUDA_VER}; compiler probe passed)"
+        break
+    done
+
+    if [ "$HAS_CUDA" -eq 1 ]; then
+        CUDA_VER="$("${NVCC_SELECTED}" --version 2>/dev/null | grep -o 'release [0-9.]*' || echo "nvcc present")"
+        if [ "$DRY_RUN" -eq 1 ]; then
+            echo "    [?] CUDA / GPU      (${CUDA_VER}; compute ${CUDA_CAPS[*]}; target compile probe deferred)"
         else
-            echo "    [ ] CUDA / GPU      (${CUDA_VER}; compiler probe failed, CUDA disabled)"
-            sed -n '1,4p' "${CUDA_PROBE_DIR}/probe.log" >&2
+            echo "    [✓] CUDA / GPU      (${CUDA_VER}; compute ${CUDA_CAPS[*]}; target compile passed)"
         fi
-        rm -r -- "${CUDA_PROBE_DIR}"
+    else
+        echo "    [ ] CUDA / GPU      (no installed toolkit supports compute ${CUDA_CAPS[*]})"
     fi
-else
-    echo "    [ ] CUDA / GPU      (nvcc not found)"
 fi
 
 if command -v pkg-config >/dev/null 2>&1 &&
@@ -381,6 +437,10 @@ if [ "$DRY_RUN" -eq 1 ]; then
     echo "  KEYSTONE_ENABLE_OPENMP: ${KEYSTONE_ENABLE_OPENMP}"
     echo "  KEYSTONE_ENABLE_FORTRAN:${KEYSTONE_ENABLE_FORTRAN}"
     echo "  KEYSTONE_ENABLE_CUDA:   ${KEYSTONE_ENABLE_CUDA}"
+    if [ "$HAS_CUDA" -eq 1 ]; then
+        echo "  CUDA compiler:          ${NVCC_SELECTED}"
+        echo "  CUDA targets:           ${CUDA_ARCH_FLAGS}"
+    fi
     echo "  KEYSTONE_ENABLE_TAR_ZST:${KEYSTONE_ENABLE_TAR_ZST}"
     echo "  QIHSE Bridge:           ${KEYSTONE_ENABLE_QIHSE_BRIDGE} (QIHSE_ROOT=${QIHSE_ROOT:-None})"
     echo ""
@@ -393,6 +453,10 @@ if [ "$DRY_RUN" -eq 1 ]; then
     echo "    KEYSTONE_ENABLE_OPENMP=${KEYSTONE_ENABLE_OPENMP} \\"
     echo "    KEYSTONE_ENABLE_FORTRAN=${KEYSTONE_ENABLE_FORTRAN} \\"
     echo "    KEYSTONE_ENABLE_CUDA=${KEYSTONE_ENABLE_CUDA} \\"
+    if [ "$HAS_CUDA" -eq 1 ]; then
+        echo "    NVCC=${NVCC_SELECTED} CUDA_HOME=${CUDA_HOME_SELECTED} \\"
+        echo "    CUDA_ARCH_FLAGS='${CUDA_ARCH_FLAGS}' \\"
+    fi
     echo "    KEYSTONE_ENABLE_TAR_ZST=${KEYSTONE_ENABLE_TAR_ZST} \\"
     echo "    KEYSTONE_ENABLE_QIHSE_BRIDGE=${KEYSTONE_ENABLE_QIHSE_BRIDGE} \\"
     if [ "$KEYSTONE_ENABLE_QIHSE_BRIDGE" -eq 1 ]; then
@@ -450,6 +514,10 @@ MAKE_ARGS=(
 )
 if [ "$KEYSTONE_ENABLE_QIHSE_BRIDGE" -eq 1 ] && [ -n "$QIHSE_ROOT" ]; then
     MAKE_ARGS+=("QIHSE_ROOT=${QIHSE_ROOT}")
+fi
+if [ "$HAS_CUDA" -eq 1 ]; then
+    MAKE_ARGS+=("NVCC=${NVCC_SELECTED}" "CUDA_HOME=${CUDA_HOME_SELECTED}"
+               "CUDA_ARCH_FLAGS=${CUDA_ARCH_FLAGS}")
 fi
 
 make "${MAKE_ARGS[@]}" all
