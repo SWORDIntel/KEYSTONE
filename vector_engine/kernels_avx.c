@@ -46,8 +46,24 @@ static inline float avx_hsum256(__m256 v)
  * --------------------------------------------------------------- */
 static inline float avx_dot(const float *a, const float *b, uint32_t dim)
 {
-    __m256 acc = _mm256_setzero_ps();
+    /* Four independent sums hide the add latency on AVX1-only CPUs. */
+    __m256 acc0 = _mm256_setzero_ps();
+    __m256 acc1 = _mm256_setzero_ps();
+    __m256 acc2 = _mm256_setzero_ps();
+    __m256 acc3 = _mm256_setzero_ps();
     uint32_t i = 0;
+    for (; i + 32 <= dim; i += 32) {
+        acc0 = _mm256_add_ps(acc0, _mm256_mul_ps(_mm256_loadu_ps(a + i),
+                                                  _mm256_loadu_ps(b + i)));
+        acc1 = _mm256_add_ps(acc1, _mm256_mul_ps(_mm256_loadu_ps(a + i + 8),
+                                                  _mm256_loadu_ps(b + i + 8)));
+        acc2 = _mm256_add_ps(acc2, _mm256_mul_ps(_mm256_loadu_ps(a + i + 16),
+                                                  _mm256_loadu_ps(b + i + 16)));
+        acc3 = _mm256_add_ps(acc3, _mm256_mul_ps(_mm256_loadu_ps(a + i + 24),
+                                                  _mm256_loadu_ps(b + i + 24)));
+    }
+    __m256 acc = _mm256_add_ps(_mm256_add_ps(acc0, acc1),
+                               _mm256_add_ps(acc2, acc3));
     for (; i + 8 <= dim; i += 8) {
         __m256 va = _mm256_loadu_ps(a + i);
         __m256 vb = _mm256_loadu_ps(b + i);
@@ -64,8 +80,28 @@ static inline float avx_dot(const float *a, const float *b, uint32_t dim)
  * --------------------------------------------------------------- */
 static inline float avx_l2_sq(const float *a, const float *b, uint32_t dim)
 {
-    __m256 acc = _mm256_setzero_ps();
+    /* Match the dot-product dependency depth for the 384-float hot path. */
+    __m256 acc0 = _mm256_setzero_ps();
+    __m256 acc1 = _mm256_setzero_ps();
+    __m256 acc2 = _mm256_setzero_ps();
+    __m256 acc3 = _mm256_setzero_ps();
     uint32_t i = 0;
+    for (; i + 32 <= dim; i += 32) {
+        __m256 d0 = _mm256_sub_ps(_mm256_loadu_ps(a + i),
+                                   _mm256_loadu_ps(b + i));
+        __m256 d1 = _mm256_sub_ps(_mm256_loadu_ps(a + i + 8),
+                                   _mm256_loadu_ps(b + i + 8));
+        __m256 d2 = _mm256_sub_ps(_mm256_loadu_ps(a + i + 16),
+                                   _mm256_loadu_ps(b + i + 16));
+        __m256 d3 = _mm256_sub_ps(_mm256_loadu_ps(a + i + 24),
+                                   _mm256_loadu_ps(b + i + 24));
+        acc0 = _mm256_add_ps(acc0, _mm256_mul_ps(d0, d0));
+        acc1 = _mm256_add_ps(acc1, _mm256_mul_ps(d1, d1));
+        acc2 = _mm256_add_ps(acc2, _mm256_mul_ps(d2, d2));
+        acc3 = _mm256_add_ps(acc3, _mm256_mul_ps(d3, d3));
+    }
+    __m256 acc = _mm256_add_ps(_mm256_add_ps(acc0, acc1),
+                               _mm256_add_ps(acc2, acc3));
     for (; i + 8 <= dim; i += 8) {
         __m256 va = _mm256_loadu_ps(a + i);
         __m256 vb = _mm256_loadu_ps(b + i);
