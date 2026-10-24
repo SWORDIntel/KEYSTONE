@@ -2,8 +2,9 @@
 # Standard make / make test workflow
 
 CC      := gcc
-MARCH   ?= native
-CFLAGS  := -O3 -march=$(MARCH) -fPIC -Wall -Wextra -Werror=implicit-function-declaration -I./include
+MARCH   ?=
+KEYSTONE_ARCH_FLAGS ?=
+CFLAGS  := -O3 $(KEYSTONE_ARCH_FLAGS) $(if $(strip $(MARCH)),-march=$(MARCH)) -fPIC -Wall -Wextra -Werror=implicit-function-declaration -I./include
 LDFLAGS := -lm -ldl
 
 # Optional OpenMP (default: auto-enabled if the compiler supports it,
@@ -95,28 +96,231 @@ ifeq ($(KEYSTONE_ENABLE_QIHSE_BRIDGE),1)
     LDFLAGS += $(QIHSE_LDFLAGS)
 endif
 
-# CPU ISA feature flags
-HOST_CPU_FLAGS ?= $(shell awk -F: '/^flags/{sub(/^ /, "", $$2); print $$2; exit}' /proc/cpuinfo 2>/dev/null)
+# CPU ISA feature flags. Auto builds target the build host; explicit profiles
+# produce binaries for a chosen ISA level. Rebuild after changing profiles.
+HOST_CPU_FLAGS ?= $(shell awk -F: '/^(flags|Features)[[:space:]]*:/{sub(/^ /, "", $$2); print $$2; exit}' /proc/cpuinfo 2>/dev/null)
+KEYSTONE_TARGET_ARCH := $(firstword $(subst -, ,$(shell $(CC) -dumpmachine)))
+KEYSTONE_TARGET_FAMILY := $(if $(filter x86_64 i386 i486 i586 i686,$(KEYSTONE_TARGET_ARCH)),x86,$(if $(filter aarch64,$(KEYSTONE_TARGET_ARCH)),arm,other))
 cpu_has = $(if $(filter $(1),$(HOST_CPU_FLAGS)),1,0)
+cpu_has_all = $(if $(strip $(foreach f,$(1),$(if $(filter $(f),$(HOST_CPU_FLAGS)),,$(f)))),0,1)
+x86_has = $(if $(filter x86,$(KEYSTONE_TARGET_FAMILY)),$(call cpu_has,$(1)),0)
+x86_has_all = $(if $(filter x86,$(KEYSTONE_TARGET_FAMILY)),$(call cpu_has_all,$(1)),0)
+arm_has = $(if $(filter arm,$(KEYSTONE_TARGET_FAMILY)),$(call cpu_has,$(1)),0)
+optional_x86_has = $(if $(filter auto native,$(KEYSTONE_ISA)),$(call x86_has_all,$(1)),0)
+KEYSTONE_ISA ?= auto
 
-KEYSTONE_ENABLE_AVX2   ?= $(call cpu_has,avx2)
-KEYSTONE_ENABLE_AVX512 ?= $(if $(and $(filter avx512f,$(HOST_CPU_FLAGS)),$(filter avx512dq,$(HOST_CPU_FLAGS))),1,0)
-
-# SIMD detection
 ifeq ($(KEYSTONE_FORCE_SCALAR),1)
-    CFLAGS += -mno-avx2 -mno-avx512f
-else
-    ifeq ($(KEYSTONE_ENABLE_AVX2),1)
-        CFLAGS += -mavx2
+    override KEYSTONE_ISA := scalar
+endif
+
+ifeq ($(KEYSTONE_ISA),native)
+    ifeq ($(strip $(MARCH)),)
+        CFLAGS += -march=native
     endif
-    ifeq ($(KEYSTONE_ENABLE_AVX512),1)
-        CFLAGS += -mavx512f -mavx512dq
+    KEYSTONE_ENABLE_SSE41  ?= $(call x86_has,sse4_1)
+    KEYSTONE_ENABLE_AVX    ?= $(call x86_has_all,avx)
+    KEYSTONE_ENABLE_AVX2   ?= $(call x86_has_all,avx2 fma)
+    KEYSTONE_ENABLE_AVX512 ?= $(call x86_has_all,avx512f avx512dq avx512bw avx512vl fma)
+else ifeq ($(KEYSTONE_ISA),auto)
+    KEYSTONE_ENABLE_SSE41  ?= $(call x86_has,sse4_1)
+    KEYSTONE_ENABLE_AVX    ?= $(call x86_has_all,avx)
+    KEYSTONE_ENABLE_AVX2   ?= $(call x86_has_all,avx2 fma)
+    KEYSTONE_ENABLE_AVX512 ?= $(call x86_has_all,avx512f avx512dq avx512bw avx512vl fma)
+else ifeq ($(KEYSTONE_ISA),scalar)
+    override KEYSTONE_ENABLE_SSE41 := 0
+    override KEYSTONE_ENABLE_AVX := 0
+    override KEYSTONE_ENABLE_AVX2 := 0
+    override KEYSTONE_ENABLE_AVX512 := 0
+else ifeq ($(KEYSTONE_ISA),avx)
+    override KEYSTONE_ENABLE_SSE41 := 1
+    override KEYSTONE_ENABLE_AVX := 1
+    override KEYSTONE_ENABLE_AVX2 := 0
+    override KEYSTONE_ENABLE_AVX512 := 0
+else ifeq ($(KEYSTONE_ISA),avx2)
+    override KEYSTONE_ENABLE_SSE41 := 1
+    override KEYSTONE_ENABLE_AVX := 1
+    override KEYSTONE_ENABLE_AVX2 := 1
+    override KEYSTONE_ENABLE_AVX512 := 0
+else ifeq ($(KEYSTONE_ISA),avx512)
+    override KEYSTONE_ENABLE_SSE41 := 1
+    override KEYSTONE_ENABLE_AVX := 1
+    override KEYSTONE_ENABLE_AVX2 := 1
+    override KEYSTONE_ENABLE_AVX512 := 1
+else ifeq ($(KEYSTONE_ISA),avx_vnni)
+    override KEYSTONE_ENABLE_SSE41 := 1
+    override KEYSTONE_ENABLE_AVX := 1
+    override KEYSTONE_ENABLE_AVX2 := 1
+    override KEYSTONE_ENABLE_AVX512 := 0
+    override KEYSTONE_ENABLE_AVX_VNNI := 1
+else ifeq ($(KEYSTONE_ISA),amx)
+    override KEYSTONE_ENABLE_SSE41 := 1
+    override KEYSTONE_ENABLE_AVX := 1
+    override KEYSTONE_ENABLE_AVX2 := 1
+    override KEYSTONE_ENABLE_AVX512 := 1
+    override KEYSTONE_ENABLE_AMX := 1
+else ifeq ($(KEYSTONE_ISA),neon)
+    override KEYSTONE_ENABLE_SSE41 := 0
+    override KEYSTONE_ENABLE_AVX := 0
+    override KEYSTONE_ENABLE_AVX2 := 0
+    override KEYSTONE_ENABLE_AVX512 := 0
+    override KEYSTONE_ENABLE_NEON := 1
+    override KEYSTONE_ENABLE_SVE := 0
+else ifeq ($(KEYSTONE_ISA),sve)
+    override KEYSTONE_ENABLE_SSE41 := 0
+    override KEYSTONE_ENABLE_AVX := 0
+    override KEYSTONE_ENABLE_AVX2 := 0
+    override KEYSTONE_ENABLE_AVX512 := 0
+    override KEYSTONE_ENABLE_NEON := 1
+    override KEYSTONE_ENABLE_SVE := 1
+else
+    $(error Unknown KEYSTONE_ISA '$(KEYSTONE_ISA)'; choose auto, scalar, avx, avx2, avx512, avx_vnni, amx, neon, sve, or native)
+endif
+
+# QIHSE's remaining x86 feature groups are independent opt-ins. In auto and
+# native modes they follow the host; in a named profile they default off.
+KEYSTONE_ENABLE_AVX_VNNI ?= $(if $(filter 1,$(KEYSTONE_ENABLE_AVX2)),$(call optional_x86_has,avx_vnni),0)
+KEYSTONE_ENABLE_AMX      ?= $(call optional_x86_has,amx_tile amx_int8 amx_bf16)
+KEYSTONE_ENABLE_F16C     ?= $(if $(filter 1,$(KEYSTONE_ENABLE_AVX)),$(call optional_x86_has,f16c),0)
+KEYSTONE_ENABLE_AESNI    ?= $(call optional_x86_has,aes)
+KEYSTONE_ENABLE_PCLMUL   ?= $(call optional_x86_has,pclmulqdq)
+KEYSTONE_ENABLE_POPCNT   ?= $(call optional_x86_has,popcnt)
+KEYSTONE_ENABLE_RDRAND   ?= $(call optional_x86_has,rdrand)
+KEYSTONE_ENABLE_FSGSBASE ?= $(call optional_x86_has,fsgsbase)
+KEYSTONE_ENABLE_ERMS     ?= $(call optional_x86_has,erms)
+KEYSTONE_ENABLE_FMA      ?= $(call optional_x86_has,fma)
+KEYSTONE_ENABLE_BMI1     ?= $(call optional_x86_has,bmi1)
+KEYSTONE_ENABLE_BMI2     ?= $(call optional_x86_has,bmi2)
+KEYSTONE_ENABLE_MOVBE    ?= $(call optional_x86_has,movbe)
+KEYSTONE_ENABLE_RDSEED   ?= $(call optional_x86_has,rdseed)
+KEYSTONE_ENABLE_ADX      ?= $(call optional_x86_has,adx)
+KEYSTONE_ENABLE_RTM      ?= $(call optional_x86_has,rtm)
+KEYSTONE_ENABLE_ABM      ?= $(call optional_x86_has,abm)
+KEYSTONE_ENABLE_NEON     ?= $(if $(filter auto native,$(KEYSTONE_ISA)),$(call arm_has,asimd),0)
+KEYSTONE_ENABLE_SVE      ?= $(if $(filter auto native,$(KEYSTONE_ISA)),$(call arm_has,sve),0)
+
+KEYSTONE_X86_FEATURES := SSE41 AVX AVX2 AVX512 AVX_VNNI AMX F16C AESNI PCLMUL POPCNT RDRAND FSGSBASE ERMS FMA BMI1 BMI2 MOVBE RDSEED ADX RTM ABM
+ifeq ($(KEYSTONE_ISA),scalar)
+    $(foreach feature,$(KEYSTONE_X86_FEATURES),$(eval override KEYSTONE_ENABLE_$(feature) := 0))
+    override KEYSTONE_ENABLE_NEON := 0
+    override KEYSTONE_ENABLE_SVE := 0
+endif
+KEYSTONE_ENABLED_X86 := $(strip $(foreach feature,$(KEYSTONE_X86_FEATURES),$(if $(filter 1,$(KEYSTONE_ENABLE_$(feature))),$(feature))))
+ifneq ($(KEYSTONE_ENABLED_X86),)
+    ifneq ($(KEYSTONE_TARGET_FAMILY),x86)
+        $(error x86 ISA flags $(KEYSTONE_ENABLED_X86) require an x86 compiler)
+    endif
+endif
+ifneq ($(filter 1,$(KEYSTONE_ENABLE_NEON) $(KEYSTONE_ENABLE_SVE)),)
+    ifneq ($(KEYSTONE_TARGET_FAMILY),arm)
+        $(error NEON/SVE flags require an AArch64 compiler)
+    endif
+endif
+ifeq ($(KEYSTONE_ENABLE_AVX_VNNI),1)
+    ifneq ($(KEYSTONE_ENABLE_AVX2),1)
+        $(error KEYSTONE_ENABLE_AVX_VNNI=1 requires KEYSTONE_ENABLE_AVX2=1)
+    endif
+endif
+ifeq ($(KEYSTONE_ENABLE_F16C),1)
+    ifneq ($(KEYSTONE_ENABLE_AVX),1)
+        $(error KEYSTONE_ENABLE_F16C=1 requires KEYSTONE_ENABLE_AVX=1)
+    endif
+endif
+ifeq ($(KEYSTONE_ENABLE_SVE),1)
+    ifneq ($(KEYSTONE_ENABLE_NEON),1)
+        $(error KEYSTONE_ENABLE_SVE=1 requires KEYSTONE_ENABLE_NEON=1)
+    endif
+endif
+
+# Keep each group complete. AVX-512 and AMX instructions live in dedicated
+# objects; common code only receives a build marker for guarded dispatch.
+ifeq ($(KEYSTONE_ENABLE_SSE41),1)
+    CFLAGS += -msse4.1
+endif
+ifeq ($(KEYSTONE_ENABLE_AVX),1)
+    CFLAGS += -mavx
+endif
+ifeq ($(KEYSTONE_ENABLE_AVX2),1)
+    CFLAGS += -mavx2 -mfma
+endif
+ifeq ($(KEYSTONE_ENABLE_AVX512),1)
+    CFLAGS += -DKEYSTONE_BUILD_AVX512=1
+    AVX512_CFLAGS := -mavx512f -mavx512dq -mavx512bw -mavx512vl
+endif
+ifeq ($(KEYSTONE_ENABLE_AVX_VNNI),1)
+    CFLAGS += -mavxvnni
+endif
+ifeq ($(KEYSTONE_ENABLE_AMX),1)
+    AMX_CFLAGS := -mamx-tile -mamx-int8 -mamx-bf16
+endif
+ifeq ($(KEYSTONE_ENABLE_F16C),1)
+    CFLAGS += -mf16c
+endif
+ifeq ($(KEYSTONE_ENABLE_AESNI),1)
+    CFLAGS += -maes
+endif
+ifeq ($(KEYSTONE_ENABLE_PCLMUL),1)
+    CFLAGS += -mpclmul
+endif
+ifeq ($(KEYSTONE_ENABLE_POPCNT),1)
+    CFLAGS += -mpopcnt
+endif
+ifeq ($(KEYSTONE_ENABLE_RDRAND),1)
+    CFLAGS += -mrdrnd
+endif
+ifeq ($(KEYSTONE_ENABLE_FSGSBASE),1)
+    CFLAGS += -mfsgsbase
+endif
+ifeq ($(KEYSTONE_ENABLE_ERMS),1)
+    CFLAGS += -DKEYSTONE_ENABLE_ERMS=1
+endif
+ifeq ($(KEYSTONE_ENABLE_FMA),1)
+    ifneq ($(KEYSTONE_ENABLE_AVX2),1)
+        CFLAGS += -mfma
+    endif
+endif
+ifeq ($(KEYSTONE_ENABLE_BMI1),1)
+    CFLAGS += -mbmi
+endif
+ifeq ($(KEYSTONE_ENABLE_BMI2),1)
+    CFLAGS += -mbmi2
+endif
+ifeq ($(KEYSTONE_ENABLE_MOVBE),1)
+    CFLAGS += -mmovbe
+endif
+ifeq ($(KEYSTONE_ENABLE_RDSEED),1)
+    CFLAGS += -mrdseed
+endif
+ifeq ($(KEYSTONE_ENABLE_ADX),1)
+    CFLAGS += -madx
+endif
+ifeq ($(KEYSTONE_ENABLE_RTM),1)
+    CFLAGS += -mrtm
+endif
+ifeq ($(KEYSTONE_ENABLE_ABM),1)
+    CFLAGS += -mlzcnt
+endif
+ifeq ($(KEYSTONE_ENABLE_SVE),1)
+    CFLAGS += -march=armv8.2-a+sve
+else ifeq ($(KEYSTONE_ENABLE_NEON),1)
+    CFLAGS += -march=armv8-a+simd
+endif
+ifeq ($(KEYSTONE_TARGET_FAMILY),x86)
+    # Even MARCH=native or KEYSTONE_ARCH_FLAGS must not spread these ISAs to
+    # normal objects. Dedicated rules append their positive flags afterward.
+    CFLAGS += -mno-avx512f -mno-avx512dq -mno-avx512bw -mno-avx512vl
+    CFLAGS += -mno-amx-tile -mno-amx-int8 -mno-amx-bf16
+endif
+ifeq ($(KEYSTONE_ISA),scalar)
+    ifeq ($(KEYSTONE_TARGET_FAMILY),x86)
+        CFLAGS += -mno-avx -mno-avx2
     endif
 endif
 
 SRC     := src/keystone.c src/dsmil_keystone_wrapper.c src/dsmil_telemetry_processor.c \
-           src/keystone_avx512.c \
-           src/keystone_avx512_search.c src/qihse_keystone_bridge.c
+           src/keystone_avx512_runtime.c src/qihse_keystone_bridge.c
+ifeq ($(KEYSTONE_ENABLE_AVX512),1)
+SRC     += src/keystone_avx512.c src/keystone_avx512_search.c
+endif
 OBJS    := $(SRC:.c=.o)
 
 TEST_SRC := tests/test_core_native.c tests/test_auto_backend.c \
@@ -229,12 +433,16 @@ bin:
 	mkdir -p bin
 
 # Pattern rules
-# Explicit rule for AVX-512 objects to isolate experimental code
+# AVX-512 code is confined to these translation units. The baseline runtime
+# wrapper stays in every build and provides checked dispatch/scalar fallback.
 src/keystone_avx512.o: src/keystone_avx512.c
-	$(if $(filter 1,$(KEYSTONE_ENABLE_AVX512)),$(CC) $(CFLAGS) -mavx512f -mavx512dq -c $< -o $@,$(CC) $(CFLAGS) -mno-avx512f -c $< -o $@)
+	$(CC) $(CFLAGS) $(AVX512_CFLAGS) -c $< -o $@
 
 src/keystone_avx512_search.o: src/keystone_avx512_search.c
-	$(if $(filter 1,$(KEYSTONE_ENABLE_AVX512)),$(CC) $(CFLAGS) -mavx512f -mavx512dq -c $< -o $@,$(CC) $(CFLAGS) -mno-avx512f -c $< -o $@)
+	$(CC) $(CFLAGS) $(AVX512_CFLAGS) -c $< -o $@
+
+# The AMX incident kernel has its own runtime OS tile-permission check.
+src/incident/keystone_incident_engine.o: CFLAGS += $(AMX_CFLAGS)
 
 %.o: %.c
 	$(CC) $(CFLAGS) -c $< -o $@
@@ -398,7 +606,7 @@ libkeystone.so $(TEST_BIN) $(BENCH_BIN) bin/tgrep bin/keystone_projector_daemon:
 endif
 
 clean:
-	rm -f $(OBJS) tests/*.o benchmarks/*.o tools/*.o src/projector/*.o libkeystone.so $(BENCH_BIN)
+	rm -f $(OBJS) src/keystone_avx512.o src/keystone_avx512_search.o tests/*.o benchmarks/*.o tools/*.o src/projector/*.o libkeystone.so $(BENCH_BIN)
 	rm -rf bin
 	rm -f scripts/compare_search_auto
 	rm -f fortran/keystone_batch.o fortran/*.mod fortran/libkeystone_batch.so

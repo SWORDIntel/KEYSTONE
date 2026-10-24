@@ -56,7 +56,9 @@
 
 #if defined(__aarch64__)
 #include <arm_neon.h>
+#if defined(__ARM_FEATURE_SVE)
 #include <arm_sve.h>
+#endif
 #include <sys/auxv.h>
 #include <asm/hwcap.h>
 
@@ -177,7 +179,9 @@ static int test_avx512(void) {
     }
 
     __cpuid_count(7, 0, eax, ebx, ecx, edx);
-    return (ebx & (1u << 16)) != 0; /* AVX-512F */
+    const uint32_t required = (1u << 16) | (1u << 17) |
+                              (1u << 30) | (1u << 31); /* F, DQ, BW, VL */
+    return (ebx & required) == required;
 }
 
 static int test_amx(void) {
@@ -597,14 +601,17 @@ static inline size_t keystone_chunked_search(const int64_t* arr, size_t n, int64
         return KEYSTONE_NOT_FOUND;
     }
 
-    /* Runtime CPU feature detection for optimal SIMD usage */
-    /* NOTE: SIMD paths only compiled if compiler flags enable them */
-    
-    /* AVX-512 path: Only use if compiled AND runtime detected */
+    /* AVX-512 lives in separate objects; never execute it before the runtime
+     * OS and CPU capability check. */
+#if (defined(KEYSTONE_BUILD_AVX512) && KEYSTONE_BUILD_AVX512) || \
+    defined(__AVX2__) || defined(__SSE4_1__)
     uint32_t cpu_features = keystone_detect_cpu_features();
+#endif
+#if defined(KEYSTONE_BUILD_AVX512) && KEYSTONE_BUILD_AVX512
     if (cpu_features & KEYSTONE_CPU_AVX512) {
         return keystone_linear_search_avx512(arr, n, key);
     }
+#endif
 
 #ifdef __AVX2__
     /* AVX2 path: Only use if compiled AND runtime detected */
@@ -712,6 +719,7 @@ static inline size_t keystone_chunked_search(const int64_t* arr, size_t n, int64
     {
         uint32_t cpu_features_arm = keystone_detect_cpu_features();
 
+#if defined(__ARM_FEATURE_SVE)
         if (cpu_features_arm & KEYSTONE_CPU_SVE) {
             /* SVE path */
             uint64_t vl = svcntd();
@@ -735,7 +743,9 @@ static inline size_t keystone_chunked_search(const int64_t* arr, size_t n, int64
                 if (arr[i] == key) return i;
             }
             return KEYSTONE_NOT_FOUND;
-        } else if (cpu_features_arm & KEYSTONE_CPU_NEON) {
+        } else
+#endif
+        if (cpu_features_arm & KEYSTONE_CPU_NEON) {
             /* NEON path (128-bit, 2 x 64-bit integers) */
             const size_t full_chunks = n / 2;
             for (size_t chunk = 0; chunk < full_chunks; ++chunk) {
@@ -909,9 +919,9 @@ static inline size_t keystone_local_search(const int64_t* arr, size_t lo, size_t
      * - No SIMD: 32 elements (rely on compiler auto-vec of the scalar loop)
      */
     {
-        uint32_t feat = keystone_detect_cpu_features();
         size_t simd_window = 32;
 #if defined(__SSE4_1__)
+        uint32_t feat = keystone_detect_cpu_features();
         if (feat & (KEYSTONE_CPU_SSE42 | KEYSTONE_CPU_AVX))
             simd_window = 64;
 #endif
@@ -924,8 +934,8 @@ static inline size_t keystone_local_search(const int64_t* arr, size_t lo, size_t
     /* For medium windows (33-64), use AVX-512 lower_bound if available.
      * The branchless SIMD scan eliminates branch mispredictions that
      * plague binary search for these sizes. */
-#if defined(__AVX512F__)
-    if (n <= 64) {
+#if defined(KEYSTONE_BUILD_AVX512) && KEYSTONE_BUILD_AVX512
+    if (n <= 64 && (keystone_detect_cpu_features() & KEYSTONE_CPU_AVX512)) {
         size_t lb = keystone_lower_bound_avx512(&arr[lo], n, key);
         if (lb < n && arr[lo + lb] == key) return lo + lb;
         return KEYSTONE_NOT_FOUND;
@@ -1122,7 +1132,7 @@ keystone_result_t keystone_search(const int64_t* arr, size_t n, int64_t key,
      * elements) and the prefetch being enabled at all — the old guard
      * excluded AVX1-only CPUs entirely, leaving them with no software
      * prefetching. */
-#if defined(__AVX512F__) || defined(__AVX2__)
+#if defined(__AVX2__)
     if (lo + 64 < n) {
         _mm_prefetch((const char*)&arr[lo + 64], _MM_HINT_T0);  /* Fetch to L1 */
     }
@@ -1437,8 +1447,9 @@ size_t keystone_search_batch(const int64_t* arr, size_t n,
 
     /* AVX-512 merge-walk path: extract sorted keys, use SIMD-accelerated
      * merge-walk, then scatter results back to original order. */
-#if defined(__AVX512F__)
-    if (n >= 1024 && num_items >= 8) {
+#if defined(KEYSTONE_BUILD_AVX512) && KEYSTONE_BUILD_AVX512
+    if (n >= 1024 && num_items >= 8 &&
+        (keystone_detect_cpu_features() & KEYSTONE_CPU_AVX512)) {
         size_t sk_bytes, sr_bytes;
         if (!checked_mul_size(num_items, sizeof(int64_t), &sk_bytes) ||
             !checked_mul_size(num_items, sizeof(size_t), &sr_bytes)) {

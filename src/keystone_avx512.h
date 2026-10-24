@@ -9,9 +9,9 @@ extern "C" {
 #endif
 
 /*
- * Note: These functions assume that the caller has already verified
- * AVX-512 is supported by the hardware (e.g., via keystone_detect_cpu_features).
- * Do not call these directly without checking.
+ * These public functions check CPU and OS AVX-512 support before entering
+ * separately compiled AVX-512 implementations. They use scalar fallbacks
+ * when the ISA is unavailable or omitted from the build.
  */
 
 /**

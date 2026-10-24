@@ -1,9 +1,11 @@
 #include "keystone_avx512.h"
+#if defined(__x86_64__) || defined(__i386__)
 #include <immintrin.h>
+#endif
 
 #define KEYSTONE_NOT_FOUND ((size_t)-1)
 
-size_t keystone_linear_search_avx512(const int64_t* arr, size_t n, int64_t key) {
+size_t keystone_linear_search_avx512_impl(const int64_t* arr, size_t n, int64_t key) {
 #ifdef __AVX512F__
     /* Process in chunks of 8 int64_t (512 bits = 8 x 64-bit integers) */
     const size_t full_chunks = n / 8;
@@ -41,18 +43,18 @@ size_t keystone_linear_search_avx512(const int64_t* arr, size_t n, int64_t key) 
     return KEYSTONE_NOT_FOUND;
 }
 
-void keystone_batch_linear_search_fallback_avx512(
+void keystone_batch_linear_search_fallback_avx512_impl(
     const int64_t* arr, size_t n,
     const int64_t* keys, size_t num_keys,
     size_t* results
 ) {
 #ifdef __AVX512F__
     for (size_t k = 0; k < num_keys; ++k) {
-        results[k] = keystone_linear_search_avx512(arr, n, keys[k]);
+        results[k] = keystone_linear_search_avx512_impl(arr, n, keys[k]);
     }
 #else
     for (size_t k = 0; k < num_keys; ++k) {
-        results[k] = keystone_linear_search_avx512(arr, n, keys[k]);
+        results[k] = keystone_linear_search_avx512_impl(arr, n, keys[k]);
     }
 #endif
 }

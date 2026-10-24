@@ -2,29 +2,76 @@
 
 The KEYSTONE search engine is designed to be easily consumed as a library without hiding its native build assumptions. It can be compiled in various configurations depending on your hardware, dependency constraints, and operational requirements.
 
-## 1. Native Default Build (Recommended)
-This is the standard build mode for KEYSTONE, leveraging autodetected CPU features like AVX2 and AVX-512 where appropriate, while keeping dependencies minimal.
+## 1. CPU ISA Builds
+The default `auto` mode reads the build host's CPU flags and selects complete
+feature groups. It does not pass `-march=native`. Use a named profile to build
+for a specific CPU target; run that binary only on a host with the target ISA.
+Changing a profile or feature switch requires a clean rebuild because Make
+does not track compiler flag changes as file dependencies.
 
 ```bash
-make
+make clean && make KEYSTONE_ISA=auto
+make clean && make KEYSTONE_ISA=scalar
+make clean && make KEYSTONE_ISA=avx
+make clean && make KEYSTONE_ISA=avx2
+make clean && make KEYSTONE_ISA=avx512
+make clean && make KEYSTONE_ISA=avx_vnni
+make clean && make KEYSTONE_ISA=amx
+make clean && make CC=aarch64-linux-gnu-gcc KEYSTONE_ISA=neon
+make clean && make CC=aarch64-linux-gnu-gcc KEYSTONE_ISA=sve
+make clean && make KEYSTONE_ISA=native
 ```
-**Features:**
-- Compiles with `-march=native -O3` by default.
-- AVX-512 experimental features are isolated and compiled if supported.
-- `libarchive` and `libzstd` are autodetected via `pkg-config`. If present, the `.tar.zst` extraction paths are enabled automatically.
-- **OpenMP is auto-enabled** if the compiler supports it (GCC always does). Set `KEYSTONE_ENABLE_OPENMP=0` to disable.
-- **SSE4.2 SIMD path** is compiled when `-msse4.1` is active (via `-march=native` on SSE4.2+ CPUs). This provides 128-bit integer SIMD for AVX1-only CPUs (Sandy Bridge, Ivy Bridge) that lack AVX2's 256-bit integer ops. Runtime dispatch via `keystone_detect_cpu_features()` selects the best available path.
 
-## 2. Dependency-Minimal (Scalar-Only) Build
-If you are deploying KEYSTONE to embedded systems, legacy hardware without SIMD, or environments strictly forbidding vectorization, you can force a purely scalar (C fallback) build.
+| Profile | Required CPU features | Main translation units |
+| --- | --- | --- |
+| `scalar` | Baseline target | No global AVX code generation |
+| `avx` | SSE4.1, AVX | AVX instructions allowed |
+| `avx2` | AVX2, FMA | AVX2 and FMA instructions allowed |
+| `avx512` | AVX-512 F/DQ/BW/VL, FMA | Core remains below AVX-512; dedicated AVX-512 objects use these flags |
+| `avx_vnni` | AVX2, FMA, AVX-VNNI | 256-bit VNNI instructions allowed |
+| `amx` | AVX-512 group, AMX Tile/INT8/BF16 | AMX objects use tile flags; OS tile permission is still required |
+| `neon` | AArch64 NEON/ASIMD | NEON build with SVE code excluded |
+| `sve` | AArch64 SVE | SVE build with NEON fallback |
+| `native` | Build host | Explicit `-march=native` |
 
-```bash
-make KEYSTONE_FORCE_SCALAR=1
-```
+The AVX-512 search implementation is compiled in its own translation units.
+The ordinary core does not receive AVX-512 compiler flags; runtime dispatch
+checks CPU and OS state before entering those units. This keeps a lower-ISA
+path in the same build. A named profile is still a target-specific build: its
+other enabled compiler flags may require newer hardware.
+
+Individual `KEYSTONE_ENABLE_*` switches can override detection in `auto`
+mode. The x86 switches cover `SSE41`, `AVX`, `AVX2`, `AVX512`, `AVX_VNNI`,
+`AMX`, `F16C`, `AESNI`, `PCLMUL`, `POPCNT`, `RDRAND`, `FSGSBASE`, `ERMS`,
+`FMA`, `BMI1`, `BMI2`, `MOVBE`, `RDSEED`, `ADX`, `RTM`, and `ABM`. On AArch64,
+`KEYSTONE_ENABLE_NEON` and `KEYSTONE_ENABLE_SVE` select the ARM extensions.
+AVX2 requires FMA; AVX-512 requires F/DQ/BW/VL and FMA; AVX-VNNI requires
+AVX2; SVE requires NEON. These switches select compiler features, not new
+algorithm implementations for every listed instruction. `ERMS` records the
+capability as a preprocessor define because GCC has no matching `-m` switch.
+
+Use `KEYSTONE_ARCH_FLAGS` for other compiler architecture options or `MARCH`
+for an explicit GCC target. For cross-builds, set `CC` to the target compiler
+and provide target feature switches explicitly rather than relying on the
+build host's `/proc/cpuinfo`.
+
+The host installer calls `make KEYSTONE_ISA=auto`. It reports ISA groups but
+lets the Makefile select flags, including AArch64 NEON and SVE.
+
+`libarchive` and `libzstd` are autodetected via `pkg-config`. OpenMP is
+auto-enabled when supported; set `KEYSTONE_ENABLE_OPENMP=0` to disable it.
+
+## 2. Baseline Build
+For legacy x86 hardware, use the baseline build to keep global AVX code
+generation off. Function-local kernels still check CPU support at runtime.
+
+Use `make clean && make KEYSTONE_ISA=scalar` or the compatible
+`KEYSTONE_FORCE_SCALAR=1` switch.
+
 **Features:**
-- Disables AVX2/AVX-512 explicitly via `-mno-avx2`.
-- Avoids all SIMD includes.
-- Still utilizes KEYSTONE's core anchor table and interpolation algorithms, guaranteeing sub-logarithmic latency even on scalar paths.
+- Disables AVX, AVX2, and AVX-512 for ordinary x86 translation units.
+- Retains runtime-dispatched kernels and the core anchor and interpolation
+  search paths.
 
 ## 3. Archive-Enabled Build (Explicit)
 To guarantee that telemetry processing and `.tar.zst` streaming features are compiled (and error out if dependencies are missing), explicitly request it:
@@ -105,13 +152,15 @@ The standalone vector similarity engine is built via its self-contained build sc
   - `kernels_sse42.c` (compiled on x86 with SSE4.2)
   - `kernels_avx.c` (compiled on x86 with AVX)
   - `kernels_avx2.c` (compiled on x86 with AVX2/FMA)
-  - `kernels_avx512.c` (compiled on x86 with AVX-512)
+  - `kernels_avx512.c` (compiled on x86 with AVX-512 when enabled)
   - `kernels_neon.c` (compiled on ARM aarch64)
 - **Compiler-Agnostic OpenMP**: Automatically probes `-fopenmp` using compiler trial builds and links OpenMP for parallel batch search (`keystone_vec_search_batch`).
 - **Accelerator Flags**:
   - `KEYSTONE_NO_CUDA=1`: Skip CUDA kernel compilation.
   - `KEYSTONE_HAVE_VPU=1`: Enable Myriad X VPU support.
 - Produces `vector_engine/libkeystone_vector.so` with runtime dynamic kernel dispatch.
+This standalone script has its own feature probes and is not controlled by
+`KEYSTONE_ISA` in the main Makefile.
 
 ## 9. Trigram Index Build & Benchmarks
 The native C trigram index is built as part of the core library:

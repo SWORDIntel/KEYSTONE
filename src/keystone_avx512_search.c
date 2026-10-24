@@ -13,7 +13,9 @@
  */
 
 #include "keystone_avx512.h"
+#if defined(__x86_64__) || defined(__i386__)
 #include <immintrin.h>
+#endif
 #include <string.h>
 #include <stdint.h>
 
@@ -34,7 +36,7 @@
 #ifdef __AVX512F__
 
 __attribute__((target("avx512f")))
-void keystone_multi_search_avx512(
+void keystone_multi_search_avx512_impl(
     const int64_t* arr, size_t n,
     const int64_t* keys, size_t num_keys,
     size_t* results
@@ -148,7 +150,7 @@ void keystone_multi_search_avx512(
  * ============================================================================ */
 
 __attribute__((target("avx512f")))
-void keystone_multi_search_4_avx512(
+void keystone_multi_search_4_avx512_impl(
     const int64_t* arr, size_t n,
     const int64_t* keys,  /* exactly 4 keys */
     size_t* results       /* exactly 4 results */
@@ -205,7 +207,7 @@ void keystone_multi_search_4_avx512(
  * ============================================================================ */
 
 __attribute__((target("avx512f")))
-size_t keystone_lower_bound_avx512(
+size_t keystone_lower_bound_avx512_impl(
     const int64_t* arr, size_t n, int64_t key
 ) {
     if (n == 0) return 0;
@@ -276,7 +278,7 @@ size_t keystone_lower_bound_avx512(
  * ============================================================================ */
 
 __attribute__((target("avx512f")))
-size_t keystone_range_search_avx512(
+size_t keystone_range_search_avx512_impl(
     const int64_t* arr, size_t n,
     int64_t lo_key, int64_t hi_key,
     size_t* out_indices, size_t out_capacity
@@ -335,7 +337,7 @@ size_t keystone_range_search_avx512(
  * ============================================================================ */
 
 __attribute__((target("avx512f")))
-size_t keystone_batch_search_sorted_avx512(
+size_t keystone_batch_search_sorted_avx512_impl(
     const int64_t* arr, size_t n,
     const int64_t* sorted_keys, size_t num_keys,
     size_t* results

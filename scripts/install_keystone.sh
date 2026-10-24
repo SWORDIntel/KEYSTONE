@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # scripts/install_keystone.sh — Automated Host ISA Detection, Build & Installer for KEYSTONE
 #
-# Detects host CPU ISA extensions (AVX2, AVX-512 F/DQ/BW/VL, OpenMP, Fortran, CUDA, libarchive/libzstd),
-# configures optimal compiler & make flags, compiles the library, search tools, and daemon,
+# Reports host CPU ISA extensions and lets the Makefile select complete ISA
+# groups in auto mode. Compiles the library, search tools, and daemon,
 # installs binaries and libraries into /opt/KEYSTONE, and configures, enables, and launches
 # the systemd keystoned service.
 #
@@ -150,9 +150,10 @@ echo "  • Build Concurrency    : ${JOBS} threads (-j ${JOBS})"
 # Extract CPU flags
 FLAGS_LIST=""
 if [ -r /proc/cpuinfo ]; then
-    FLAGS_LIST="$(awk -F: '/^flags/{sub(/^ /, "", $2); print $2; exit}' /proc/cpuinfo || true)"
-elif command -v lscpu >/dev/null 2>&1; then
-    FLAGS_LIST="$(lscpu | awk -F: '/^Flags:/{sub(/^ /, "", $2); print $2; exit}' || true)"
+    FLAGS_LIST="$(awk -F: '/^(flags|Features)[[:space:]]*:/{sub(/^ /, "", $2); print $2; exit}' /proc/cpuinfo || true)"
+fi
+if [ -z "$FLAGS_LIST" ] && command -v lscpu >/dev/null 2>&1; then
+    FLAGS_LIST="$(lscpu | awk -F: '/^(Flags|Features):/{sub(/^ /, "", $2); print $2; exit}' || true)"
 fi
 
 has_flag() {
@@ -162,8 +163,6 @@ has_flag() {
     esac
 }
 
-KEYSTONE_ENABLE_AVX2=0
-KEYSTONE_ENABLE_AVX512=0
 KEYSTONE_ENABLE_OPENMP=0
 KEYSTONE_ENABLE_FORTRAN=0
 KEYSTONE_ENABLE_CUDA=0
@@ -171,10 +170,13 @@ KEYSTONE_ENABLE_TAR_ZST=0
 
 HAS_AVX=0
 HAS_AVX2=0
+HAS_FMA=0
 HAS_AVX512F=0
 HAS_AVX512DQ=0
 HAS_AVX512BW=0
 HAS_AVX512VL=0
+HAS_AVX_VNNI=0
+HAS_AMX=0
 HAS_OPENMP=0
 HAS_FORTRAN=0
 HAS_CUDA=0
@@ -182,26 +184,26 @@ HAS_TAR_ZST=0
 
 if [ "$ARCH" = "x86_64" ]; then
     has_flag "avx" && HAS_AVX=1
-    HAS_FMA=0; has_flag "fma" && HAS_FMA=1
+    has_flag "fma" && HAS_FMA=1
     has_flag "avx2" && HAS_AVX2=1
-    [ "$HAS_AVX2" -eq 1 ] && KEYSTONE_ENABLE_AVX2=1
 
     has_flag "avx512f"  && HAS_AVX512F=1
     has_flag "avx512dq" && HAS_AVX512DQ=1
     has_flag "avx512bw" && HAS_AVX512BW=1
     has_flag "avx512vl" && HAS_AVX512VL=1
 
-    if [ "$HAS_AVX512F" -eq 1 ] && [ "$HAS_AVX512DQ" -eq 1 ]; then
-        KEYSTONE_ENABLE_AVX512=1
-    fi
+    if has_flag "avx_vnni" && [ "$HAS_AVX2" -eq 1 ]; then HAS_AVX_VNNI=1; fi
+    if has_flag "amx_tile" && has_flag "amx_int8" && has_flag "amx_bf16"; then HAS_AMX=1; fi
 
     echo "  • CPU Instruction Sets :"
     [ "$HAS_AVX" -eq 1 ]      && echo "    [✓] AVX             (256-bit Vector Floating Point)" || echo "    [ ] AVX             (Not supported)"
-    [ "$HAS_AVX2" -eq 1 ]     && echo "    [✓] AVX2            (256-bit Vector Integer & FMA)" || echo "    [ ] AVX2            (Not supported)"
+    [ "$HAS_AVX2" -eq 1 ] && [ "$HAS_FMA" -eq 1 ] && echo "    [✓] AVX2 + FMA      (256-bit Vector Integer & FMA)" || echo "    [ ] AVX2 + FMA      (Incomplete feature group)"
     [ "$HAS_AVX512F" -eq 1 ]  && echo "    [✓] AVX-512 F       (512-bit Foundation)" || echo "    [ ] AVX-512 F       (Not supported)"
     [ "$HAS_AVX512DQ" -eq 1 ] && echo "    [✓] AVX-512 DQ      (512-bit Doubleword & Quadword)" || echo "    [ ] AVX-512 DQ      (Not supported)"
     [ "$HAS_AVX512BW" -eq 1 ] && echo "    [✓] AVX-512 BW      (512-bit Byte & Word)" || echo "    [ ] AVX-512 BW      (Not supported)"
     [ "$HAS_AVX512VL" -eq 1 ] && echo "    [✓] AVX-512 VL      (512-bit Vector Length Extensions)" || echo "    [ ] AVX-512 VL      (Not supported)"
+    [ "$HAS_AVX_VNNI" -eq 1 ] && echo "    [✓] AVX-VNNI        (256-bit integer dot product)" || echo "    [ ] AVX-VNNI        (Not supported)"
+    [ "$HAS_AMX" -eq 1 ]      && echo "    [✓] AMX             (Tile, INT8, BF16)" || echo "    [ ] AMX             (Incomplete feature group)"
 
 elif [ "$ARCH" = "aarch64" ]; then
     HAS_NEON=0; has_flag "asimd" && HAS_NEON=1
@@ -302,8 +304,7 @@ if [ "$DRY_RUN" -eq 1 ]; then
     echo "  Launch Service:         $( [ "$DO_LAUNCH" -eq 1 ] && echo "Yes" || echo "No (--no-launch)" )"
     echo "  Clean Before Build:     $( [ "$DO_CLEAN" -eq 1 ] && echo "Yes (make clean default)" || echo "No (--no-clean)" )"
     echo "  Build Concurrency:      ${JOBS} threads (-j ${JOBS})"
-    echo "  KEYSTONE_ENABLE_AVX2:   ${KEYSTONE_ENABLE_AVX2}"
-    echo "  KEYSTONE_ENABLE_AVX512: ${KEYSTONE_ENABLE_AVX512} (F:${HAS_AVX512F} DQ:${HAS_AVX512DQ} BW:${HAS_AVX512BW} VL:${HAS_AVX512VL})"
+    echo "  KEYSTONE_ISA:           auto (Makefile checks complete host feature groups)"
     echo "  KEYSTONE_ENABLE_OPENMP: ${KEYSTONE_ENABLE_OPENMP}"
     echo "  KEYSTONE_ENABLE_FORTRAN:${KEYSTONE_ENABLE_FORTRAN}"
     echo "  KEYSTONE_ENABLE_CUDA:   ${KEYSTONE_ENABLE_CUDA}"
@@ -315,8 +316,7 @@ if [ "$DRY_RUN" -eq 1 ]; then
         echo "  make clean"
     fi
     echo "  make -j ${JOBS} \\"
-    echo "    KEYSTONE_ENABLE_AVX2=${KEYSTONE_ENABLE_AVX2} \\"
-    echo "    KEYSTONE_ENABLE_AVX512=${KEYSTONE_ENABLE_AVX512} \\"
+    echo "    KEYSTONE_ISA=auto \\"
     echo "    KEYSTONE_ENABLE_OPENMP=${KEYSTONE_ENABLE_OPENMP} \\"
     echo "    KEYSTONE_ENABLE_FORTRAN=${KEYSTONE_ENABLE_FORTRAN} \\"
     echo "    KEYSTONE_ENABLE_CUDA=${KEYSTONE_ENABLE_CUDA} \\"
@@ -368,8 +368,7 @@ fi
 echo "  • Compiling with detected ISA and hardware parameters..."
 MAKE_ARGS=(
     "-j" "${JOBS}"
-    "KEYSTONE_ENABLE_AVX2=${KEYSTONE_ENABLE_AVX2}"
-    "KEYSTONE_ENABLE_AVX512=${KEYSTONE_ENABLE_AVX512}"
+    "KEYSTONE_ISA=auto"
     "KEYSTONE_ENABLE_OPENMP=${KEYSTONE_ENABLE_OPENMP}"
     "KEYSTONE_ENABLE_FORTRAN=${KEYSTONE_ENABLE_FORTRAN}"
     "KEYSTONE_ENABLE_CUDA=${KEYSTONE_ENABLE_CUDA}"

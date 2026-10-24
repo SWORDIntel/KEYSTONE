@@ -10,6 +10,7 @@
  * ============================================================================ */
 
 #include "../include/keystone.h"
+#include "../src/keystone_avx512.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include "test_macros.h"
@@ -18,6 +19,22 @@
 
 #define TEST_ARRAY_SIZE 10000
 #define TEST_ITERATIONS 1000
+
+static void test_avx512_public_dispatch(void) {
+    const int64_t data[] = {2, 4, 6, 8, 10, 12, 14, 16,
+                            18, 20, 22, 24, 26, 28, 30, 32};
+    const int64_t keys[] = {4, 9, 20};
+    size_t results[4] = {0};
+    size_t range[4] = {0};
+
+    TEST_ASSERT(keystone_linear_search_avx512(data, 16, 20) == 9);
+    TEST_ASSERT(keystone_lower_bound_avx512(data, 16, 9) == 4);
+    TEST_ASSERT(keystone_batch_search_sorted_avx512(data, 16, keys, 3, results) == 2);
+    TEST_ASSERT(results[0] == 1 && results[1] == (size_t)-1 && results[2] == 9);
+    TEST_ASSERT(keystone_range_search_avx512(data, 16, 6, 12, range, 4) == 4);
+    TEST_ASSERT(range[0] == 2 && range[1] == 3 && range[2] == 4 && range[3] == 5);
+    puts("  ✓ Public AVX-512 APIs dispatch safely on this CPU");
+}
 
 /* Test runtime CPU feature detection */
 static void test_cpu_feature_detection(void) {
@@ -215,6 +232,9 @@ int main(int argc, char** argv) {
     srand((unsigned int)time(NULL));
 
     test_cpu_feature_detection();
+    printf("\n");
+
+    test_avx512_public_dispatch();
     printf("\n");
 
     test_memory_bounded_anchors();
