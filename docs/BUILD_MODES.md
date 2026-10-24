@@ -68,7 +68,10 @@ before building by default; use `INSTALL_ARGS="--no-clean"` only when reusing ob
 the same feature settings.
 The installer installs missing Debian or Ubuntu build packages with `apt-get`
 and checks that `nvcc` can compile a kernel before setting
-`KEYSTONE_ENABLE_CUDA=1`. Its dry run lists planned package installs and marks
+`KEYSTONE_ENABLE_CUDA=1`. When a GPU is present, it checks the GPU's compute
+capability against installed CUDA toolkits, selects a compatible `NVCC`, and
+passes `CUDA_HOME` and `CUDA_ARCH_FLAGS` to Make. Set those variables manually
+for non-installer builds. Its dry run lists planned package installs and marks
 CUDA availability as provisional until the compile probe runs.
 
 `libarchive` and `libzstd` are autodetected via `pkg-config`. OpenMP is
