@@ -15,6 +15,65 @@
 #include <string.h>
 #include <unistd.h>
 #include <time.h>
+#include <pthread.h>
+
+typedef struct {
+    pthread_barrier_t* start;
+    const keystone_federation_record_t* record;
+    uint8_t wire[256];
+    size_t wire_len;
+    int ok;
+} crc_thread_ctx_t;
+
+static void* crc_first_use_worker(void* arg) {
+    crc_thread_ctx_t* ctx = (crc_thread_ctx_t*)arg;
+    int wait_result = pthread_barrier_wait(ctx->start);
+    if (wait_result != 0 && wait_result != PTHREAD_BARRIER_SERIAL_THREAD) return NULL;
+
+    for (unsigned i = 0; i < 64; ++i) {
+        keystone_federation_record_t decoded;
+        size_t written = 0;
+        if (keystone_record_serialize(ctx->record, ctx->wire, sizeof(ctx->wire), &written) != 0 ||
+            keystone_record_deserialize(ctx->wire, written, &decoded) != 0 ||
+            decoded.payload_len != ctx->record->payload_len ||
+            memcmp(decoded.payload, ctx->record->payload, decoded.payload_len) != 0) {
+            return NULL;
+        }
+        uint32_t payload_crc = 0;
+        memcpy(&payload_crc, ctx->wire + written - decoded.payload_len - sizeof(payload_crc),
+               sizeof(payload_crc));
+        if (payload_crc != 0xCBF43926u) return NULL; /* IEEE CRC32("123456789") */
+        ctx->wire_len = written;
+    }
+    ctx->ok = 1;
+    return NULL;
+}
+
+static void test_crc_concurrent_first_use(void) {
+    enum { THREADS = 16 };
+    pthread_t threads[THREADS];
+    crc_thread_ctx_t ctx[THREADS] = {0};
+    pthread_barrier_t start;
+    const char payload[] = "123456789";
+    const keystone_federation_record_t record = {
+        .payload = payload, .payload_len = sizeof(payload) - 1
+    };
+
+    TEST_ASSERT(pthread_barrier_init(&start, NULL, THREADS) == 0);
+    for (unsigned i = 0; i < THREADS; ++i) {
+        ctx[i].start = &start;
+        ctx[i].record = &record;
+        TEST_ASSERT(pthread_create(&threads[i], NULL, crc_first_use_worker, &ctx[i]) == 0);
+    }
+    for (unsigned i = 0; i < THREADS; ++i) {
+        TEST_ASSERT(pthread_join(threads[i], NULL) == 0);
+        TEST_ASSERT(ctx[i].ok == 1);
+        TEST_ASSERT(ctx[i].wire_len == ctx[0].wire_len);
+        TEST_ASSERT(memcmp(ctx[i].wire, ctx[0].wire, ctx[0].wire_len) == 0);
+    }
+    TEST_ASSERT(pthread_barrier_destroy(&start) == 0);
+    puts("    [+] Concurrent first-use IEEE CRC32 verified.");
+}
 
 static void test_uuid_primitives(void) {
     printf("[*] Testing UUID primitives...\n");
@@ -763,6 +822,7 @@ int main(void) {
     printf("  KEYSTONE Federation Wire Envelope & Ingestion Tests\n");
     printf("========================================================\n");
 
+    test_crc_concurrent_first_use();
     test_uuid_primitives();
     test_hlc_primitives();
     test_wire_serialization();

@@ -34,87 +34,50 @@ KEYSTONE adheres to strict isolation invariants:
 
 ## 2. Canonical Federation Wire Envelope
 
-All events arriving from QIHSE or federated peer indexers are wrapped in a 124-byte packed binary wire format defined in [`include/keystone_federation.h`](file:///home/john/Documents/KEYSTONE/include/keystone_federation.h).
+All events arriving from QIHSE or federated peer indexers are wrapped in a 124-byte packed binary wire header followed by payload bytes. The format is implemented in [`src/federation/keystone_federation_ingest.c`](../../src/federation/keystone_federation_ingest.c) and exposed through [`include/keystone_federation.h`](../../include/keystone_federation.h).
 
-```text
- 0                   1                   2                   3
- 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1
-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-|                         Magic (0x4B534645)                    |
-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-|        Wire Version           |          Header Size          |
-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-|                          Header CRC32                         |
-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-|                          Payload CRC32                        |
-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-|                         Payload Length                        |
-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-|                                                               |
-+                 Source Object UUID (16 bytes)                 +
-|                                                               |
-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-|                                                               |
-+                 Source Event UUID (16 bytes)                  +
-|                                                               |
-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-|                         Source Node ID                        |
-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-|                    Source Generation (uint64)                 |
-|                                                               |
-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-|                     Fencing Epoch (uint64)                    |
-|                                                               |
-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-|                                                               |
-+             Hybrid Logical Clock (HLC) (16 bytes)             +
-|                                                               |
-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-|                           Tenant ID                           |
-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-|     Classification Level      |          Object Type          |
-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-|                         Record Flags                          |
-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-|                           Reserved                            |
-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-|                      Variable Payload Bytes...                |
-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-```
+The packed header stores these fields in order: magic, version, flags,
+tenant ID, classification, object type, SCI compartments, source generation,
+fencing epoch, HLC physical/logical/node components, three 16-byte source IDs,
+payload length, header CRC32, and payload CRC32. Payload bytes follow the header.
+
+The CRC table is initialized once with C11 atomics. Concurrent serializers and
+deserializers see it only after publication. Both checksums use IEEE CRC32;
+the header checksum covers the first 116 header bytes and the payload checksum
+covers the payload bytes. This is distinct from SSE4.2 CRC32C.
+
 
 ### Wire Fields Specification
 
 | Field | Type | Description |
 |---|---|---|
-| `magic` | `uint32_t` | Constant `0x4B534645` (`'KSFE'`). Hostile or misaligned streams are immediately rejected. |
-| `wire_version` | `uint16_t` | Wire format version (currently `1`). |
-| `header_size` | `uint16_t` | Fixed header size (`124` bytes). |
-| `header_crc32` | `uint32_t` | Standard IEEE 802.3 CRC32 of all header bytes following this field. |
-| `payload_crc32` | `uint32_t` | IEEE 802.3 CRC32 of payload bytes. |
-| `payload_len` | `uint32_t` | Length of payload in bytes (capped at 64 MiB to prevent memory exhaustion). |
-| `source_object_id` | `keystone_uuid_t` | 128-bit persistent resource identity (VM, volume, nic, host). |
-| `source_event_id` | `keystone_uuid_t` | 128-bit unique event identity for deduplication. |
-| `source_node_id` | `uint32_t` | Node originating the event. |
-| `source_generation` | `uint64_t` | Index generation of the emitter. |
-| `fencing_epoch` | `uint64_t` | Monotonic lease/fencing epoch from QIHSE. |
-| `source_hlc` | `keystone_hlc_t` | Monotonic Hybrid Logical Clock (`physical_ms`, `logical`, `node_id`). |
-| `tenant_id` | `uint32_t` | Tenant boundary for multi-tenancy isolation. |
-| `classification` | `uint16_t` | Security clearance level (Unclassified, Confidential, Secret, Top Secret). |
-| `object_type` | `uint16_t` | Domain entity type (`NODE`, `VM`, `STORAGE`, `NETWORK`, `INCIDENT`). |
+| `magic` | `uint32_t` | Constant `0x4B534645` (`'KSFE'`). |
+| `version` | `uint32_t` | Wire format version (currently `1`). |
 | `flags` | `uint32_t` | Ingest flags: `TOMBSTONE`, `SNAPSHOT`, `EVENT`, `TELEMETRY`, `AUDIT`, `SECURITY_SENSITIVE`. |
+| `tenant_id` | `uint32_t` | Tenant boundary. |
+| `classification` | `uint32_t` | Security classification. |
+| `object_type` | `uint32_t` | Domain entity type. |
+| `sci` | `uint32_t` | SCI compartments. |
+| `source_generation` | `uint64_t` | Source index generation. |
+| `fencing_epoch` | `uint64_t` | Source fencing epoch. |
+| `hlc_physical_ms`, `hlc_logical`, `hlc_node_id` | `uint64_t`, `uint32_t`, `uint32_t` | Hybrid logical clock components. |
+| `source_object_id`, `source_event_id`, `source_node_id` | 16 bytes each | Source identifiers. |
+| `payload_len` | `uint64_t` | Payload size, capped by `KEYSTONE_MAX_PAYLOAD_LEN`. |
+| `header_crc32` | `uint32_t` | IEEE CRC32 of the first 116 header bytes. |
+| `payload_crc32` | `uint32_t` | IEEE CRC32 of payload bytes; zero for empty payload. |
 
 ---
 
 ## 3. UUID & Monotonic Hybrid Logical Clock (HLC)
 
 ### 128-bit UUID Primitive
-[`keystone_uuid_t`](file:///home/john/Documents/KEYSTONE/include/keystone_federation.h) provides a 16-byte structure with:
+[`keystone_uuid_t`](../../include/keystone_federation.h) provides a 16-byte structure with:
 - Standard 8-4-4-4-12 RFC 4122 string formatting and parsing (`keystone_uuid_to_string`, `keystone_uuid_from_string`).
 - Fast branchless 128-bit equality comparison (`keystone_uuid_equal`).
 - 64-bit Murmur/avalanche hash function (`keystone_uuid_hash64`) with uniform bit dispersion across hash buckets.
 
 ### Monotonic HLC Invariants
-[`keystone_hlc_t`](file:///home/john/Documents/KEYSTONE/include/keystone_federation.h) maintains causal order across federated nodes without requiring perfectly synchronized wall clocks:
+[`keystone_hlc_t`](../../include/keystone_federation.h) maintains causal order across federated nodes without requiring perfectly synchronized wall clocks:
 
 ```c
 typedef struct {
@@ -169,7 +132,7 @@ sequenceDiagram
 ```
 
 ### High-Throughput Deduplication Ring
-Implemented in [`src/federation/keystone_federation_ingest.c`](file:///home/john/Documents/KEYSTONE/src/federation/keystone_federation_ingest.c):
+Implemented in [`src/federation/keystone_federation_ingest.c`](../../src/federation/keystone_federation_ingest.c):
 - Circular power-of-two slot table with open-addressing and 64-bit avalanche hashing.
 - Guaranteed $O(1)$ query and insertion time.
 - Measured performance: **9.3+ million events/second** (107 ns/event) under concurrent test loads.

@@ -147,7 +147,7 @@ See [`docs/STATUS_SUMMARY.md`](docs/STATUS_SUMMARY.md) and [`ROADMAP.md`](ROADMA
 ## Quick Start
 
 ### Automated Hardware Installation & Provisioning (Recommended)
-KEYSTONE includes an automated host installer that detects CPU ISA extensions (AVX2, AVX-512 F/DQ/BW/VL, OpenMP, Fortran, CUDA, libarchive/libzstd), auto-probes local QIHSE installations for cluster bridge integration, compiles the engine with clean-by-default flags, installs binaries and libraries into `/opt/KEYSTONE`, configures user ownership when run via `sudo`, and sets up the `keystoned.service` systemd daemon to launch automatically on boot:
+KEYSTONE includes an automated host installer that detects supported CPU ISA extensions, OpenMP, Fortran, CUDA, and libarchive/libzstd. It auto-probes local QIHSE installations for cluster bridge integration, performs a clean host build, installs binaries and libraries under its configurable prefix, and enables and starts the `keystoned.service` systemd daemon. On E5-2470 v2, automatic ISA selection enables SSE4.1 and AVX; SSE4.2 remains opt-in after a measured trigram regression on that CPU. See the build modes guide for named ISA profiles and override flags.
 
 ```bash
 # Automated hardware detection, build, and systemd service installation
@@ -157,6 +157,10 @@ sudo ./scripts/install_keystone.sh
 
 # Non-destructive dry-run preview:
 ./scripts/install_keystone.sh --dry-run
+
+# Confirm the installed daemon:
+systemctl is-active keystoned
+systemctl status keystoned --no-pager
 ```
 
 ### Manual Build & Run Test Suite
@@ -164,7 +168,7 @@ sudo ./scripts/install_keystone.sh
 git clone https://github.com/SWORDIntel/KEYSTONE.git
 cd KEYSTONE
 make clean
-make check    # Runs all 18 test suites across core and federation modules
+make check    # Runs the core, federation, service, and ISA test suites
 ```
 
 ### Start `keystoned` Service Daemon

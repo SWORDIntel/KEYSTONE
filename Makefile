@@ -520,7 +520,7 @@ bin/test_cuda_backend: $(OBJS) $(FORTRAN_OBJ) tests/test_cuda_backend.o | bin
 	$(CC) -o $@ $^ $(LDFLAGS)
 
 bin/test_federation_envelope: $(OBJS) $(FORTRAN_OBJ) tests/test_federation_envelope.o | bin
-	$(CC) -o $@ $^ $(LDFLAGS)
+	$(CC) -o $@ $^ $(LDFLAGS) -pthread
 
 bin/test_exact_temporal_index: $(OBJS) $(FORTRAN_OBJ) tests/test_exact_temporal_index.o | bin
 	$(CC) -o $@ $^ $(LDFLAGS)

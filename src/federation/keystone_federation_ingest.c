@@ -17,6 +17,7 @@
 #include <unistd.h>
 #include <fcntl.h>
 #include <pthread.h>
+#include <stdatomic.h>
 #include <sys/types.h>
 #include <sys/stat.h>
 
@@ -47,17 +48,28 @@ typedef struct {
 /* --- Fast CRC32 Implementation (IEEE 802.3 Standard) --- */
 static uint32_t crc32_ieee(const void* data, size_t len) {
     static uint32_t table[256];
-    static int table_initialized = 0;
+    /* 0 = uninitialized, 1 = initializing, 2 = published. The release/acquire
+     * pair keeps readers from observing a partially populated table. */
+    static atomic_int table_state = 0;
 
-    if (!table_initialized) {
-        for (uint32_t i = 0; i < 256; i++) {
-            uint32_t c = i;
-            for (int j = 0; j < 8; j++) {
-                c = (c & 1) ? (0xEDB88320u ^ (c >> 1)) : (c >> 1);
+    if (atomic_load_explicit(&table_state, memory_order_acquire) != 2) {
+        int expected = 0;
+        if (atomic_compare_exchange_strong_explicit(&table_state, &expected, 1,
+                                                    memory_order_acq_rel,
+                                                    memory_order_acquire)) {
+            for (uint32_t i = 0; i < 256; i++) {
+                uint32_t c = i;
+                for (int j = 0; j < 8; j++) {
+                    c = (c & 1) ? (0xEDB88320u ^ (c >> 1)) : (c >> 1);
+                }
+                table[i] = c;
             }
-            table[i] = c;
+            atomic_store_explicit(&table_state, 2, memory_order_release);
+        } else {
+            while (atomic_load_explicit(&table_state, memory_order_acquire) != 2) {
+                /* Initialization is bounded to 256 table entries. */
+            }
         }
-        table_initialized = 1;
     }
 
     uint32_t crc = 0xFFFFFFFFu;

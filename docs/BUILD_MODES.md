@@ -61,6 +61,11 @@ build host's `/proc/cpuinfo`.
 
 The host installer calls `make KEYSTONE_ISA=auto`. It reports ISA groups but
 lets the Makefile select flags, including AArch64 NEON and SVE.
+Preview its selections with `./scripts/install_keystone.sh --dry-run --jobs 4`,
+then run `sudo make install-host` to build, install, and start the service.
+Check the result with `systemctl is-active keystoned`. The installer cleans
+before building by default; use `INSTALL_ARGS="--no-clean"` only when reusing objects built with
+the same feature settings.
 
 `libarchive` and `libzstd` are autodetected via `pkg-config`. OpenMP is
 auto-enabled when supported; set `KEYSTONE_ENABLE_OPENMP=0` to disable it.
