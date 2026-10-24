@@ -94,7 +94,7 @@ uint32_t keystone_vec_detect_features(void) {
 #if defined(__GNUC__)
     unsigned int eax, ebx, ecx, edx;
     if (__get_cpuid(1, &eax, &ebx, &ecx, &edx)) {
-        if (edx & (1 << 20)) flags |= KEYSTONE_F_SSE42;
+        if (ecx & (1 << 20)) flags |= KEYSTONE_F_SSE42;
         if (ecx & (1 << 28)) {
             /* Check OSXSAVE */
             if (ecx & (1 << 27)) {
@@ -104,12 +104,14 @@ uint32_t keystone_vec_detect_features(void) {
                     /* Check AVX2 and AVX-512 via leaf 7 */
                     unsigned int eax7, ebx7, ecx7, edx7;
                     if (__get_cpuid_count(7, 0, &eax7, &ebx7, &ecx7, &edx7)) {
-                        if (ebx7 & (1 << 5)) flags |= KEYSTONE_F_AVX2;
-                        if (ebx7 & (1 << 16)) {
-                            if ((xcr & 0xE6) == 0xE6) {
-                                flags |= KEYSTONE_F_AVX512F;
-                            }
-                        }
+                        if ((ebx7 & (1 << 5)) && (ecx & (1 << 12)))
+                            flags |= KEYSTONE_F_AVX2; /* AVX2 kernel uses FMA */
+                        /* Require the full AVX-512 build group and OS ZMM state. */
+                        const unsigned int avx512_mask =
+                            (1u << 16) | (1u << 17) | (1u << 30) | (1u << 31);
+                        if ((ebx7 & avx512_mask) == avx512_mask &&
+                            (xcr & 0xE6) == 0xE6)
+                            flags |= KEYSTONE_F_AVX512F;
                     }
                 }
             }
@@ -216,6 +218,14 @@ static keystone_error_t select_backend(keystone_vec_engine_t *e) {
     uint32_t f = keystone_vec_detect_features();
     int force = e->cfg.force_backend;
     (void)f; /* Used only in #if blocks below */
+
+    /* A forced CPU backend must still be safe for this processor and OS. */
+    if ((force == KEYSTONE_BACKEND_SSE42 && !(f & KEYSTONE_F_SSE42)) ||
+        (force == KEYSTONE_BACKEND_AVX && !(f & KEYSTONE_F_AVX)) ||
+        (force == KEYSTONE_BACKEND_AVX2 && !(f & KEYSTONE_F_AVX2)) ||
+        (force == KEYSTONE_BACKEND_AVX512 && !(f & KEYSTONE_F_AVX512F)) ||
+        (force == KEYSTONE_BACKEND_NEON && !(f & KEYSTONE_F_NEON)))
+        force = KEYSTONE_BACKEND_SCALAR;
 
     /* Level 1: CUDA — soft-loaded, never required */
     if (force < 0 || force == KEYSTONE_BACKEND_CUDA) {
@@ -562,6 +572,9 @@ static keystone_error_t search_cpu(keystone_vec_engine_t *e,
                                     const float *query,
                                     uint32_t k,
                                     keystone_vec_result_t *results) {
+    /* Metric state is thread-local in each kernel. Batch workers and callers
+     * sharing a thread across engines must set it for every search. */
+    if (e->kernels->set_metric) e->kernels->set_metric(e->cfg.metric);
     /* Try LSH first for sub-linear search */
     if (e->lsh_finalized && e->lsh) {
         uint32_t max_cands = e->cfg.rerank_k > 0 ? e->cfg.rerank_k : 256;

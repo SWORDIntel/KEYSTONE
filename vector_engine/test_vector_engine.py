@@ -10,6 +10,7 @@ If compiled in but the VPU socket is not present at runtime, the engine
 silently falls back to CPU SIMD.
 """
 import ctypes
+import subprocess
 import numpy as np
 from pathlib import Path
 
@@ -252,11 +253,60 @@ def detect_features() -> dict:
     }
 
 
+def _test_cpu_dispatch_and_metrics():
+    """Check CPUID dispatch and per-worker metric state on a small exact case."""
+    features = detect_features()
+    try:
+        cpu_info = subprocess.check_output(["lscpu"], text=True)
+    except (OSError, subprocess.CalledProcessError):
+        cpu_info = ""
+    cpu_flags = [line.split(":", 1)[1].split() for line in cpu_info.splitlines()
+                 if line.startswith("Flags:")]
+    if cpu_flags:
+        assert features["sse42"] == ("sse4_2" in cpu_flags[0]), \
+            "SSE4.2 detection must match CPU flags (CPUID leaf 1 ECX bit 20)"
+
+    backends = [(SCALAR, "scalar")]
+    if features["sse42"]:
+        backends.append((SSE42, "sse42"))
+    expected = {L2: 0.0, DOT: -9.0}
+    query = np.zeros(21, dtype=np.float32)
+    query[0] = 3.0
+    for backend_id, backend_name in backends:
+        for metric, distance in expected.items():
+            engine = KeystoneVectorEngine(dim=query.size, capacity=1, metric=metric,
+                                          lsh_num_tables=1, lsh_hash_bits=4,
+                                          force_backend=backend_id)
+            try:
+                assert engine.backend == backend_name
+                engine.upsert_batch([17], query[None, :])
+                ids, dists = engine.search_batch(np.repeat(query[None, :], 8, axis=0), k=1)
+                assert np.all(ids == 17), (backend_name, metric, ids)
+                assert np.allclose(dists, distance, atol=1e-6), (backend_name, metric, dists)
+            finally:
+                engine.close()
+
+    # Compiled kernels may exist on hosts unable to execute them.
+    for backend_id, feature in ((AVX2, "avx2"), (AVX512, "avx512f")):
+        if not features[feature]:
+            engine = KeystoneVectorEngine(dim=query.size, capacity=1, metric=L2,
+                                          lsh_num_tables=1, lsh_hash_bits=4,
+                                          force_backend=backend_id)
+            try:
+                assert engine.backend == "scalar", (backend_id, engine.backend)
+                engine.upsert_batch([17], query[None, :])
+                ids, dists = engine.search(query, k=1)
+                assert ids[0] == 17 and abs(float(dists[0])) < 1e-6
+            finally:
+                engine.close()
+
+
 if __name__ == "__main__":
     # Quick self-test
     print("=== KEYSTONE Vector Engine Self-Test ===")
     features = detect_features()
     print(f"Detected features: {features}")
+    _test_cpu_dispatch_and_metrics()
 
     engine = KeystoneVectorEngine(dim=384, capacity=10000)
     print(f"Engine: {engine}")
