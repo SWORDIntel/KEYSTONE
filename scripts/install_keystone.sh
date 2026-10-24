@@ -124,6 +124,56 @@ echo "║                  KEYSTONE HOST HARDWARE INSTALLER                    �
 echo "║          HARDWARE ISA DETECTION, BUILD & HOST PROVISIONING           ║"
 echo "╚══════════════════════════════════════════════════════════════════════╝"
 
+# Install only missing host build dependencies. CUDA is optional and is
+# enabled below only after its compiler can build a kernel; do not install a
+# toolkit merely because a CUDA executable or driver is present.
+MISSING_PACKAGES=()
+if ! command -v gcc >/dev/null 2>&1 ||
+   ! command -v g++ >/dev/null 2>&1 ||
+   ! command -v make >/dev/null 2>&1; then
+    MISSING_PACKAGES+=(build-essential)
+fi
+if ! command -v pkg-config >/dev/null 2>&1; then
+    MISSING_PACKAGES+=(pkg-config)
+fi
+if ! command -v gfortran >/dev/null 2>&1; then
+    MISSING_PACKAGES+=(gfortran)
+fi
+if ! command -v pkg-config >/dev/null 2>&1 ||
+   ! pkg-config --exists libarchive 2>/dev/null; then
+    MISSING_PACKAGES+=(libarchive-dev)
+fi
+if ! command -v pkg-config >/dev/null 2>&1 ||
+   ! pkg-config --exists libzstd 2>/dev/null; then
+    MISSING_PACKAGES+=(libzstd-dev)
+fi
+
+if [ "${#MISSING_PACKAGES[@]}" -gt 0 ]; then
+    echo ""
+    echo "[Dependencies] Missing packages: ${MISSING_PACKAGES[*]}"
+    if [ "$DRY_RUN" -eq 1 ]; then
+        echo "  • Dry run: packages would be installed before feature detection."
+    elif command -v apt-get >/dev/null 2>&1; then
+        echo "  • Installing missing Debian/Ubuntu build packages..."
+        DEBIAN_FRONTEND=noninteractive apt-get update
+        DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends "${MISSING_PACKAGES[@]}"
+    else
+        echo "[ERROR] Missing build packages; automatic installation requires apt-get." >&2
+        exit 1
+    fi
+else
+    echo "  • Build dependencies: already available."
+fi
+
+if [ "$DRY_RUN" -eq 0 ]; then
+    for tool in gcc g++ make pkg-config; do
+        if ! command -v "$tool" >/dev/null 2>&1; then
+            echo "[ERROR] Required build tool '$tool' is unavailable." >&2
+            exit 1
+        fi
+    done
+fi
+
 # ── Step 1: Detect Host Hardware & CPU ISA Extensions ─────────────────────────
 echo ""
 echo "[1/5] Detecting CPU ISA Extensions and Hardware Topology..."
@@ -232,15 +282,38 @@ else
 fi
 
 if command -v nvcc >/dev/null 2>&1; then
-    HAS_CUDA=1
-    KEYSTONE_ENABLE_CUDA=1
+    # Some installations expose nvcc through a symlink but omit its companion
+    # frontend from PATH. Run make with the resolved toolkit bin directory.
+    NVCC_BIN="$(dirname "$(readlink -f "$(command -v nvcc)")")"
+    if [ -x "${NVCC_BIN}/cudafe++" ]; then
+        PATH="${NVCC_BIN}:${PATH}"
+        export PATH
+    fi
     CUDA_VER="$(nvcc --version 2>/dev/null | grep -o 'release [0-9.]*' || echo "nvcc present")"
-    echo "    [✓] CUDA / GPU      (${CUDA_VER})"
+    if [ "$DRY_RUN" -eq 1 ]; then
+        HAS_CUDA=1
+        KEYSTONE_ENABLE_CUDA=1
+        echo "    [?] CUDA / GPU      (${CUDA_VER}; compile probe runs during installation)"
+    else
+        CUDA_PROBE_DIR="$(mktemp -d)"
+        printf '%s\n' '__global__ void keystone_probe(void) {}' > "${CUDA_PROBE_DIR}/probe.cu"
+        if nvcc -c "${CUDA_PROBE_DIR}/probe.cu" -o "${CUDA_PROBE_DIR}/probe.o" \
+                > "${CUDA_PROBE_DIR}/probe.log" 2>&1; then
+            HAS_CUDA=1
+            KEYSTONE_ENABLE_CUDA=1
+            echo "    [✓] CUDA / GPU      (${CUDA_VER}; compiler probe passed)"
+        else
+            echo "    [ ] CUDA / GPU      (${CUDA_VER}; compiler probe failed, CUDA disabled)"
+            sed -n '1,4p' "${CUDA_PROBE_DIR}/probe.log" >&2
+        fi
+        rm -r -- "${CUDA_PROBE_DIR}"
+    fi
 else
     echo "    [ ] CUDA / GPU      (nvcc not found)"
 fi
 
-if pkg-config --exists libarchive libzstd 2>/dev/null; then
+if command -v pkg-config >/dev/null 2>&1 &&
+   pkg-config --exists libarchive libzstd 2>/dev/null; then
     HAS_TAR_ZST=1
     KEYSTONE_ENABLE_TAR_ZST=1
     echo "    [✓] libarchive/zstd (Streaming .tar.zst archive triage)"
