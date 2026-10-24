@@ -55,12 +55,15 @@ else ifneq ($(KEYSTONE_ENABLE_FORTRAN),0)
 endif
 
 # Optional CUDA backend
+NVCC ?= nvcc
+CUDA_ARCH_FLAGS ?=
 CUDA_HOME ?= $(firstword $(wildcard /usr/local/cuda /usr/local/cuda-13.3 /usr/local/cuda-12.8 /usr/local/cuda-12.4 /opt/cuda /usr))
 CUDA_INCLUDE ?= $(firstword $(wildcard $(CUDA_HOME)/targets/x86_64-linux/include $(CUDA_HOME)/include))
 CUDA_LIB ?= $(firstword $(wildcard $(CUDA_HOME)/targets/x86_64-linux/lib $(CUDA_HOME)/lib64 $(CUDA_HOME)/lib/x86_64-linux-gnu $(CUDA_HOME)/lib))
+CUDA_NVCC_FOUND := $(shell command -v $(NVCC) >/dev/null 2>&1 && echo yes)
 
 ifeq ($(KEYSTONE_ENABLE_CUDA),1)
-    ifeq ($(shell command -v nvcc >/dev/null 2>&1 && echo yes),yes)
+    ifeq ($(CUDA_NVCC_FOUND),yes)
         CUDA_CFLAGS := -DKEYSTONE_ENABLE_CUDA $(if $(CUDA_INCLUDE),-I$(CUDA_INCLUDE))
         CUDA_LDFLAGS := -L./cuda -lkeystone_cuda -Wl,-rpath,'$$ORIGIN/cuda' -Wl,-rpath,'$$ORIGIN/../cuda'
         ifneq ($(CUDA_LIB),)
@@ -69,10 +72,10 @@ ifeq ($(KEYSTONE_ENABLE_CUDA),1)
         CFLAGS  += $(CUDA_CFLAGS)
         LDFLAGS += $(CUDA_LDFLAGS)
     else
-        $(error KEYSTONE_ENABLE_CUDA=1 requires nvcc)
+        $(error KEYSTONE_ENABLE_CUDA=1 requires the selected NVCC compiler)
     endif
 else ifneq ($(KEYSTONE_ENABLE_CUDA),0)
-    ifeq ($(shell command -v nvcc >/dev/null 2>&1 && echo yes),yes)
+    ifeq ($(CUDA_NVCC_FOUND),yes)
         CUDA_CFLAGS := -DKEYSTONE_ENABLE_CUDA $(if $(CUDA_INCLUDE),-I$(CUDA_INCLUDE))
         CUDA_LDFLAGS := -L./cuda -lkeystone_cuda -Wl,-rpath,'$$ORIGIN/cuda' -Wl,-rpath,'$$ORIGIN/../cuda'
         ifneq ($(CUDA_LIB),)
@@ -609,13 +612,13 @@ CUDA_HOME ?= $(firstword $(wildcard /usr/local/cuda /usr/local/cuda-13.3 /usr/lo
 CUDA_INCLUDE ?= $(firstword $(wildcard $(CUDA_HOME)/targets/x86_64-linux/include $(CUDA_HOME)/include))
 cuda/libkeystone_cuda.so: cuda/keystone_cuda.cu
 	mkdir -p cuda
-	nvcc -O3 --std=c++17 -U_GNU_SOURCE $(if $(CUDA_INCLUDE),-I$(CUDA_INCLUDE)) --compiler-options '-fPIC' -shared -Xlinker -soname,libkeystone_cuda.so $< -o $@
+	$(NVCC) -O3 --std=c++17 -U_GNU_SOURCE $(CUDA_ARCH_FLAGS) $(if $(CUDA_INCLUDE),-I$(CUDA_INCLUDE)) --compiler-options '-fPIC' -shared -Xlinker -soname,libkeystone_cuda.so $< -o $@
 
 CUDA_ENABLED := no
 ifeq ($(KEYSTONE_ENABLE_CUDA),1)
 CUDA_ENABLED := yes
 else ifneq ($(KEYSTONE_ENABLE_CUDA),0)
-ifeq ($(shell command -v nvcc >/dev/null 2>&1 && echo yes),yes)
+ifeq ($(CUDA_NVCC_FOUND),yes)
 CUDA_ENABLED := yes
 endif
 endif
