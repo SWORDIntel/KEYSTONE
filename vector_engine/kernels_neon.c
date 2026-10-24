@@ -179,6 +179,7 @@ const keystone_kernels_t keystone_kernels_neon = {
     .dist1           = neon_dist1,
     .dist_batch      = neon_dist_batch,
     .normalize_batch = neon_normalize_batch,
+    .set_metric      = keystone_neon_set_metric,
 };
 
 #else  /* !(defined(__ARM_NEON) || defined(__ARM_NEON__)) */

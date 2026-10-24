@@ -137,4 +137,5 @@ const keystone_kernels_t keystone_kernels_avx512 = {
     .dist1          = avx512_dist1,
     .dist_batch     = avx512_dist_batch,
     .normalize_batch = avx512_normalize_batch,
+    .set_metric      = keystone_avx512_set_metric,
 };

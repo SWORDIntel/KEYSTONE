@@ -340,6 +340,7 @@ const keystone_kernels_t keystone_kernels_vpu = {
     .dist1           = vpu_scalar_dist1,
     .dist_batch      = vpu_dist_batch,
     .normalize_batch = vpu_scalar_normalize_batch,
+    .set_metric      = keystone_vpu_set_metric,
 };
 
 #else  /* !KEYSTONE_HAVE_VPU */

@@ -104,4 +104,5 @@ const keystone_kernels_t keystone_kernels_scalar = {
     .dist1           = scalar_dist1,
     .dist_batch      = scalar_dist_batch,
     .normalize_batch = scalar_normalize_batch,
+    .set_metric      = keystone_scalar_set_metric,
 };
