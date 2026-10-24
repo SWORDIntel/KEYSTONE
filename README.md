@@ -147,7 +147,7 @@ See [`docs/STATUS_SUMMARY.md`](docs/STATUS_SUMMARY.md) and [`ROADMAP.md`](ROADMA
 ## Quick Start
 
 ### Automated Hardware Installation & Provisioning (Recommended)
-KEYSTONE includes an automated host installer that detects supported CPU ISA extensions, OpenMP, Fortran, CUDA, and libarchive/libzstd. It auto-probes local QIHSE installations for cluster bridge integration, performs a clean host build, installs binaries and libraries under its configurable prefix, and enables and starts the `keystoned.service` systemd daemon. On E5-2470 v2, automatic ISA selection enables SSE4.1 and AVX; SSE4.2 remains opt-in after a measured trigram regression on that CPU. See the build modes guide for named ISA profiles and override flags.
+KEYSTONE includes an automated host installer that detects supported CPU ISA extensions, OpenMP, Fortran, CUDA, and libarchive/libzstd. On Debian or Ubuntu it installs missing build packages through `apt-get`; a CUDA backend is enabled only when `nvcc` compiles a probe kernel. It auto-probes local QIHSE installations for cluster bridge integration, performs a clean host build, installs binaries and libraries under its configurable prefix, and enables and starts the `keystoned.service` systemd daemon. On E5-2470 v2, automatic ISA selection enables SSE4.1 and AVX; SSE4.2 remains opt-in after a measured trigram regression on that CPU. See the build modes guide for named ISA profiles and override flags.
 
 ```bash
 # Automated hardware detection, build, and systemd service installation

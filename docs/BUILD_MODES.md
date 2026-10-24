@@ -66,6 +66,10 @@ then run `sudo make install-host` to build, install, and start the service.
 Check the result with `systemctl is-active keystoned`. The installer cleans
 before building by default; use `INSTALL_ARGS="--no-clean"` only when reusing objects built with
 the same feature settings.
+The installer installs missing Debian or Ubuntu build packages with `apt-get`
+and checks that `nvcc` can compile a kernel before setting
+`KEYSTONE_ENABLE_CUDA=1`. Its dry run lists planned package installs and marks
+CUDA availability as provisional until the compile probe runs.
 
 `libarchive` and `libzstd` are autodetected via `pkg-config`. OpenMP is
 auto-enabled when supported; set `KEYSTONE_ENABLE_OPENMP=0` to disable it.
