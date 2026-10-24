@@ -9,6 +9,7 @@
 #include <dlfcn.h>
 #include <math.h>
 
+#ifdef KEYSTONE_ENABLE_CUDA
 static int get_cuda_device_count(void) {
     void* h = dlopen("libcudart.so", RTLD_LAZY);
     if (!h) h = dlopen("libcudart.so.12", RTLD_LAZY);
@@ -24,6 +25,7 @@ static int get_cuda_device_count(void) {
     dlclose(h);
     return (rc == 0) ? count : 0;
 }
+#endif
 
 #if defined(__x86_64__) || defined(__i386__)
 #include <cpuid.h>
@@ -43,14 +45,20 @@ typedef struct {
     uint8_t  rows[16];
 } __attribute__((packed)) amx_tilecfg_t;
 
+#ifdef KEYSTONE_ENABLE_CUDA
 static void fill_data(int64_t* data, size_t n) {
     for (size_t i = 0; i < n; ++i) {
         data[i] = (int64_t)i * 7 + 3;
     }
 }
+#endif
 
 static void test_cuda_batch_search(void) {
     printf("--- Testing CUDA Batch Search Backend ---\n");
+
+#ifndef KEYSTONE_ENABLE_CUDA
+    printf("  [INFO] CUDA backend not built; CPU fallback selected.\n");
+#else
 
     int device_count = get_cuda_device_count();
     if (device_count <= 0) {
@@ -127,6 +135,7 @@ static void test_cuda_batch_search(void) {
     free(data);
     free(items_cuda);
     free(items_scalar);
+#endif
 }
 
 static void test_vector_engine_cuda(void) {
