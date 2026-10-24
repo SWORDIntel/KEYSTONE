@@ -4,7 +4,11 @@ The KEYSTONE search engine is designed to be easily consumed as a library withou
 
 ## 1. CPU ISA Builds
 The default `auto` mode reads the build host's CPU flags and selects complete
-feature groups. It does not pass `-march=native`. Use a named profile to build
+feature groups. It does not pass `-march=native`. SSE4.2 remains opt-in on
+Ivy Bridge: three paired 10 MB trigram query runs on an E5-2470 v2 measured
+0.034–0.049 ms with SSE4.1 and 0.069–0.089 ms with SSE4.2. The result is
+specific to that query workload. Use `KEYSTONE_ENABLE_SSE42=1` to evaluate
+other workloads. Use a named profile to build
 for a specific CPU target; run that binary only on a host with the target ISA.
 Changing a profile or feature switch requires a clean rebuild because Make
 does not track compiler flag changes as file dependencies.
@@ -25,7 +29,7 @@ make clean && make KEYSTONE_ISA=native
 | Profile | Required CPU features | Main translation units |
 | --- | --- | --- |
 | `scalar` | Baseline target | No global AVX code generation |
-| `avx` | SSE4.1, AVX | AVX instructions allowed |
+| `avx` | SSE4.1, AVX | AVX instructions allowed; SSE4.2 opt-in |
 | `avx2` | AVX2, FMA | AVX2 and FMA instructions allowed |
 | `avx512` | AVX-512 F/DQ/BW/VL, FMA | Core remains below AVX-512; dedicated AVX-512 objects use these flags |
 | `avx_vnni` | AVX2, FMA, AVX-VNNI | 256-bit VNNI instructions allowed |
@@ -41,7 +45,7 @@ path in the same build. A named profile is still a target-specific build: its
 other enabled compiler flags may require newer hardware.
 
 Individual `KEYSTONE_ENABLE_*` switches can override detection in `auto`
-mode. The x86 switches cover `SSE41`, `AVX`, `AVX2`, `AVX512`, `AVX_VNNI`,
+mode. The x86 switches cover `SSE41`, `SSE42`, `AVX`, `AVX2`, `AVX512`, `AVX_VNNI`,
 `AMX`, `F16C`, `AESNI`, `PCLMUL`, `POPCNT`, `RDRAND`, `FSGSBASE`, `ERMS`,
 `FMA`, `BMI1`, `BMI2`, `MOVBE`, `RDSEED`, `ADX`, `RTM`, and `ABM`. On AArch64,
 `KEYSTONE_ENABLE_NEON` and `KEYSTONE_ENABLE_SVE` select the ARM extensions.
@@ -147,13 +151,22 @@ The standalone vector similarity engine is built via its self-contained build sc
 
 **Build Features:**
 - Detects host compiler (`gcc`, `clang`, `cc`).
-- Probes and compiles available hardware kernels:
+- In `auto` mode, compiles kernels only when both the target compiler and
+  build host advertise the required ISA. A compiler accepting `-mavx2` does
+  not cause an AVX2 kernel to be included on an AVX1 host. On the E5-2470 v2,
+  the resulting library includes scalar, SSE4.2, and AVX kernels.
+- Available kernels:
   - `kernels_scalar.c` (always compiled)
   - `kernels_sse42.c` (compiled on x86 with SSE4.2)
   - `kernels_avx.c` (compiled on x86 with AVX)
   - `kernels_avx2.c` (compiled on x86 with AVX2/FMA)
   - `kernels_avx512.c` (compiled on x86 with AVX-512 when enabled)
   - `kernels_neon.c` (compiled on ARM aarch64)
+- `KEYSTONE_ISA` selects the same target tier for this script; individual
+  `KEYSTONE_ENABLE_SSE42`, `KEYSTONE_ENABLE_AVX`, `KEYSTONE_ENABLE_AVX2`,
+  `KEYSTONE_ENABLE_AVX512`, and `KEYSTONE_ENABLE_NEON` environment variables
+  can explicitly enable a kernel for a cross-build. Runtime dispatch still
+  checks the CPU before calling it.
 - **Compiler-Agnostic OpenMP**: Automatically probes `-fopenmp` using compiler trial builds and links OpenMP for parallel batch search (`keystone_vec_search_batch`).
 - **Accelerator Flags**:
   - `KEYSTONE_NO_CUDA=1`: Skip CUDA kernel compilation.

@@ -118,48 +118,59 @@ ifeq ($(KEYSTONE_ISA),native)
         CFLAGS += -march=native
     endif
     KEYSTONE_ENABLE_SSE41  ?= $(call x86_has,sse4_1)
+    KEYSTONE_ENABLE_SSE42  ?= $(call x86_has_all,sse4_1 sse4_2)
     KEYSTONE_ENABLE_AVX    ?= $(call x86_has_all,avx)
     KEYSTONE_ENABLE_AVX2   ?= $(call x86_has_all,avx2 fma)
     KEYSTONE_ENABLE_AVX512 ?= $(call x86_has_all,avx512f avx512dq avx512bw avx512vl fma)
 else ifeq ($(KEYSTONE_ISA),auto)
     KEYSTONE_ENABLE_SSE41  ?= $(call x86_has,sse4_1)
+    # The SSE4.2 trigram query path regresses on Ivy Bridge; leave it opt-in
+    # until a faster implementation is demonstrated on this workload.
+    KEYSTONE_ENABLE_SSE42  ?= 0
     KEYSTONE_ENABLE_AVX    ?= $(call x86_has_all,avx)
     KEYSTONE_ENABLE_AVX2   ?= $(call x86_has_all,avx2 fma)
     KEYSTONE_ENABLE_AVX512 ?= $(call x86_has_all,avx512f avx512dq avx512bw avx512vl fma)
 else ifeq ($(KEYSTONE_ISA),scalar)
     override KEYSTONE_ENABLE_SSE41 := 0
+    override KEYSTONE_ENABLE_SSE42 := 0
     override KEYSTONE_ENABLE_AVX := 0
     override KEYSTONE_ENABLE_AVX2 := 0
     override KEYSTONE_ENABLE_AVX512 := 0
 else ifeq ($(KEYSTONE_ISA),avx)
     override KEYSTONE_ENABLE_SSE41 := 1
+    KEYSTONE_ENABLE_SSE42 ?= 0
     override KEYSTONE_ENABLE_AVX := 1
     override KEYSTONE_ENABLE_AVX2 := 0
     override KEYSTONE_ENABLE_AVX512 := 0
 else ifeq ($(KEYSTONE_ISA),avx2)
     override KEYSTONE_ENABLE_SSE41 := 1
+    override KEYSTONE_ENABLE_SSE42 := 1
     override KEYSTONE_ENABLE_AVX := 1
     override KEYSTONE_ENABLE_AVX2 := 1
     override KEYSTONE_ENABLE_AVX512 := 0
 else ifeq ($(KEYSTONE_ISA),avx512)
     override KEYSTONE_ENABLE_SSE41 := 1
+    override KEYSTONE_ENABLE_SSE42 := 1
     override KEYSTONE_ENABLE_AVX := 1
     override KEYSTONE_ENABLE_AVX2 := 1
     override KEYSTONE_ENABLE_AVX512 := 1
 else ifeq ($(KEYSTONE_ISA),avx_vnni)
     override KEYSTONE_ENABLE_SSE41 := 1
+    override KEYSTONE_ENABLE_SSE42 := 1
     override KEYSTONE_ENABLE_AVX := 1
     override KEYSTONE_ENABLE_AVX2 := 1
     override KEYSTONE_ENABLE_AVX512 := 0
     override KEYSTONE_ENABLE_AVX_VNNI := 1
 else ifeq ($(KEYSTONE_ISA),amx)
     override KEYSTONE_ENABLE_SSE41 := 1
+    override KEYSTONE_ENABLE_SSE42 := 1
     override KEYSTONE_ENABLE_AVX := 1
     override KEYSTONE_ENABLE_AVX2 := 1
     override KEYSTONE_ENABLE_AVX512 := 1
     override KEYSTONE_ENABLE_AMX := 1
 else ifeq ($(KEYSTONE_ISA),neon)
     override KEYSTONE_ENABLE_SSE41 := 0
+    override KEYSTONE_ENABLE_SSE42 := 0
     override KEYSTONE_ENABLE_AVX := 0
     override KEYSTONE_ENABLE_AVX2 := 0
     override KEYSTONE_ENABLE_AVX512 := 0
@@ -167,6 +178,7 @@ else ifeq ($(KEYSTONE_ISA),neon)
     override KEYSTONE_ENABLE_SVE := 0
 else ifeq ($(KEYSTONE_ISA),sve)
     override KEYSTONE_ENABLE_SSE41 := 0
+    override KEYSTONE_ENABLE_SSE42 := 0
     override KEYSTONE_ENABLE_AVX := 0
     override KEYSTONE_ENABLE_AVX2 := 0
     override KEYSTONE_ENABLE_AVX512 := 0
@@ -198,7 +210,7 @@ KEYSTONE_ENABLE_ABM      ?= $(call optional_x86_has,abm)
 KEYSTONE_ENABLE_NEON     ?= $(if $(filter auto native,$(KEYSTONE_ISA)),$(call arm_has,asimd),0)
 KEYSTONE_ENABLE_SVE      ?= $(if $(filter auto native,$(KEYSTONE_ISA)),$(call arm_has,sve),0)
 
-KEYSTONE_X86_FEATURES := SSE41 AVX AVX2 AVX512 AVX_VNNI AMX F16C AESNI PCLMUL POPCNT RDRAND FSGSBASE ERMS FMA BMI1 BMI2 MOVBE RDSEED ADX RTM ABM
+KEYSTONE_X86_FEATURES := SSE41 SSE42 AVX AVX2 AVX512 AVX_VNNI AMX F16C AESNI PCLMUL POPCNT RDRAND FSGSBASE ERMS FMA BMI1 BMI2 MOVBE RDSEED ADX RTM ABM
 ifeq ($(KEYSTONE_ISA),scalar)
     $(foreach feature,$(KEYSTONE_X86_FEATURES),$(eval override KEYSTONE_ENABLE_$(feature) := 0))
     override KEYSTONE_ENABLE_NEON := 0
@@ -230,11 +242,19 @@ ifeq ($(KEYSTONE_ENABLE_SVE),1)
         $(error KEYSTONE_ENABLE_SVE=1 requires KEYSTONE_ENABLE_NEON=1)
     endif
 endif
+ifeq ($(KEYSTONE_ENABLE_SSE42),1)
+    ifneq ($(KEYSTONE_ENABLE_SSE41),1)
+        $(error KEYSTONE_ENABLE_SSE42=1 requires KEYSTONE_ENABLE_SSE41=1)
+    endif
+endif
 
 # Keep each group complete. AVX-512 and AMX instructions live in dedicated
 # objects; common code only receives a build marker for guarded dispatch.
 ifeq ($(KEYSTONE_ENABLE_SSE41),1)
     CFLAGS += -msse4.1
+endif
+ifeq ($(KEYSTONE_ENABLE_SSE42),1)
+    CFLAGS += -msse4.2
 endif
 ifeq ($(KEYSTONE_ENABLE_AVX),1)
     CFLAGS += -mavx
