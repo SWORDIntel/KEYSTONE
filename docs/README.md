@@ -15,6 +15,7 @@ The root [README](../README.md) is intentionally written as a high-level introdu
 | [STATUS_SUMMARY.md](STATUS_SUMMARY.md) | Implementation status across all core search, trigram, vector, and CITADEL Federation Intelligence phases. |
 | [BUILD_MODES.md](BUILD_MODES.md) | Native, scalar, OpenMP, optional Fortran, archive, daemon (`keystoned`), and standalone CLI (`tgrep`) builds. |
 | [INTEGRATION.md](INTEGRATION.md) | Embedding KEYSTONE into another application, CITADEL control plane, or data pipeline. |
+| [aimem-vector.md](aimem-vector.md) | Experimental, candidate-only AIMEM vector API and its QIHSE authorization/integration boundary; not connected to the live AIMEM service. |
 | [BENCHMARK_RESULTS.md](BENCHMARK_RESULTS.md) | Current measurement rules, calibration benchmarks, and throughput proofs. |
 | [ACCELERATOR_CONTRACT.md](ACCELERATOR_CONTRACT.md) | Requirements a GPU/NPU/AMX accelerator backend must satisfy before it is treated as supported. |
 | [TELEMETRY_PROCESSOR.md](TELEMETRY_PROCESSOR.md) | Streaming telemetry processor implementation and usage. |

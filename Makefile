@@ -372,6 +372,7 @@ SRC     += src/dsmil_hash_indexer.c src/dsmil_dirty_parser.c src/dsmil_model_bri
            src/federation/keystone_exact_index.c src/temporal/keystone_temporal_index.c \
            src/service/keystone_workflow_index.c src/service/keystoned_server.c src/service/keystoned_client.c \
            src/topology/keystone_topology_index.c src/query/keystone_hybrid_planner.c \
+           src/query/keystone_aimem_vector.c \
            src/telemetry/keystone_telemetry_engine.c src/incident/keystone_incident_engine.c \
            src/federation/keystone_federated_query.c src/federation/keystone_fed_transport.c src/federation/keystone_bootstrap.c src/federation/keystone_manifest.c \
            src/query/keystone_rag_engine.c \
@@ -385,14 +386,16 @@ TEST_SRC += tests/test_keystone_fabric.c tests/test_cuda_backend.c tests/test_fe
             tests/test_federated_query_rag.c tests/test_workflow_index.c \
             tests/test_workflow_projector_reader.c \
             tests/test_workflow_adversarial_gates.c \
-            tests/test_workflow_checkpoint_recovery.c
+            tests/test_workflow_checkpoint_recovery.c \
+            tests/test_aimem_vector.c
 TEST_BIN += bin/test_keystone_fabric bin/test_cuda_backend bin/test_federation_envelope bin/test_persistence_fuzz bin/test_federation_transport bin/test_bootstrap bin/test_manifest \
             bin/test_exact_temporal_index bin/test_keystoned_service \
             bin/test_topology_hybrid_planner bin/test_telemetry_incident_engine \
             bin/test_federated_query_rag bin/test_workflow_index \
             bin/test_workflow_projector_reader \
             bin/test_workflow_adversarial_gates \
-            bin/test_workflow_checkpoint_recovery
+            bin/test_workflow_checkpoint_recovery \
+            bin/test_aimem_vector
 
 OBJS    := $(SRC:.c=.o)
 
@@ -564,6 +567,9 @@ bin/test_workflow_adversarial_gates: $(OBJS) $(FORTRAN_OBJ) tests/test_workflow_
 bin/test_workflow_checkpoint_recovery: $(OBJS) $(FORTRAN_OBJ) tests/test_workflow_checkpoint_recovery.o | bin
 	$(CC) -o $@ $^ $(LDFLAGS)
 
+bin/test_aimem_vector: src/query/keystone_aimem_vector.o tests/test_aimem_vector.o | bin
+	$(CC) -o $@ $^ -lm -pthread
+
 # Benchmark binaries
 benchmarks/dsmil_benchmark: $(OBJS) $(FORTRAN_OBJ) benchmarks/dsmil_benchmark.o benchmarks/benchmark_writer.o
 	$(CC) -o $@ $^ $(LDFLAGS)
@@ -625,7 +631,7 @@ endif
 
 ifeq ($(CUDA_ENABLED),yes)
 all: cuda/libkeystone_cuda.so
-libkeystone.so $(TEST_BIN) $(BENCH_BIN) bin/tgrep bin/keystone_projector_daemon: cuda/libkeystone_cuda.so | bin
+libkeystone.so $(filter-out bin/test_aimem_vector,$(TEST_BIN)) $(BENCH_BIN) bin/tgrep bin/keystone_projector_daemon: cuda/libkeystone_cuda.so | bin
 endif
 
 clean:
