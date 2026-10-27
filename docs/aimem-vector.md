@@ -13,6 +13,10 @@ live visibility predicate **before** bounded exact cosine ranking. A monotonic
 deadline fails without returning partial hits. The sealed object supports
 concurrent readers; callers must not seal while another thread is querying.
 
+Dynamic consumers must resolve `keystone_aimem_vector_abi_version` and require
+`KEYSTONE_AIMEM_VECTOR_ABI_VERSION` before passing structs or callbacks into
+the shared library. A library without the symbol is incompatible.
+
 This is a building block, **not** the complete QIHSE integration. The QIHSE
 process must use an authenticated, crash-safe source and publish a complete
 immutable generation before invoking it. The visibility predicate must apply

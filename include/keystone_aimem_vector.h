@@ -10,6 +10,7 @@
 extern "C" {
 #endif
 
+#define KEYSTONE_AIMEM_VECTOR_ABI_VERSION 1u
 #define KEYSTONE_AIMEM_VECTOR_MAX_DIM 1024u
 #define KEYSTONE_AIMEM_SCOPE_MAX 63u
 
@@ -67,6 +68,10 @@ typedef struct {
     keystone_aimem_vector_visible_fn visible;
     void *visible_context;
 } keystone_aimem_vector_query_t;
+
+/* Dynamic consumers must resolve this symbol and check the exact ABI before
+ * passing any structs or function pointers across the shared-library boundary. */
+uint32_t keystone_aimem_vector_abi_version(void);
 
 /* Build privately, then seal exactly one complete source watermark before
  * sharing with concurrent query threads. No writes are permitted after seal.

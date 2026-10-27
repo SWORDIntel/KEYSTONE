@@ -45,6 +45,7 @@ static void *reader(void *arg) {
 }
 
 int main(void) {
+    assert(keystone_aimem_vector_abi_version() == KEYSTONE_AIMEM_VECTOR_ABI_VERSION);
     uint8_t model[32] = {1u};
     uint8_t unset_model[32] = {0};
     assert(!keystone_aimem_vector_create(DIM, 4u, unset_model));

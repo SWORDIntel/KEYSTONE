@@ -9,6 +9,10 @@
 #include <immintrin.h>
 #endif
 
+uint32_t keystone_aimem_vector_abi_version(void) {
+    return KEYSTONE_AIMEM_VECTOR_ABI_VERSION;
+}
+
 struct keystone_aimem_vector_index {
     size_t dim, max_entries, count, allocated, slots_cap;
     uint8_t model[32];
