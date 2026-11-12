@@ -223,6 +223,86 @@ static void test_publication_lifecycle(void) {
     printf("    [+] Publication lifecycle verified (publish, fallback, quarantine, no partial exposure).\n");
 }
 
+static void test_mapping_sidecar_lifecycle(void) {
+    const char* dir = "/tmp/ksmf_mapping_publication";
+    char cmd[512];
+    snprintf(cmd, sizeof(cmd), "rm -rf %s", dir);
+    (void)system(cmd);
+    keystone_publication_t* pub = keystone_publication_create(dir);
+    TEST_ASSERT(pub != NULL);
+
+    keystone_exact_index_t* ex;
+    keystone_temporal_index_t* tp;
+    build_world(&ex, &tp, 2, 8100000);
+    keystone_hlc_t lo, hi;
+    TEST_ASSERT(keystone_temporal_index_hlc_bounds(tp, &lo, &hi));
+    save_world(ex, tp, "/tmp/ksmf_map.exact", "/tmp/ksmf_map.temporal");
+    keystone_exact_index_destroy(ex);
+    keystone_temporal_index_destroy(tp);
+
+    FILE* f = fopen("/tmp/ksmf_map.sidecar", "wb");
+    TEST_ASSERT(f != NULL);
+    const char payload[] = "mapping-v1-record-map";
+    TEST_ASSERT(fwrite(payload, 1, sizeof(payload), f) == sizeof(payload));
+    TEST_ASSERT(fclose(f) == 0);
+    TEST_ASSERT(keystone_publication_publish(pub, 9, 90, "/tmp/ksmf_map.exact",
+                                              "/tmp/ksmf_map.temporal", &lo, &hi, 2, 1) == 0);
+    TEST_ASSERT(keystone_publication_publish_with_sidecar(
+        pub, 10, 100, "/tmp/ksmf_map.exact", "/tmp/ksmf_map.temporal",
+        "/tmp/ksmf_map.sidecar", &lo, &hi, 2, 1) == 0);
+
+    keystone_exact_index_t* loaded_exact = NULL;
+    keystone_temporal_index_t* loaded_temporal = NULL;
+    keystone_index_manifest_t manifest;
+    TEST_ASSERT(keystone_publication_open_latest(pub, &loaded_exact, &loaded_temporal,
+                                                  &manifest) == 0);
+    TEST_ASSERT(manifest.index_generation == 10 && manifest.source_cursor == 100);
+    keystone_exact_index_destroy(loaded_exact);
+    keystone_temporal_index_destroy(loaded_temporal);
+
+    char sidecar_path[512];
+    TEST_ASSERT(keystone_publication_sidecar_path(pub, 10, sidecar_path,
+                                                  sizeof(sidecar_path)) == 0);
+    f = fopen(sidecar_path, "rb");
+    TEST_ASSERT(f != NULL);
+    char readback[sizeof(payload)];
+    TEST_ASSERT(fread(readback, 1, sizeof(readback), f) == sizeof(readback));
+    TEST_ASSERT(fclose(f) == 0);
+    TEST_ASSERT(memcmp(readback, payload, sizeof(payload)) == 0);
+
+    f = fopen(sidecar_path, "r+b");
+    TEST_ASSERT(f != NULL);
+    TEST_ASSERT(fseek(f, 0, SEEK_SET) == 0);
+    TEST_ASSERT(fputc('X', f) != EOF);
+    TEST_ASSERT(fclose(f) == 0);
+    loaded_exact = NULL;
+    loaded_temporal = NULL;
+    TEST_ASSERT(keystone_publication_open_latest(pub, &loaded_exact, &loaded_temporal,
+                                                  &manifest) == 0);
+    TEST_ASSERT(manifest.index_generation == 9 && manifest.source_cursor == 90);
+    keystone_exact_index_destroy(loaded_exact);
+    keystone_temporal_index_destroy(loaded_temporal);
+
+    TEST_ASSERT(keystone_publication_publish_with_sidecar(
+        pub, 11, 110, "/tmp/ksmf_map.exact", "/tmp/ksmf_map.temporal",
+        "/tmp/ksmf_map.sidecar", &lo, &hi, 2, 1) == 0);
+    TEST_ASSERT(keystone_publication_sidecar_path(pub, 11, sidecar_path,
+                                                  sizeof(sidecar_path)) == 0);
+    TEST_ASSERT(unlink(sidecar_path) == 0);
+    loaded_exact = NULL;
+    loaded_temporal = NULL;
+    TEST_ASSERT(keystone_publication_open_latest(pub, &loaded_exact, &loaded_temporal,
+                                                  &manifest) == 0);
+    TEST_ASSERT(manifest.index_generation == 9 && manifest.source_cursor == 90);
+    keystone_exact_index_destroy(loaded_exact);
+    keystone_temporal_index_destroy(loaded_temporal);
+
+    keystone_publication_destroy(pub);
+    snprintf(cmd, sizeof(cmd), "rm -rf %s /tmp/ksmf_map.*", dir);
+    (void)system(cmd);
+    printf("    [+] Mapping sidecar durable publish, reopen, and corrupt/missing fallback verified.\n");
+}
+
 int main(void) {
     printf("=================================================================\n");
     printf("  KEYSTONE Index Manifests & Atomic Publication Tests\n");
@@ -230,6 +310,7 @@ int main(void) {
 
     test_manifest_roundtrip_and_hostility();
     test_publication_lifecycle();
+    test_mapping_sidecar_lifecycle();
 
     printf("=================================================================\n");
     printf("  ALL MANIFEST TESTS PASSED (100%% GREEN)\n");

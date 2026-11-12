@@ -21,6 +21,7 @@ extern "C" {
 #include "keystone_exact_index.h"
 #include "keystone_temporal.h"
 #include "keystone_workflow_index.h"
+#include "keystone_manifest.h"
 
 #define KEYSTONED_DEFAULT_SOCKET "/run/keystone/keystoned.sock"
 #define KEYSTONED_MAGIC 0x4B535356u /* 'KSSV' */
@@ -61,6 +62,8 @@ typedef enum {
     KEYSTONED_MSG_WORKFLOW_ABORT_STAGE_RESP = 73,
     KEYSTONED_MSG_WORKFLOW_STAGE_WATERMARK_REQ = 74,
     KEYSTONED_MSG_WORKFLOW_STAGE_WATERMARK_RESP = 75,
+    KEYSTONED_MSG_DIRECTEYE_RECORD_GET_REQ = 80,
+    KEYSTONED_MSG_DIRECTEYE_RECORD_GET_RESP = 81,
     KEYSTONED_MSG_ERROR               = 99
 } keystoned_msg_type_t;
 
@@ -137,6 +140,8 @@ typedef struct {
     size_t cache_capacity;
     uint64_t initial_fencing_epoch;
     int enable_security_audit;
+    /* Borrowed; when set, enables authorized DIRECTEYE record IPC reads. */
+    keystone_publication_t* directeye_publication;
 } keystoned_config_t;
 
 int keystoned_server_workflow_bind_history(
@@ -166,6 +171,16 @@ int keystoned_server_query_exact(
     const keystone_security_context_t* sec_ctx,
     const keystone_uuid_t* id,
     keystone_exact_entry_t* out_entry
+);
+
+/* Authorized DIRECTEYE payload lookup through the persisted mapping sidecar. */
+int keystoned_server_query_directeye_record(
+    keystoned_server_t* server,
+    const keystone_security_context_t* sec_ctx,
+    const char* record_id,
+    void* payload_out,
+    size_t payload_capacity,
+    size_t* payload_len
 );
 
 size_t keystoned_server_query_temporal(
@@ -262,6 +277,15 @@ int keystoned_client_exact_lookup(
     const keystone_security_context_t* sec_ctx,
     const keystone_uuid_t* id,
     keystone_exact_entry_t* out_entry
+);
+
+int keystoned_client_directeye_record_get(
+    keystoned_client_t* client,
+    const keystone_security_context_t* sec_ctx,
+    const char* record_id,
+    void* payload_out,
+    size_t payload_capacity,
+    size_t* payload_len
 );
 
 int keystoned_client_temporal_range(

@@ -18,6 +18,7 @@
 #include <dirent.h>
 #include <sys/types.h>
 #include <sys/stat.h>
+#include <fcntl.h>
 
 static uint32_t mf_crc32(const void* data, size_t len) {
     static uint32_t table[256];
@@ -40,6 +41,28 @@ static uint32_t mf_crc32(const void* data, size_t len) {
     return crc ^ 0xFFFFFFFFu;
 }
 
+static int mf_fsync_parent(const char* path) {
+    char parent[512];
+    size_t len = strlen(path);
+    if (len == 0 || len >= sizeof(parent)) return -1;
+    memcpy(parent, path, len + 1);
+    char* slash = strrchr(parent, '/');
+    if (!slash) {
+        strcpy(parent, ".");
+    } else if (slash == parent) {
+        slash[1] = '\0';
+    } else {
+        *slash = '\0';
+    }
+    int fd = open(parent, O_RDONLY | O_DIRECTORY);
+    if (fd < 0) return -1;
+    int rc = fsync(fd);
+    int saved_errno = errno;
+    if (close(fd) != 0) rc = -1;
+    errno = saved_errno;
+    return rc;
+}
+
 static int mf_file_crc32(const char* path, size_t* out_bytes, uint32_t* out_crc) {
     FILE* f = fopen(path, "rb");
     if (!f) return -1;
@@ -57,7 +80,7 @@ static int mf_file_crc32(const char* path, size_t* out_bytes, uint32_t* out_crc)
         total += n;
     }
     int err = ferror(f);
-    fclose(f);
+    if (fclose(f) != 0) err = 1;
     if (err) return -1;
     if (out_bytes) *out_bytes = total;
     if (out_crc) *out_crc = crc ^ 0xFFFFFFFFu;
@@ -129,20 +152,20 @@ int keystone_manifest_save(const keystone_index_manifest_t* manifest, const char
 
     FILE* f = fopen(tmp_path, "wb");
     if (!f) return -1;
-    if (fwrite(manifest, 1, sizeof(*manifest), f) != sizeof(*manifest)) {
-        fclose(f);
+    int ok = fwrite(manifest, 1, sizeof(*manifest), f) == sizeof(*manifest);
+    if (fflush(f) != 0) ok = 0;
+    int fd = fileno(f);
+    if (fd < 0 || fsync(fd) != 0) ok = 0;
+    if (fclose(f) != 0) ok = 0;
+    if (!ok) {
         unlink(tmp_path);
         return -1;
     }
-    fflush(f);
-    int fd = fileno(f);
-    if (fd >= 0) fsync(fd);
-    fclose(f);
-
     if (rename(tmp_path, filepath) != 0) {
         unlink(tmp_path);
         return -1;
     }
+    if (mf_fsync_parent(filepath) != 0) return -1;
     return 0;
 }
 
@@ -233,13 +256,11 @@ static int pub_copy_durable(const char* src, const char* dst) {
         }
     }
     if (ferror(in)) ok = 0;
-    fclose(in);
-    if (ok) {
-        fflush(out);
-        int fd = fileno(out);
-        if (fd >= 0) fsync(fd);
-    }
-    fclose(out);
+    if (fclose(in) != 0) ok = 0;
+    if (ok && fflush(out) != 0) ok = 0;
+    int fd = fileno(out);
+    if (ok && (fd < 0 || fsync(fd) != 0)) ok = 0;
+    if (fclose(out) != 0) ok = 0;
     if (!ok) {
         unlink(tmp);
         return -1;
@@ -248,14 +269,17 @@ static int pub_copy_durable(const char* src, const char* dst) {
         unlink(tmp);
         return -1;
     }
+    if (mf_fsync_parent(dst) != 0) return -1;
     return 0;
 }
 
 /* Write the ACTIVE pointer (generation + CRC) atomically — always LAST. */
 static int pub_write_active(keystone_publication_t* pub, uint64_t generation) {
-    char path[512], tmp[512];
-    snprintf(path, sizeof(path), "%s/%s", pub->dir, PUB_ACTIVE_NAME);
-    snprintf(tmp, sizeof(tmp), "%s.tmp.%d", path, (int)getpid());
+    char path[512], tmp[544];
+    int path_len = snprintf(path, sizeof(path), "%s/%s", pub->dir, PUB_ACTIVE_NAME);
+    if (path_len < 0 || (size_t)path_len >= sizeof(path)) return -1;
+    int tmp_len = snprintf(tmp, sizeof(tmp), "%s.tmp.%d", path, (int)getpid());
+    if (tmp_len < 0 || (size_t)tmp_len >= sizeof(tmp)) return -1;
 
     uint64_t payload[2] = { generation, 0 };
     payload[1] = (uint64_t)mf_crc32(payload, sizeof(uint64_t));
@@ -267,14 +291,19 @@ static int pub_write_active(keystone_publication_t* pub, uint64_t generation) {
         unlink(tmp);
         return -1;
     }
-    fflush(f);
+    int ok = fflush(f) == 0;
     int fd = fileno(f);
-    if (fd >= 0) fsync(fd);
-    fclose(f);
+    if (fd < 0 || fsync(fd) != 0) ok = 0;
+    if (fclose(f) != 0) ok = 0;
+    if (!ok) {
+        unlink(tmp);
+        return -1;
+    }
     if (rename(tmp, path) != 0) {
         unlink(tmp);
         return -1;
     }
+    if (mf_fsync_parent(path) != 0) return -1;
     return 0;
 }
 
@@ -303,18 +332,20 @@ static void pub_gen_paths(keystone_publication_t* pub, uint64_t gen,
     snprintf(temporal_mf, tmsz, "%s/gen-%llu.temporal.manifest", pub->dir, (unsigned long long)gen);
 }
 
-int keystone_publication_publish(
+static int pub_publish_internal(
     keystone_publication_t* publication,
     uint64_t index_generation,
     uint64_t source_cursor,
     const char* exact_src_path,
     const char* temporal_src_path,
+    const char* sidecar_src_path,
     const keystone_hlc_t* hlc_min,
     const keystone_hlc_t* hlc_max,
     uint64_t record_count,
     uint64_t tombstone_count
 ) {
-    if (!publication || !exact_src_path || !temporal_src_path) return -1;
+    if (!publication || !exact_src_path || !temporal_src_path ||
+        (sidecar_src_path && !*sidecar_src_path)) return -1;
 
     /* 1. VERIFY: candidates must reload cleanly through the real loaders. */
     {
@@ -335,6 +366,17 @@ int keystone_publication_publish(
     if (pub_copy_durable(exact_src_path, ex_dst) != 0) return -1;
     if (pub_copy_durable(temporal_src_path, tp_dst) != 0) return -1;
 
+    char sidecar_dst[512], sidecar_mf[512];
+    if (sidecar_src_path) {
+        if (keystone_publication_sidecar_path(publication, index_generation,
+                                               sidecar_dst, sizeof(sidecar_dst)) != 0)
+            return -1;
+        int n = snprintf(sidecar_mf, sizeof(sidecar_mf), "%s/gen-%llu.mapping.manifest",
+                         publication->dir, (unsigned long long)index_generation);
+        if (n < 0 || (size_t)n >= sizeof(sidecar_mf) ||
+            pub_copy_durable(sidecar_src_path, sidecar_dst) != 0) return -1;
+    }
+
     /* 3. Manifests checksum the PUBLISHED copies. */
     keystone_index_manifest_t m;
     if (keystone_manifest_build("exact", index_generation, source_cursor, hlc_min, hlc_max,
@@ -345,11 +387,51 @@ int keystone_publication_publish(
                                 record_count, tombstone_count, KEYSTONE_ALGO_VERSION_TEMPORAL,
                                 tp_dst, &m) != 0) return -1;
     if (keystone_manifest_save(&m, tp_mf) != 0) return -1;
+    if (sidecar_src_path) {
+        if (keystone_manifest_build("mapping", index_generation, source_cursor,
+                                    hlc_min, hlc_max, record_count, tombstone_count,
+                                    1u, sidecar_dst, &m) != 0 ||
+            keystone_manifest_save(&m, sidecar_mf) != 0) return -1;
+    }
 
     /* 4. Active pointer LAST: a crash here leaves the previous generation
      * active; everything written so far is complete and checksummed. */
     if (pub_write_active(publication, index_generation) != 0) return -1;
     return 0;
+}
+
+int keystone_publication_publish(
+    keystone_publication_t* publication, uint64_t index_generation,
+    uint64_t source_cursor, const char* exact_src_path,
+    const char* temporal_src_path, const keystone_hlc_t* hlc_min,
+    const keystone_hlc_t* hlc_max, uint64_t record_count,
+    uint64_t tombstone_count
+) {
+    return pub_publish_internal(publication, index_generation, source_cursor,
+                                exact_src_path, temporal_src_path, NULL,
+                                hlc_min, hlc_max, record_count, tombstone_count);
+}
+
+int keystone_publication_publish_with_sidecar(
+    keystone_publication_t* publication, uint64_t index_generation,
+    uint64_t source_cursor, const char* exact_src_path,
+    const char* temporal_src_path, const char* sidecar_src_path,
+    const keystone_hlc_t* hlc_min, const keystone_hlc_t* hlc_max,
+    uint64_t record_count, uint64_t tombstone_count
+) {
+    if (!sidecar_src_path) return -1;
+    return pub_publish_internal(publication, index_generation, source_cursor,
+                                exact_src_path, temporal_src_path, sidecar_src_path,
+                                hlc_min, hlc_max, record_count, tombstone_count);
+}
+
+int keystone_publication_sidecar_path(const keystone_publication_t* publication,
+                                     uint64_t index_generation,
+                                     char* out_path, size_t out_size) {
+    if (!publication || !out_path || out_size == 0) return -1;
+    int n = snprintf(out_path, out_size, "%s/gen-%llu.mapping.sidecar",
+                     publication->dir, (unsigned long long)index_generation);
+    return n < 0 || (size_t)n >= out_size ? -1 : 0;
 }
 
 /* Collect available generations (manifest files present), descending. */
@@ -379,9 +461,10 @@ static int pub_collect_generations(keystone_publication_t* pub, uint64_t* gens, 
 
 static void pub_quarantine(keystone_publication_t* pub, uint64_t gen) {
     char src[512], dst[512];
-    const char* names[4] = { "gen-%llu.exact.index", "gen-%llu.temporal.index",
-                             "gen-%llu.exact.manifest", "gen-%llu.temporal.manifest" };
-    for (int i = 0; i < 4; i++) {
+    const char* names[6] = { "gen-%llu.exact.index", "gen-%llu.temporal.index",
+                             "gen-%llu.exact.manifest", "gen-%llu.temporal.manifest",
+                             "gen-%llu.mapping.sidecar", "gen-%llu.mapping.manifest" };
+    for (int i = 0; i < 6; i++) {
         snprintf(src, sizeof(src), "%s/", pub->dir);
         snprintf(src + strlen(src), sizeof(src) - strlen(src), names[i], (unsigned long long)gen);
         snprintf(dst, sizeof(dst), "%s/quarantine/", pub->dir);
@@ -429,15 +512,31 @@ int keystone_publication_open_latest(
         pub_gen_paths(publication, g, ex_p, sizeof(ex_p), tp_p, sizeof(tp_p),
                       ex_m, sizeof(ex_m), tp_m, sizeof(tp_m));
 
-        keystone_index_manifest_t mex, mtp;
+        char mapping_p[512], mapping_m[512];
+        int mpn = keystone_publication_sidecar_path(publication, g, mapping_p, sizeof(mapping_p));
+        int mmn = snprintf(mapping_m, sizeof(mapping_m), "%s/gen-%llu.mapping.manifest",
+                           publication->dir, (unsigned long long)g);
+        int mapping_paths_valid = mpn == 0 && mmn >= 0 && (size_t)mmn < sizeof(mapping_m);
+        int mapping_present = mapping_paths_valid &&
+                              (access(mapping_p, F_OK) == 0 || access(mapping_m, F_OK) == 0);
+        keystone_index_manifest_t mex, mtp, mmap;
         keystone_exact_index_t* ex = NULL;
         keystone_temporal_index_t* tp = NULL;
+        int mapping_valid = mapping_paths_valid && (!mapping_present ||
+            (access(mapping_p, F_OK) == 0 && access(mapping_m, F_OK) == 0 &&
+             keystone_manifest_load(mapping_m, &mmap) == 0 &&
+             strcmp(mmap.family, "mapping") == 0 && mmap.index_generation == g &&
+             keystone_manifest_verify_payload(&mmap, mapping_p)));
         if (keystone_manifest_load(ex_m, &mex) == 0 &&
             keystone_manifest_load(tp_m, &mtp) == 0 &&
             strcmp(mex.family, "exact") == 0 && strcmp(mtp.family, "temporal") == 0 &&
             mex.index_generation == g && mtp.index_generation == g &&
+            mex.source_cursor == mtp.source_cursor &&
             keystone_manifest_verify_payload(&mex, ex_p) &&
-            keystone_manifest_verify_payload(&mtp, tp_p) &&
+            keystone_manifest_verify_payload(&mtp, tp_p) && mapping_valid &&
+            (!mapping_present || (mmap.source_cursor == mex.source_cursor &&
+                                  mmap.record_count == mex.record_count &&
+                                  mmap.tombstone_count == mex.tombstone_count)) &&
             keystone_exact_index_load(&ex, ex_p) == 0 &&
             keystone_temporal_index_load(&tp, tp_p) == 0) {
             *out_exact = ex;

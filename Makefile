@@ -99,6 +99,19 @@ ifeq ($(KEYSTONE_ENABLE_QIHSE_BRIDGE),1)
     LDFLAGS += $(QIHSE_LDFLAGS)
 endif
 
+# Optional DIRECTEYE native feed client. This links only the authenticated
+# QIHSE Controller API and does not enable the legacy KV bridge.
+ifeq ($(KEYSTONE_ENABLE_DIRECTEYE_QIHSE),1)
+    ifndef QIHSE_ROOT
+        $(error KEYSTONE_ENABLE_DIRECTEYE_QIHSE=1 requires QIHSE_ROOT)
+    endif
+    DIRECTEYE_QIHSE_CFLAGS := -DKEYSTONE_ENABLE_DIRECTEYE_QIHSE -I"$(QIHSE_ROOT)/include" -I"$(QIHSE_ROOT)"
+    DIRECTEYE_QIHSE_LDFLAGS := -L"$(QIHSE_ROOT)" -L"$(QIHSE_ROOT)/lib" -lqihse -Wl,-rpath,"$(QIHSE_ROOT)" -Wl,-rpath,"$(QIHSE_ROOT)/lib"
+    DIRECTEYE_QIHSE_TEST_OBJ := tests/test_directeye_qkp_fixture.o
+    CFLAGS += $(DIRECTEYE_QIHSE_CFLAGS)
+    LDFLAGS += $(DIRECTEYE_QIHSE_LDFLAGS)
+endif
+
 # CPU ISA feature flags. Auto builds target the build host; explicit profiles
 # produce binaries for a chosen ISA level. Rebuild after changing profiles.
 HOST_CPU_FLAGS ?= $(shell awk -F: '/^(flags|Features)[[:space:]]*:/{sub(/^ /, "", $$2); print $$2; exit}' /proc/cpuinfo 2>/dev/null)
@@ -368,7 +381,7 @@ TEST_BIN += bin/test_tar_zst
 endif
 
 SRC     += src/dsmil_hash_indexer.c src/dsmil_dirty_parser.c src/dsmil_model_bridge.c src/dsmil_micro_model.c src/keystone_trigram.c \
-           src/keystone_fabric.c src/federation/keystone_federation_ingest.c \
+           src/keystone_fabric.c src/federation/keystone_federation_ingest.c src/federation/keystone_directeye.c src/federation/keystone_directeye_json.c \
            src/federation/keystone_exact_index.c src/temporal/keystone_temporal_index.c \
            src/service/keystone_workflow_index.c src/service/keystoned_server.c src/service/keystoned_client.c \
            src/topology/keystone_topology_index.c src/query/keystone_hybrid_planner.c \
@@ -382,6 +395,7 @@ TEST_SRC += tests/test_keystone_fabric.c tests/test_cuda_backend.c tests/test_fe
             tests/persistence_fuzz/test_persistence_fuzz.c tests/test_federation_transport.c \
             tests/test_bootstrap.c tests/test_manifest.c \
             tests/test_exact_temporal_index.c tests/test_keystoned_service.c \
+            tests/test_directeye_projection.c \
             tests/test_topology_hybrid_planner.c tests/test_telemetry_incident_engine.c \
             tests/test_federated_query_rag.c tests/test_workflow_index.c \
             tests/test_workflow_projector_reader.c \
@@ -390,6 +404,7 @@ TEST_SRC += tests/test_keystone_fabric.c tests/test_cuda_backend.c tests/test_fe
             tests/test_aimem_vector.c
 TEST_BIN += bin/test_keystone_fabric bin/test_cuda_backend bin/test_federation_envelope bin/test_persistence_fuzz bin/test_federation_transport bin/test_bootstrap bin/test_manifest \
             bin/test_exact_temporal_index bin/test_keystoned_service \
+            bin/test_directeye_projection \
             bin/test_topology_hybrid_planner bin/test_telemetry_incident_engine \
             bin/test_federated_query_rag bin/test_workflow_index \
             bin/test_workflow_projector_reader \
@@ -558,6 +573,9 @@ bin/test_bootstrap: $(OBJS) $(FORTRAN_OBJ) tests/test_bootstrap.o | bin
 bin/test_manifest: $(OBJS) $(FORTRAN_OBJ) tests/test_manifest.o | bin
 	$(CC) -o $@ $^ $(LDFLAGS)
 
+bin/test_directeye_projection: $(OBJS) $(FORTRAN_OBJ) tests/test_directeye_projection.o $(DIRECTEYE_QIHSE_TEST_OBJ) | bin
+	$(CC) -o $@ $^ $(LDFLAGS)
+
 bin/test_workflow_projector_reader: $(OBJS) $(FORTRAN_OBJ) tests/test_workflow_projector_reader.o | bin
 	$(CC) -o $@ $^ $(LDFLAGS)
 
@@ -618,7 +636,7 @@ CUDA_HOME ?= $(firstword $(wildcard /usr/local/cuda /usr/local/cuda-13.3 /usr/lo
 CUDA_INCLUDE ?= $(firstword $(wildcard $(CUDA_HOME)/targets/x86_64-linux/include $(CUDA_HOME)/include))
 cuda/libkeystone_cuda.so: cuda/keystone_cuda.cu
 	mkdir -p cuda
-	$(NVCC) -O3 --std=c++17 -U_GNU_SOURCE $(CUDA_ARCH_FLAGS) $(if $(CUDA_INCLUDE),-I$(CUDA_INCLUDE)) --compiler-options '-fPIC' -shared -Xlinker -soname,libkeystone_cuda.so $< -o $@
+	$(NVCC) -O3 --std=c++17 -U_GNU_SOURCE $(CUDA_ARCH_FLAGS) $(if $(CUDA_INCLUDE),-I$(CUDA_INCLUDE)) --compiler-options '-fPIC' -shared -Xlinker -soname,libkeystone_cuda.so.1 $< -o $@
 
 CUDA_ENABLED := no
 ifeq ($(KEYSTONE_ENABLE_CUDA),1)

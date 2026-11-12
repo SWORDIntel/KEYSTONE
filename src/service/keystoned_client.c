@@ -8,6 +8,7 @@
  */
 
 #include "keystoned.h"
+#include "keystone_directeye.h"
 #include "keystone_safe_alloc.h"
 
 #include <stdio.h>
@@ -200,6 +201,34 @@ int keystoned_client_exact_lookup(
         return 0;
     }
 
+    free(payload);
+    return (int)resp.status;
+}
+
+int keystoned_client_directeye_record_get(
+    keystoned_client_t* client, const keystone_security_context_t* sec_ctx,
+    const char* record_id, void* payload_out, size_t payload_capacity,
+    size_t* payload_len
+) {
+    if (payload_len) *payload_len = 0u;
+    if (!client || !sec_ctx || !record_id || !*record_id || !payload_len ||
+        strlen(record_id) > KEYSTONE_DIRECTEYE_RECORD_ID_MAX ||
+        (!payload_out && payload_capacity != 0u))
+        return KEYSTONED_STATUS_INVALID_ARG;
+    keystoned_msg_header_t resp;
+    void* payload = NULL;
+    size_t response_len = 0u;
+    int rc = client_send_recv(client, KEYSTONED_MSG_DIRECTEYE_RECORD_GET_REQ,
+        sec_ctx, record_id, strlen(record_id), &resp, &payload, &response_len);
+    if (rc != 0) return KEYSTONED_STATUS_SERVER_ERROR;
+    if (resp.status == KEYSTONED_STATUS_OK) {
+        if (response_len > payload_capacity || (response_len && !payload_out)) {
+            free(payload);
+            return KEYSTONED_STATUS_INVALID_ARG;
+        }
+        if (response_len) memcpy(payload_out, payload, response_len);
+        *payload_len = response_len;
+    }
     free(payload);
     return (int)resp.status;
 }

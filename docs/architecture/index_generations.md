@@ -72,6 +72,21 @@ stateDiagram-v2
    - The active generation pointer is swapped to the new generation.
    - The previous generation enters `RETIRED` state.
 
+### Durable on-disk publication contract
+
+Atomic rename and power-loss durability are separate guarantees. Renaming a completed temporary file over its destination makes the new name visible atomically to concurrent readers; rename alone does not guarantee that the file contents or the directory entry survive a power loss.
+
+A durable generation publisher must, for every published data file, manifest, and final active-pointer file:
+
+1. Write the complete temporary file and check for write errors.
+2. Check `fflush()` (or the equivalent userspace-buffer flush), `fsync()`/`fdatasync()` on the file descriptor, and `fclose()`/`close()` for errors. Any failure aborts publication; do not advance the active pointer or acknowledge the source cursor.
+3. Rename the synced temporary file to its final name.
+4. Open and `fsync()` the containing parent directory after the rename, checking the result, so the name update is durable. For generation publication, this includes syncing the directory after the final active-pointer rename. A failure is not a successful durable publication.
+
+Publish generation payloads and manifests before the active pointer, and make the pointer visible only after all preceding files have completed their required sync-and-rename sequence. Consumers of a QIHSE source feed must ACK a source cursor only after successful durable generation publication (including the active-pointer directory sync); on any publication failure they must not ACK, so the source can replay. This is an interface requirement, not a claim that a C feed consumer currently exists in KEYSTONE.
+
+**Implementation status:** the C publication helpers in `src/federation/keystone_manifest.c` check write, flush, file-sync, close, rename, and parent-directory sync results for manifest saves, generation copies, and the active pointer. `keystone_publication_publish()` returns success only after the active-pointer directory sync succeeds. A directory-sync error after rename is reported as failure even though the pointer may already be visible; consumers must not ACK and must recover by replaying/reconciling the source. Fault-injection coverage for these sync failures remains a verification gap.
+
 5. **Reclamation (`RETIRED`)**:
    - Existing queries reading the retired generation finish without interruption.
    - Once all reader reference counts reach zero, the old generation memory is safely reclaimed.

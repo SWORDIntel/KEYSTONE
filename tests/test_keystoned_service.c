@@ -7,9 +7,12 @@
 
 #include "keystone.h"
 #include "keystoned.h"
+#include "keystone_directeye.h"
 #include "test_macros.h"
 #include <sys/socket.h>
 #include <sys/un.h>
+#include <dirent.h>
+#include <sys/stat.h>
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -303,6 +306,97 @@ static void test_trust_model_hardening(void) {
  * client-asserted security contexts are rejected if they violate transport-bound
  * principal limits (tenant, clearance, or SCI compartments).
  */
+static void remove_tree(const char* path) {
+    DIR* dir = opendir(path);
+    if (!dir) { unlink(path); return; }
+    struct dirent* entry;
+    while ((entry = readdir(dir)) != NULL) {
+        if (!strcmp(entry->d_name, ".") || !strcmp(entry->d_name, "..")) continue;
+        char child[1024];
+        int n = snprintf(child, sizeof(child), "%s/%s", path, entry->d_name);
+        if (n < 0 || (size_t)n >= sizeof(child)) continue;
+        struct stat st;
+        if (lstat(child, &st) == 0 && S_ISDIR(st.st_mode)) remove_tree(child);
+        else unlink(child);
+    }
+    closedir(dir);
+    rmdir(path);
+}
+
+static void test_directeye_daemon_query_path(void) {
+    char root_template[] = ".test_keystoned_directeye.XXXXXX";
+    char* root = mkdtemp(root_template);
+    TEST_ASSERT(root != NULL && chmod(root, 0700) == 0);
+    char publication_path[512], stage_path[512], socket_path[512];
+    TEST_ASSERT(snprintf(publication_path, sizeof(publication_path), "%s/publication", root) > 0);
+    TEST_ASSERT(snprintf(stage_path, sizeof(stage_path), "%s/stage", root) > 0);
+    TEST_ASSERT(snprintf(socket_path, sizeof(socket_path), "%s/keystoned.sock", root) > 0);
+    keystone_publication_t* publication = keystone_publication_create(publication_path);
+    TEST_ASSERT(publication != NULL);
+    const char record[] = "{\"payload\":\"through-daemon\"}";
+    keystone_directeye_event_t event = {
+        .operation_id = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+        .record_id = "asset-daemon",
+        .record_key = "t:77/directeye/canonical/v1/asset-daemon",
+        .tenant_id = 77u,
+        .classification = KEYSTONE_CLASSIFICATION_RESTRICTED,
+        .sci = 2u,
+        .source_generation = 1u,
+        .cursor = 1u,
+        .committed_at_ms = 1700000000000ull,
+        .payload = record,
+        .payload_len = sizeof(record) - 1u
+    };
+    TEST_ASSERT(keystone_directeye_project_page(publication, stage_path, &event, 1u, 1u, 77u) == 0);
+    keystoned_config_t cfg = {
+        .socket_path = socket_path,
+        .cache_capacity = 64u,
+        .initial_fencing_epoch = 1u,
+        .enable_security_audit = 0,
+        .directeye_publication = publication
+    };
+    keystoned_server_t* server = keystoned_server_create(&cfg);
+    TEST_ASSERT(server != NULL && keystoned_server_start(server) == 0);
+    usleep(20000);
+    keystoned_client_t* client = keystoned_client_connect(socket_path);
+    TEST_ASSERT(client != NULL);
+    keystone_security_context_t allowed = {
+        .tenant_id = 77u, .classification = KEYSTONE_CLASSIFICATION_SECRET,
+        .compartment_mask = 2u
+    };
+    char payload[128];
+    size_t payload_len = 0u;
+    TEST_ASSERT(keystoned_client_directeye_record_get(client, &allowed, "asset-daemon",
+        payload, sizeof(payload), &payload_len) == KEYSTONED_STATUS_OK);
+    TEST_ASSERT(payload_len == sizeof(record) - 1u && memcmp(payload, record, payload_len) == 0);
+    keystone_security_context_t denied = allowed;
+    denied.classification = KEYSTONE_CLASSIFICATION_OPS;
+    TEST_ASSERT(keystoned_client_directeye_record_get(client, &denied, "asset-daemon",
+        payload, sizeof(payload), &payload_len) == KEYSTONED_STATUS_NOT_FOUND);
+    denied = allowed;
+    denied.tenant_id = 78u;
+    TEST_ASSERT(keystoned_client_directeye_record_get(client, &denied, "asset-daemon",
+        payload, sizeof(payload), &payload_len) == KEYSTONED_STATUS_NOT_FOUND);
+    denied = allowed;
+    denied.compartment_mask = 0u;
+    TEST_ASSERT(keystoned_client_directeye_record_get(client, &denied, "asset-daemon",
+        payload, sizeof(payload), &payload_len) == KEYSTONED_STATUS_NOT_FOUND);
+    keystone_directeye_event_t deletion = event;
+    deletion.operation_id = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
+    deletion.source_generation = 2u;
+    deletion.cursor = 2u;
+    deletion.tombstone = true;
+    deletion.payload = NULL;
+    deletion.payload_len = 0u;
+    TEST_ASSERT(keystone_directeye_project_page(publication, stage_path, &deletion, 1u, 2u, 77u) == 0);
+    TEST_ASSERT(keystoned_client_directeye_record_get(client, &allowed, "asset-daemon",
+        payload, sizeof(payload), &payload_len) == KEYSTONED_STATUS_NOT_FOUND);
+    keystoned_client_disconnect(client);
+    keystoned_server_destroy(server);
+    keystone_publication_destroy(publication);
+    remove_tree(root);
+}
+
 static void test_transport_bound_security(void) {
     printf("[*] Testing transport-bound principal enforcement (anti-tamper / clearance escalation)...\n");
 
@@ -407,6 +501,7 @@ int main(void) {
     test_service_lifecycle_and_security();
     test_trust_model_hardening();
     test_transport_bound_security();
+    test_directeye_daemon_query_path();
 
     printf("=================================================================\n");
     printf("  ALL PHASE 2 KEYSTONED SERVICE TESTS PASSED (100%% GREEN)\n");

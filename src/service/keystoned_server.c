@@ -14,6 +14,7 @@
 #endif
 
 #include "keystoned.h"
+#include "keystone_directeye.h"
 #include "keystone_safe_alloc.h"
 
 #include <stdio.h>
@@ -96,6 +97,7 @@ struct keystoned_server {
     int workflow_stage_owner_fd;
 
     int security_audit_enabled;
+    keystone_publication_t* directeye_publication;
 
     /* Authenticated transport peer bindings */
     keystoned_peer_binding_t peer_bindings[KEYSTONED_MAX_PEER_BINDINGS];
@@ -149,6 +151,7 @@ keystoned_server_t* keystoned_server_create(const keystoned_config_t* config) {
     }
 
     srv->security_audit_enabled = config ? config->enable_security_audit : 1;
+    srv->directeye_publication = config ? config->directeye_publication : NULL;
 
     return srv;
 }
@@ -277,6 +280,7 @@ static int ksd_workflow_status(keystone_workflow_result_t result) {
 static uint32_t ksd_response_type(uint32_t request_type) {
     switch (request_type) {
         case KEYSTONED_MSG_EXACT_LOOKUP_REQ: return KEYSTONED_MSG_EXACT_LOOKUP_RESP;
+        case KEYSTONED_MSG_DIRECTEYE_RECORD_GET_REQ: return KEYSTONED_MSG_DIRECTEYE_RECORD_GET_RESP;
         case KEYSTONED_MSG_TEMPORAL_RANGE_REQ: return KEYSTONED_MSG_TEMPORAL_RANGE_RESP;
         case KEYSTONED_MSG_INGEST_REQ: return KEYSTONED_MSG_INGEST_RESP;
         case KEYSTONED_MSG_WORKFLOW_APPLY_REQ: return KEYSTONED_MSG_WORKFLOW_APPLY_RESP;
@@ -475,6 +479,22 @@ int keystoned_server_workflow_watermark(
     *out_watermark = keystone_workflow_index_watermark(server->workflow_index);
     pthread_mutex_unlock(&server->workflow_mutex);
     return KEYSTONED_STATUS_OK;
+}
+
+int keystoned_server_query_directeye_record(
+    keystoned_server_t* server, const keystone_security_context_t* sec_ctx,
+    const char* record_id, void* payload_out, size_t payload_capacity,
+    size_t* payload_len
+) {
+    if (!server || !sec_ctx || !server->directeye_publication || !payload_len ||
+        !record_id || !*record_id || strlen(record_id) > KEYSTONE_DIRECTEYE_RECORD_ID_MAX ||
+        (!payload_out && payload_capacity != 0u))
+        return KEYSTONED_STATUS_INVALID_ARG;
+    int rc = keystone_directeye_record_read(server->directeye_publication, sec_ctx,
+        record_id, payload_out, payload_capacity, payload_len);
+    if (rc == 0) return KEYSTONED_STATUS_OK;
+    if (rc == 1) return KEYSTONED_STATUS_NOT_FOUND;
+    return KEYSTONED_STATUS_SERVER_ERROR;
 }
 
 int keystoned_server_query_exact(
@@ -777,6 +797,33 @@ static void handle_client(keystoned_server_t* server, int client_fd) {
                 } else {
                     resp_hdr.msg_type = KEYSTONED_MSG_EXACT_LOOKUP_RESP;
                     resp_hdr.status = (uint32_t)rc;
+                }
+                break;
+            }
+
+            case KEYSTONED_MSG_DIRECTEYE_RECORD_GET_REQ: {
+                char record_id[KEYSTONE_DIRECTEYE_RECORD_ID_MAX + 1u];
+                size_t record_id_len = hdr.payload_len;
+                if (record_id_len == 0u || record_id_len > KEYSTONE_DIRECTEYE_RECORD_ID_MAX ||
+                    memchr(payload, '\0', record_id_len) != NULL) {
+                    resp_hdr.msg_type = KEYSTONED_MSG_DIRECTEYE_RECORD_GET_RESP;
+                    resp_hdr.status = KEYSTONED_STATUS_INVALID_ARG;
+                    break;
+                }
+                memcpy(record_id, payload, record_id_len);
+                record_id[record_id_len] = '\0';
+                size_t record_len = 0u;
+                uint8_t record_payload[256u * 1024u];
+                int status = keystoned_server_query_directeye_record(
+                    server, &effective_sec, record_id, record_payload,
+                    sizeof(record_payload), &record_len);
+                resp_hdr.msg_type = KEYSTONED_MSG_DIRECTEYE_RECORD_GET_RESP;
+                resp_hdr.status = (uint32_t)status;
+                if (status == KEYSTONED_STATUS_OK) {
+                    resp_len = (uint32_t)record_len;
+                    resp_payload = malloc(resp_len ? resp_len : 1u);
+                    if (resp_payload && resp_len) memcpy(resp_payload, record_payload, resp_len);
+                    if (!resp_payload) resp_hdr.status = KEYSTONED_STATUS_SERVER_ERROR;
                 }
                 break;
             }

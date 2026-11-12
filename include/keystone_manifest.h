@@ -111,6 +111,26 @@ int keystone_publication_publish(
     uint64_t tombstone_count
 );
 
+/* Publish a generation with an additional checksummed source-record mapping
+ * sidecar. The sidecar and manifest are durable before the active pointer. */
+int keystone_publication_publish_with_sidecar(
+    keystone_publication_t* publication,
+    uint64_t index_generation,
+    uint64_t source_cursor,
+    const char* exact_src_path,
+    const char* temporal_src_path,
+    const char* sidecar_src_path,
+    const keystone_hlc_t* hlc_min,
+    const keystone_hlc_t* hlc_max,
+    uint64_t record_count,
+    uint64_t tombstone_count
+);
+
+/* Resolve the generation-bound mapping sidecar path. */
+int keystone_publication_sidecar_path(const keystone_publication_t* publication,
+                                     uint64_t index_generation,
+                                     char* out_path, size_t out_size);
+
 /*
  * Serve the active generation: load both manifests, verify payload
  * checksums, load both indexes. On any failure, walk generations in

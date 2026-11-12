@@ -29,6 +29,7 @@ static void print_usage(const char* prog) {
     printf("  -s <path>    Unix domain socket path (default: %s)\n", KEYSTONED_DEFAULT_SOCKET);
     printf("  -e <epoch>   Initial fencing epoch (default: 1)\n");
     printf("  -T <tenant>  Enable workflow IPC for this dedicated daemon UID and tenant\n");
+    printf("  --directeye-publication <dir> Serve authorized DIRECTEYE reads from this publication\n");
     printf("  -h           Show this help message\n");
 }
 
@@ -37,6 +38,7 @@ int main(int argc, char* argv[]) {
     uint64_t epoch = 1;
     uint32_t workflow_tenant = 0;
     int workflow_enabled = 0;
+    const char* directeye_publication_path = NULL;
 
     for (int i = 1; i < argc; i++) {
         if (strcmp(argv[i], "-s") == 0 && i + 1 < argc) {
@@ -53,6 +55,8 @@ int main(int argc, char* argv[]) {
             }
             workflow_tenant = (uint32_t)value;
             workflow_enabled = 1;
+        } else if (strcmp(argv[i], "--directeye-publication") == 0 && i + 1 < argc) {
+            directeye_publication_path = argv[++i];
         } else if (strcmp(argv[i], "-h") == 0 || strcmp(argv[i], "--help") == 0) {
             print_usage(argv[0]);
             return 0;
@@ -68,16 +72,25 @@ int main(int argc, char* argv[]) {
     printf("  Epoch:  %llu\n", (unsigned long long)epoch);
     printf("========================================================\n");
 
+    keystone_publication_t* directeye_publication = directeye_publication_path
+        ? keystone_publication_create(directeye_publication_path) : NULL;
+    if (directeye_publication_path && !directeye_publication) {
+        fprintf(stderr, "[-] Failed to open DIRECTEYE publication: %s\n",
+                directeye_publication_path);
+        return 1;
+    }
     keystoned_config_t config = {
         .socket_path = socket_path,
         .cache_capacity = 4096,
         .initial_fencing_epoch = epoch,
-        .enable_security_audit = 1
+        .enable_security_audit = 1,
+        .directeye_publication = directeye_publication
     };
 
     keystoned_server_t* server = keystoned_server_create(&config);
     if (!server) {
         fprintf(stderr, "[-] Failed to create keystoned server\n");
+        keystone_publication_destroy(directeye_publication);
         return 1;
     }
 
@@ -93,6 +106,7 @@ int main(int argc, char* argv[]) {
                                                  &principal) != 0) {
             fprintf(stderr, "cannot bind workflow principal\n");
             keystoned_server_destroy(server);
+            keystone_publication_destroy(directeye_publication);
             return 1;
         }
     }
@@ -100,6 +114,7 @@ int main(int argc, char* argv[]) {
     if (keystoned_server_start(server) != 0) {
         fprintf(stderr, "[-] Failed to bind and listen on socket: %s\n", socket_path);
         keystoned_server_destroy(server);
+        keystone_publication_destroy(directeye_publication);
         return 1;
     }
 
@@ -111,6 +126,7 @@ int main(int argc, char* argv[]) {
 
     printf("\n[*] Stopping keystoned...\n");
     keystoned_server_destroy(server);
+    keystone_publication_destroy(directeye_publication);
     printf("[+] keystoned shutdown complete.\n");
 
     return 0;
